@@ -32,7 +32,7 @@ This is a discontinuation open-source release. As such, this repo is intended to
 
 ## Community
 
-Even though this version of CHOMPI is now discontinued, the CLUB is expanding. If you want to discuss this project, share your creations, see what other users have made on their CHOMPI, feel free to check out the CHOMPI Open Source channel on the Chase Bliss Discord.
+Even though this version of CHOMPI is now discontinued, the CLUB is expanding. If you want to discuss this project, share your creations, see what other users have made on their CHOMPI, feel free to check out the [CHOMPI Open Source channel](https://discord.com/channels/1257517264497016903/1554220109155930277) on the Chase Bliss Discord.
 
 ## License
 
