@@ -27,6 +27,10 @@
 		{
 			"name": "Split Delay",
 			"value": false
+		},
+		{
+			"name": "LED Brightness",
+			"value": 10
 		}
 	]
 }
