@@ -37,6 +37,7 @@ class OptionsManager
         monitor_position = 0;
         pitch_shift_quantization = true;
         delay_split = false;
+        led_brightness = 10;
 
         /** TODO: make sure the open settings are correct */
         const char fname[32] = "options.json";
@@ -111,6 +112,13 @@ class OptionsManager
         sprintf(append, "%s", delay_split ? "true" : "false");
         StrAppend(opt_file, append);
 
+        // LED Brightness
+        sprintf(append, "\n\t\t},\n\t\t{\n\t\t\t\"name\": \"LED Brightness\",\n\t\t\t\"value\": ");
+        StrAppend(opt_file, append);
+
+        sprintf(append, "%d", led_brightness);
+        StrAppend(opt_file, append);
+
         // footer
         sprintf(append, "\n\t\t}\n\t]\n}");
         StrAppend(opt_file, append);
@@ -146,6 +154,9 @@ class OptionsManager
                 sprintf(query, "chompi[%d].name", i);
                 json_res = JSON_Search(
                     opt_file, len, query, strlen(query), &value, &value_len);
+                if(json_res != JSONSuccess)
+                    continue;
+
                 char save = value[value_len];
                 value[value_len] = '\0';
 
@@ -165,6 +176,8 @@ class OptionsManager
                     field = 5;
                 if(strcmp(value, "Split Delay") == 0 && json_res == JSONSuccess)
                     field = 6;
+                if(strcmp(value, "LED Brightness") == 0 && json_res == JSONSuccess)
+                    field = 7;
 
                 value[value_len] = save;
 
@@ -173,6 +186,9 @@ class OptionsManager
                     sprintf(query, "chompi[%d].value", i);
                     json_res = JSON_Search(
                         opt_file, len, query, strlen(query), &value, &value_len);
+                    if(json_res != JSONSuccess)
+                        continue;
+
                     save = value[value_len];
                     value[value_len] = '\0';
 
@@ -187,27 +203,39 @@ class OptionsManager
 
                     value[value_len] = save;
                 }
-                else if(field == 1 || field == 2 || field == 4)
+                else if(field == 1 || field == 2 || field == 4 || field == 7)
                 {
                     sprintf(query, "chompi[%d].value", i);
                     json_res = JSON_Search(
                         opt_file, len, query, strlen(query), &value, &value_len);
+                    if(json_res != JSONSuccess)
+                        continue;
+
                     save = value[value_len];
                     value[value_len] = '\0';
 
-                    const uint8_t val = atoi(value) - 1;
-                    // midi channels
-                    if(val < 16 && json_res == JSONSuccess && (field == 1 || field == 2))
+                    if(field == 7)
                     {
-                        if(field == 1)
-                            midi_ch_in = val;
-                        else if(field == 2)
-                            midi_ch_out = val;
+                        const int brightness = atoi(value);
+                        if(brightness >= 1 && brightness <= 10)
+                            led_brightness = brightness;
                     }
-                    // monitor position
-                    else if(val > 0 && val < 3 && field == 4)
+                    else
                     {
-                        monitor_position = val;
+                        const uint8_t val = atoi(value) - 1;
+                        // midi channels
+                        if(val < 16 && (field == 1 || field == 2))
+                        {
+                            if(field == 1)
+                                midi_ch_in = val;
+                            else if(field == 2)
+                                midi_ch_out = val;
+                        }
+                        // monitor position
+                        else if(val > 0 && val < 3 && field == 4)
+                        {
+                            monitor_position = val;
+                        }
                     }
 
                     value[value_len] = save;
@@ -222,6 +250,7 @@ class OptionsManager
     bool tape_slew_on;
     uint8_t monitor_position;
     bool delay_split;
+    uint8_t led_brightness;
     
     /**
     * if true, the shift menu is quantized, and normal is not.
@@ -233,7 +262,7 @@ class OptionsManager
         FIL fptr_opt;
 
         static const size_t kOptFileSize = 4096;
-        static const size_t kNumOptions = 7;
+        static const size_t kNumOptions = 8;
         char opt_file[kOptFileSize];
 };
 } // namespace chompi
