@@ -22,6 +22,13 @@ constexpr uint8_t kBulkInEp = 0x81;
 constexpr uint8_t kBulkOutEp = 0x01;
 constexpr uint16_t kEndpointSize = 64;
 constexpr uint32_t kBlockSize = 512;
+// Sectors moved per SD command and per USB transfer. One multi-block command
+// per 32 KB instead of one command per sector is what makes writes usable:
+// the card runs a full program cycle per command. libDaisy's
+// USBD_LL_Transmit/PrepareReceive take a 16-bit length, which caps this.
+constexpr uint32_t kChunkBlocks = 64;
+constexpr uint32_t kChunkBytes = kChunkBlocks * kBlockSize;
+static_assert(kChunkBytes <= 0xFFFF, "USBD_LL_* lengths are 16-bit");
 constexpr uint32_t kCbwSignature = 0x43425355;
 constexpr uint32_t kCswSignature = 0x53425355;
 
@@ -44,11 +51,12 @@ volatile bool io_pending = false;
 uint8_t cbw[31];
 uint8_t csw[13];
 uint8_t response[64];
-alignas(32) uint8_t sector[kBlockSize];
+alignas(32) uint8_t sector[kChunkBytes];
 uint32_t command_tag = 0;
 uint32_t residue = 0;
 uint32_t current_lba = 0;
 uint32_t blocks_left = 0;
+uint32_t chunk_blocks = 0; // sectors in the transfer currently in flight
 uint8_t command_status = 0;
 uint8_t sense_key = 0;
 uint8_t sense_asc = 0;
@@ -213,7 +221,8 @@ void ProcessReadBlock(USBD_HandleTypeDef* device)
         return;
     }
 
-    if(disk_read(0, sector, current_lba, 1) != RES_OK)
+    const uint32_t count = std::min(blocks_left, kChunkBlocks);
+    if(disk_read(0, sector, current_lba, count) != RES_OK)
     {
         TraceEntry* entry = CurrentTrace();
         if(entry != nullptr)
@@ -222,10 +231,11 @@ void ProcessReadBlock(USBD_HandleTypeDef* device)
         return;
     }
 
-    ++current_lba;
-    --blocks_left;
-    residue -= kBlockSize;
-    USBD_LL_Transmit(device, kBulkInEp, sector, kBlockSize);
+    current_lba += count;
+    blocks_left -= count;
+    residue -= count * kBlockSize;
+    USBD_LL_Transmit(device, kBulkInEp, sector,
+                     static_cast<uint16_t>(count * kBlockSize));
 }
 
 void BeginRead(USBD_HandleTypeDef* device, uint32_t lba, uint32_t blocks)
@@ -260,8 +270,10 @@ void ArmNextWriteBlock(USBD_HandleTypeDef* device)
         return;
     }
 
+    chunk_blocks = std::min(blocks_left, kChunkBlocks);
     bot_state = BotState::WritingBlocks;
-    USBD_LL_PrepareReceive(device, kBulkOutEp, sector, sizeof(sector));
+    USBD_LL_PrepareReceive(device, kBulkOutEp, sector,
+                           static_cast<uint16_t>(chunk_blocks * kBlockSize));
 }
 
 void BeginWrite(USBD_HandleTypeDef* device, uint32_t lba, uint32_t blocks)
@@ -528,7 +540,8 @@ uint8_t MscDataOut(USBD_HandleTypeDef* device, uint8_t endpoint)
     }
     else if(bot_state == BotState::WritingBlocks)
     {
-        if(USBD_LL_GetRxDataSize(device, kBulkOutEp) != kBlockSize)
+        if(USBD_LL_GetRxDataSize(device, kBulkOutEp)
+           != chunk_blocks * kBlockSize)
         {
             SetSense(0x05, 0x24);
             command_status = 1;
@@ -724,7 +737,7 @@ void UsbMscProcess()
     }
     else if(bot_state == BotState::WritingBlocks)
     {
-        if(disk_write(0, sector, current_lba, 1) != RES_OK)
+        if(disk_write(0, sector, current_lba, chunk_blocks) != RES_OK)
         {
             SetSense(0x03, 0x0C);
             command_status = 1;
@@ -732,9 +745,9 @@ void UsbMscProcess()
             return;
         }
 
-        ++current_lba;
-        --blocks_left;
-        residue -= kBlockSize;
+        current_lba += chunk_blocks;
+        blocks_left -= chunk_blocks;
+        residue -= chunk_blocks * kBlockSize;
         ArmNextWriteBlock(&usb_device);
     }
 }
