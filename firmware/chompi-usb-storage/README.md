@@ -1,4 +1,4 @@
-# CHOMPI — USB Storage Firmware
+# CHOMPI — USB Storage Firmware v1
 
 Utility firmware that makes CHOMPI's microSD card show up on a computer as a normal USB drive,
 so you can do file management with a need for external SD card reader. Not, this is NOT an instrument and does nto aim to. But in combination with the [chompi-launcher](https://github.com/sfaber02/CHOMPI/tree/main/firmware/chompi-launcher) firmware this is highly usable to switch quick between file management and other instrument firmwares.
@@ -16,7 +16,7 @@ Verified on Windows. macOS uses the same standard class driver but has not been 
 
 ## Using it
 
-1. Build `CHOMPI.bin` (see [Building on Windows](#building-on-windows)) and put it on the SD card,
+1. Builds `chompi_usb_storage_v1.bin` (see [Building on Windows](#building-on-windows)) and put it on the SD card,
    with any other `.bin` removed. Power on CHOMPI; the slow rainbow LED pattern shows the
    bootloader installing it.
 2. Wait for the LEDs to turn **green**, then connect the USB-C port to the computer.

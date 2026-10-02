@@ -1,5 +1,5 @@
 # CHOMPI SD-card USB mass-storage firmware
-TARGET = CHOMPI
+TARGET = chompi_usb_storage_v1
 
 DEBUG = 0
 OPT = -O2
