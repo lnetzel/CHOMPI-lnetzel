@@ -20,6 +20,12 @@ MEMORY
 	RAM_D2 (RWX)  : ORIGIN = 0x30000000, LENGTH = 32K
 	RAM_D2CACHE (RWX)  : ORIGIN = 0x30000000 + 32K, LENGTH = 288K - 32K
 	RAM_D3 (RWX)  : ORIGIN = 0x38000000, LENGTH = 64K
+	/* Backup SRAM. Holds libDaisy's boot_info, which is how an application
+	 * asks the bootloader to start a different image. The stock CHOMPI
+	 * linker scripts omit this region, so .backup_sram silently falls into
+	 * .data and boot_info ends up at a plain SRAM address the bootloader
+	 * never reads. It has to live here, at the address the bootloader uses. */
+	BACKUP_SRAM (RWX) : ORIGIN = 0x38800000, LENGTH = 4K
 	ITCMRAM (RWX) : ORIGIN = 0x00000000, LENGTH = 64K
 	SDRAM (RWX)   : ORIGIN = 0xc0000000, LENGTH = 64M
   QSPIFLASH (RX)  : ORIGIN = 0x90000000, LENGTH = 8M
@@ -219,6 +225,16 @@ SECTIONS
 	} > SDRAM AT >FLASH
 	_sisdram_text = LOADADDR(.sdram_text);
 	*/
+
+	.backup_sram (NOLOAD) :
+	{
+		. = ALIGN(4);
+		_sbackupsram = .;
+		*(.backup_sram)
+		*(.backup_sram*)
+		. = ALIGN(4);
+		_ebackupsram = .;
+	} > BACKUP_SRAM
 
 	.sdram_bss (NOLOAD) :
 	{
