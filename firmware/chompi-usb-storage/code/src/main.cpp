@@ -104,9 +104,12 @@ int main()
     else if(card_ready && label_ok && block_count > 0)
         SetStatusLeds(0, 0, 255);
 
+    // No delay here: UsbMscProcess() moves one 512-byte sector per call, so
+    // sleeping 1 ms each pass capped transfers at ~1000 sectors/s. macOS
+    // reads the whole FAT before mounting, and on a card formatted with
+    // small clusters that took longer than its 20 s timeout.
     while(1)
     {
         UsbMscProcess();
-        System::Delay(1);
     }
 }
