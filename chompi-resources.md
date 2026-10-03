@@ -1,5 +1,6 @@
-# Alt firmwares to install on CHOMPI Sampler
+# Community Resources for CHOMPI Sampler
 
+## Alt firmwares to install
 
 | URL | Description |
 | -------- | -------- |
@@ -9,3 +10,7 @@
 | [POLY](https://github.com/sfaber02/chompi-poly/releases/) | A Polyphonic synthesizer |
 | [USB Storage](https://github.com/lnetzel/CHOMPI-lnetzel/releases/tag/usb-storage-v1.0) | Treat SD card in your CHOMPI as an external class compliant USB disk |
 
+## Other
+| URL | Description |
+| -------- | -------- |
+| [Feed the CHOMPI](https://ugrossek.github.io/CHOMPI/) | Send a firmware over USB in the browser |
