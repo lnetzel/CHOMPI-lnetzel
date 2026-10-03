@@ -1,7 +1,9 @@
 # CHOMPI — USB Storage Firmware v1
 
 Utility firmware that makes CHOMPI's microSD card show up on a computer as a normal USB drive,
-so you can do file management with a need for external SD card reader. Not, this is NOT an instrument and does nto aim to. But in combination with the [chompi-launcher](https://github.com/sfaber02/CHOMPI/tree/main/firmware/chompi-launcher) firmware this is highly usable to switch quick between file management and other instrument firmwares.
+so you can do file management with a need for external SD card reader. Not, this is NOT an instrument and does not aim to be: However; In combination with the [Multi-Firmware Launcher](https://github.com/sfaber02/CHOMPI/releases#release-launcher-v1.1) firmware this is practical to switch quick between file management and other instrument firmwares.
+
+This release in already included in Multi-Firmware Launcher v1.1 for CHOMPI
 
 ---
 
@@ -45,13 +47,6 @@ allow up to 11 characters). The capacity shown is whatever the card reports.
 
 Green only means the firmware is ready; it does not confirm that a computer has mounted the drive.
 
-## Boot log
-
-Each boot appends to `CHOMPI_USB.LOG` in the card's root (when a FAT volume can be mounted):
-card size, sector-0 read, FAT mount and label results, and the USB start stage. Values are
-FatFs result codes where `0` means success. The log is written before USB starts, never while
-the computer has the card. If the volume can't be mounted there is no log; use the LED colour.
-
 ## Building on Windows
 
 You need:
@@ -78,11 +73,11 @@ make check-toolchain   # prints GCC 10.3.1 if the toolchain is right
 make -j4
 ```
 
-The output is `code/src/build/CHOMPI.bin`. The build links the prebuilt
+The output is `code/src/build/chompi_usb_storage_v1.bin`. The build links the prebuilt
 `../chompi-wave/code/libs/libDaisy/build/libdaisy.a`; if that file is missing, run `make` once in
 `../chompi-wave/code/libs/libDaisy` first.
 
-To install it, copy `CHOMPI.bin` to the root of the SD card (deleting any other `.bin`), put
+To install it, copy `chompi_usb_storage_v1.bin` to the root of the SD card (deleting any other `.bin`), put
 the card in CHOMPI and power on. If the board has never had the CHOMPI bootloader, install it
 first as described in the [bootloader guide](../chompi-bootloader-v6.4-beta/README.md).
 
@@ -100,8 +95,9 @@ from `../chompi-tape/code/src/`, so those folders must be present.
 ## Notes
 
 - USB IDs are VID `0x1209` / PID `0xC0A1`. Replace them with assigned IDs before wide distribution.
-- Disk reads and writes use the same DMA path as FatFs. The SD driver's polled mode failed under
-  USB interrupt load, so don't switch back to it.
+- Disk reads and writes at the max USB speed CHOMPI hardware allows. 
+  - Write ~ 0.81 MB/s
+  - Read ~ 1.03 MB/s
 
 ## License
 
