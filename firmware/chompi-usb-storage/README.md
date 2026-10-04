@@ -23,7 +23,15 @@ Verified on Windows. macOS uses the same standard class driver but has not been 
    bootloader installing it.
 2. Wait for the LEDs to turn **green**, then connect the USB-C port to the computer.
 3. The card appears as a drive named `CHOMPI-SD`.
-4. **Eject** the drive in the operating system before unplugging the cable or restarting CHOMPI.
+4. **Eject** the drive in the operating system before unplugging the cable.
+
+## Restarting
+
+While the drive is ready, the **overdub** key glows red. Press it once to arm a restart: the
+key starts blinking ("are you sure?") and the **chompi** key turns red. Press the chompi key
+to confirm — the drive is detached from the computer, the green LEDs quickly fade to white,
+and CHOMPI restarts (back through the bootloader, e.g. into the Multi-Firmware Launcher).
+Press the blinking overdub key again to cancel; nothing changes.
 
 To return to the instrument, put another firmware's `.bin` on the card, eject, and restart.
 
@@ -41,7 +49,7 @@ allow up to 11 characters). The capacity shown is whatever the card reports.
 | Amber | Starting up |
 | Magenta / yellow | Writing / flushing the boot log |
 | Cyan | Starting USB |
-| **Green** | Ready, connect to a computer |
+| **Green** | Ready, connect to a computer (overdub key is red: restart trigger) |
 | Red | SD card or filesystem problem |
 | Blue | USB failed to start |
 
