@@ -1,9 +1,7 @@
-# CHOMPI — USB Storage Firmware v1
+# CHOMPI — USB Storage Firmware v1.5
 
 Utility firmware that makes CHOMPI's microSD card show up on a computer as a normal USB drive,
 so you can do file management with a need for external SD card reader. Not, this is NOT an instrument and does not aim to be: However; In combination with the [Multi-Firmware Launcher](https://github.com/sfaber02/CHOMPI/releases#release-launcher-v1.1) firmware this is practical to switch quick between file management and other instrument firmwares.
-
-This release in already included in Multi-Firmware Launcher v1.1 for CHOMPI
 
 ---
 
@@ -18,12 +16,24 @@ Verified on Windows. macOS uses the same standard class driver but has not been 
 
 ## Using it
 
-1. Builds `chompi_usb_storage_v1.bin` (see [Building on Windows](#building-on-windows)) and put it on the SD card,
+1. Builds `chompi_usb_storage_v1.5.bin` (see [Building on Windows](#building-on-windows)) and put it on the SD card,
    with any other `.bin` removed. Power on CHOMPI; the slow rainbow LED pattern shows the
    bootloader installing it.
 2. Wait for the LEDs to turn **green**, then connect the USB-C port to the computer.
 3. The card appears as a drive named `CHOMPI-SD`.
 4. **Eject** the drive in the operating system before unplugging the cable.
+
+## Disk usage bar
+
+At startup, the lower row of 15 keyboard keys sweeps up in blue from left to right and
+settles on how much of the card's file system is used: an empty card leaves the row dark,
+a half-full card lights 7 keys fully and the 8th half, and a nearly full card lights all 15.
+After the sweep the bar stays on and pulses gently (between about 75 % and full brightness).
+
+The measurement reads the FAT free-cluster count at boot, so it matches what the computer
+reports for the `CHOMPI-SD` drive — as long as the drive was ejected properly after the
+last file management session. If the card's free-space info is missing or cannot be read,
+the bar simply stays off and the row shows the normal status colour instead.
 
 ## Restarting
 
@@ -32,6 +42,9 @@ key starts blinking ("are you sure?") and the **chompi** key turns red. Press th
 to confirm — the drive is detached from the computer, the green LEDs quickly fade to white,
 and CHOMPI restarts (back through the bootloader, e.g. into the Multi-Firmware Launcher).
 Press the blinking overdub key again to cancel; nothing changes.
+
+The overdub key glows red in every LED status — even on an SD or USB error — so the device
+can always be restarted without power cycling.
 
 To return to the instrument, put another firmware's `.bin` on the card, eject, and restart.
 
@@ -52,6 +65,9 @@ allow up to 11 characters). The capacity shown is whatever the card reports.
 | **Green** | Ready, connect to a computer (overdub key is red: restart trigger) |
 | Red | SD card or filesystem problem |
 | Blue | USB failed to start |
+
+The status colours cover all keys except the lower row once the
+[disk usage bar](#disk-usage-bar) has taken it over; that row pulses blue instead.
 
 Green only means the firmware is ready; it does not confirm that a computer has mounted the drive.
 
@@ -81,18 +97,18 @@ make check-toolchain   # prints GCC 10.3.1 if the toolchain is right
 make -j4
 ```
 
-The output is `code/src/build/chompi_usb_storage_v1.bin`. The build links the prebuilt
+The output is `code/src/build/chompi_usb_storage_v1.5.bin`. The build links the prebuilt
 `../chompi-wave/code/libs/libDaisy/build/libdaisy.a`; if that file is missing, run `make` once in
 `../chompi-wave/code/libs/libDaisy` first.
 
-To install it, copy `chompi_usb_storage_v1.bin` to the root of the SD card (deleting any other `.bin`), put
+To install it, copy `chompi_usb_storage_v1.5.bin` to the root of the SD card (deleting any other `.bin`), put
 the card in CHOMPI and power on. If the board has never had the CHOMPI bootloader, install it
 first as described in the [bootloader guide](../chompi-bootloader-v6.4-beta/README.md).
 
 ## Layout
 
 ```
-code/src/main.cpp       startup, SD init, boot log
+code/src/main.cpp       startup, SD init, boot log, disk-usage bar
 code/src/usb_msc.cpp    USB device and SCSI mass-storage handling
 code/src/config/        FatFs options (volume label support)
 ```
