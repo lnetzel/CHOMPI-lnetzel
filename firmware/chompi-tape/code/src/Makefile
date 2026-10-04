@@ -1,5 +1,5 @@
 # Project Name
-TARGET = CHOMPI
+TARGET = CHOMPI_TAPE_v2.1
 
 DEBUG=0
 # OPT=-O0

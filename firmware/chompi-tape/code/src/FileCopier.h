@@ -48,7 +48,10 @@ class FileCopier
                 chompi_ram.SetWriteHead(0);
 
                 looper_ram.SetReadHead(0);
-                looper_ram.SetWriteHead(0);
+                if(req.append && is_looper_ram == CopyRequest::RamDir::TO)
+                    looper_ram.SetWriteHead(looper_ram.GetSize());
+                else
+                    looper_ram.SetWriteHead(0);
 
                 CopyStart(req.src, req.src_bank, req.src_mode, req.dest, req.dest_bank, req.dest_mode);
             }
@@ -195,7 +198,7 @@ class FileCopier
                 TO
             };
 
-            CopyRequest(size_t s, size_t b, VoiceMode m, size_t d, size_t db, VoiceMode dm, bool st, RamDir ic, RamDir il)
+            CopyRequest(size_t s, size_t b, VoiceMode m, size_t d, size_t db, VoiceMode dm, bool st, RamDir ic, RamDir il, bool ap = false)
                 : src(s),
                 src_bank (b),
                 src_mode(m),
@@ -204,7 +207,8 @@ class FileCopier
                 dest_mode(dm),
                 set(st),
                 is_chompi(ic),
-                is_looper(il)
+                is_looper(il),
+                append(ap)
             {
             }
 
@@ -218,7 +222,8 @@ class FileCopier
                 dest_mode(VoiceMode::JAMMI),
                 set(false),
                 is_chompi(RamDir::NONE),
-                is_looper(RamDir::NONE)
+                is_looper(RamDir::NONE),
+                append(false)
             {
             }
 
@@ -233,6 +238,7 @@ class FileCopier
             bool set;
             RamDir is_chompi;
             RamDir is_looper;
+            bool append;
         };
 
         FIFO<CopyRequest, 16> req_fifo;
