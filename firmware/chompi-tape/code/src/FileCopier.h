@@ -53,6 +53,8 @@ class FileCopier
                 else
                     looper_ram.SetWriteHead(0);
 
+                append_xfade_done = !req.append || looper_ram.GetSize() == 0;
+
                 CopyStart(req.src, req.src_bank, req.src_mode, req.dest, req.dest_bank, req.dest_mode);
             }
 
@@ -92,6 +94,11 @@ class FileCopier
                 }
                 else if(is_looper_ram == CopyRequest::RamDir::TO)
                 {
+                    if(!append_xfade_done)
+                    {
+                        ApplyAppendCrossfade((int16_t*)buff, read_num / 2);
+                        append_xfade_done = true;
+                    }
                     looper_ram.BlockWrite((int16_t*)buff, read_num / 2);
                 }
                 else
@@ -192,7 +199,7 @@ class FileCopier
 
         struct CopyRequest {
 
-            enum RamDir {
+            enum RamDir : uint8_t {
                 NONE,
                 FROM,
                 TO
@@ -205,40 +212,28 @@ class FileCopier
                 dest(d),
                 dest_bank(db),
                 dest_mode(dm),
-                set(st),
                 is_chompi(ic),
                 is_looper(il),
+                set(st),
                 append(ap)
             {
             }
 
-            // default
-            CopyRequest()
-                : src(0),
-                src_bank (0),
-                src_mode(VoiceMode::JAMMI),
-                dest(0),
-                dest_bank(0),
-                dest_mode(VoiceMode::JAMMI),
-                set(false),
-                is_chompi(RamDir::NONE),
-                is_looper(RamDir::NONE),
-                append(false)
-            {
-            }
+            // default (trivially constructible -> FIFO zero-inits into .bss)
+            CopyRequest() = default;
 
             ~CopyRequest() {}
 
-            size_t src;
-            size_t src_bank;
-            VoiceMode src_mode;
-            size_t dest;
-            size_t dest_bank;
-            VoiceMode dest_mode;
-            bool set;
-            RamDir is_chompi;
-            RamDir is_looper;
-            bool append;
+            size_t src = 0;
+            size_t src_bank = 0;
+            VoiceMode src_mode = VoiceMode::JAMMI;
+            size_t dest = 0;
+            size_t dest_bank = 0;
+            VoiceMode dest_mode = VoiceMode::JAMMI;
+            RamDir is_chompi = RamDir::NONE;
+            RamDir is_looper = RamDir::NONE;
+            bool set = false;
+            bool append = false;
         };
 
         FIFO<CopyRequest, 16> req_fifo;
@@ -415,6 +410,45 @@ class FileCopier
 
             return f_eof(&fptr_read);
         }
+
+        /** De-click at the append splice, mirroring the looper's loop_env
+         *  wrap fade: fade the existing tail out to 0 and the appended head
+         *  in from 0 over ~5ms, so the boundary passes through silence.
+         *  No samples are added or removed. `data` is the first appended
+         *  block, modified in place; the tail is tapered in place.
+         */
+        __attribute__((noinline))
+        void ApplyAppendCrossfade(int16_t* data, size_t num_samples)
+        {
+            const size_t splice = looper_ram.GetWriteHead(); // = old loop end
+            size_t n = num_samples / 2;
+            if(n > kAppendXfade)
+                n = kAppendXfade;
+            if(splice < 2 * n)
+                n = splice / 2;
+            if(n == 0)
+                return;
+
+            const size_t tail_base = splice - (2 * n);
+            const int32_t tstep = 4096 / (int32_t)n;
+
+            int32_t tout = 4096 - tstep;          // tail fade-out 4096->0
+            int32_t tin = 0;                       // source fade-in 0->4096
+            for(size_t i = 0; i < n; i++, tout -= tstep, tin += tstep)
+            {
+                const size_t d = 2 * i;
+                const size_t b = tail_base + d;
+
+                looper_ram.Poke(b,     (int16_t)((looper_ram.Peek(b) * tout) >> 12));
+                looper_ram.Poke(b + 1, (int16_t)((looper_ram.Peek(b + 1) * tout) >> 12));
+
+                data[d]     = (int16_t)((data[d] * tin) >> 12);
+                data[d + 1] = (int16_t)((data[d + 1] * tin) >> 12);
+            }
+        }
+
+        enum { kAppendXfade = 240 }; // ~5ms @ 48kHz stereo
+        bool append_xfade_done;
 
         FIL fptr_read;
         FIL fptr_write;
