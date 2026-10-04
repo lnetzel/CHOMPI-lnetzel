@@ -1346,7 +1346,7 @@ namespace daisy
 
             if (name)
             {
-                sprintf(name, "%s_%c%1d%s.wav", mode, bankchar, slot, dbl_suffix);
+                sprintf(name, "TAPE/%s_%c%1d%s.wav", mode, bankchar, slot, dbl_suffix);
             }
         }
 

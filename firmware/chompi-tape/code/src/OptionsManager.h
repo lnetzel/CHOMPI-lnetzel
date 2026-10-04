@@ -39,7 +39,7 @@ class OptionsManager
         delay_split = false;
 
         /** TODO: make sure the open settings are correct */
-        const char fname[32] = "options.json";
+        const char fname[32] = "TAPE/options.json";
 
         FRESULT res = f_stat(fname, nullptr);
 
@@ -232,7 +232,7 @@ class OptionsManager
     private:
         FIL fptr_opt;
 
-        static const size_t kOptFileSize = 4096;
+        static const size_t kOptFileSize = 1024;
         static const size_t kNumOptions = 7;
         char opt_file[kOptFileSize];
 };

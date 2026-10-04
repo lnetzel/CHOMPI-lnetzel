@@ -29,7 +29,7 @@ namespace daisy
             playing = false;
 
             char name_buffer[32];
-            sprintf(name_buffer, "looper.wav");
+            sprintf(name_buffer, "TAPE/looper.wav");
             looper.Reset();
 
             fx_env_ = fx_env_target_ = 1.f;

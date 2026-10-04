@@ -355,7 +355,7 @@ namespace chompi
         {
             presets_manager->Init(defaults);
 
-            strcpy(fname, "presets.json");
+            strcpy(fname, "TAPE/presets.json");
 
             FRESULT fres;
             fres = f_open(&fptr_pre, fname, (FA_OPEN_ALWAYS | FA_WRITE | FA_READ));
@@ -407,7 +407,7 @@ namespace chompi
                 file_len = strlen(presets_file);
 
                 char name[32];
-                strcpy(name, "presets_temp.json");
+                strcpy(name, "TAPE/presets_temp.json");
                 f_open(&fptr_pre, name, (FA_OPEN_ALWAYS | FA_WRITE | FA_READ));
 
                 f_lseek(&fptr_pre, 0);
@@ -434,8 +434,8 @@ namespace chompi
                 char from[32];
                 char to[32];
 
-                strcpy(from, "presets_temp.json");
-                strcpy(to, "presets.json");
+                strcpy(from, "TAPE/presets_temp.json");
+                strcpy(to, "TAPE/presets.json");
 
                 f_unlink(to);
                 f_rename(from, to);

@@ -333,6 +333,9 @@ int main(void)
     fsi.Init(FatFSInterface::Config::MEDIA_SD);
     f_mount(&fsi.GetSDFileSystem(), fsi.GetSDPath(), 1);
 
+    // create the TAPE folder if it doesn't exist yet (FR_EXIST is fine)
+    f_mkdir("TAPE");
+
     // delete the battery log if it exists
     char filename[32];
     sprintf(filename, ".batt_log.txt");

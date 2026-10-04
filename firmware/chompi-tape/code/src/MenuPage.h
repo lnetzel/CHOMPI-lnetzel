@@ -777,7 +777,7 @@ namespace chompi
                         bool set_slot = !(selected_slot == 16) && !(selected_slot == 15 && ss_mode == VoiceMode::CUBBI);
                         FileCopier::CopyRequest req( copy_src, cs_bank, cs_mode,
                             selected_slot, ss_bank, ss_mode, set_slot,
-                            chompi, looper);
+                            chompi, looper, copy_append);
 
                         copier_->req_fifo.PushBack(req);
 
@@ -909,6 +909,7 @@ namespace chompi
                         break;
 
                     copy_src = kSlotNone;
+                    copy_append = false;
                     selected_slot = kSlotNone;
                     ss_bank = kSlotNone;
                     cs_bank = kSlotNone;
@@ -970,6 +971,7 @@ namespace chompi
                         if (preset_mode == PresetMode::COPY_DEST && copy_src != 16)
                         {
                             selected_slot = slot_req;
+                            copy_append = (buttonID == 34); // OVERDUB appends, PLAY replaces
                             ss_bank = fx_->GetBank();
                             ss_mode = fx_->GetVoiceMode();
                         }
@@ -1053,6 +1055,7 @@ namespace chompi
 
             ss_bank = fx_->GetBank();
             copy_src = kSlotNone;
+            copy_append = false;
             selected_slot = fx_->GetVoiceSlot();
             preset_mode = PresetMode::NONE;
         }
@@ -1135,6 +1138,7 @@ namespace chompi
         uint8_t copy_src = kSlotNone;
         uint8_t cs_bank = kSlotNone;
         VoiceMode cs_mode = VoiceMode::LAST;
+        bool copy_append = false;
         bool switch_state;
 
         PresetMode preset_mode = PresetMode::NONE;

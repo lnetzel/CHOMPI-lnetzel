@@ -108,6 +108,16 @@ namespace daisy
 
         inline size_t GetSize() { return buff->length; }
 
+        inline int16_t Peek(size_t idx) const
+        {
+            return buff->mem[idx];
+        }
+
+        inline void Poke(size_t idx, int16_t v)
+        {
+            buff->mem[idx] = v;
+        }
+
         inline size_t GetReadHead() { return read_head; }
         inline bool ReadEOF() { return read_head >= buff->length || read_head >= kMaxRamBuffSize; }
         inline bool ReadLoop(bool rev) { return (rev && read_head == 0) || (!rev && ReadEOF()); }
