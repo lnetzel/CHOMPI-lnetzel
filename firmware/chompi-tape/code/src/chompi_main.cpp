@@ -345,7 +345,6 @@ int main(void)
 
     options.Init();
 
-    SetLedBrightness(options.led_brightness);
     LedSetup();
     ui.Init(&hw, &engine, &copier, &presets,
         options.midi_ch_in, options.midi_ch_out, options.pitch_shift_quantization, options.delay_split);

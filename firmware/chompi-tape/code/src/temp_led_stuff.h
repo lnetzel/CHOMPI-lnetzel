@@ -28,7 +28,6 @@ namespace chompi
 
     uint8_t led_pth_data[kNumPthLeds][3]; /**< RGB data */
     uint8_t led_smt_data[kNumSmtLeds][3]; /**< RGB data */
-    uint8_t led_brightness = 10;
 
     uint32_t DMA_BUFFER_MEM_SECTION
         output_pth_data[kNumPthLeds * 3 * 8]; /**< PWM lengths data, one "duration" per bit */
@@ -173,34 +172,24 @@ namespace chompi
         }
     }
 
-    void SetLedBrightness(uint8_t brightness)
+   void SetPthLed(int index, uint8_t r, uint8_t g, uint8_t b)
     {
-        if(brightness < 1)
-            brightness = 1;
-        else if(brightness > 10)
-            brightness = 10;
-
-        led_brightness = brightness;
+        led_pth_data[index][0] = r / 11;
+        led_pth_data[index][1] = g / 11;
+        led_pth_data[index][2] = b / 11;
+    }
+    void SetSmtLed(int index, uint8_t r, uint8_t g, uint8_t b)
+    {
+        led_smt_data[index][0] = r / 4;
+        led_smt_data[index][1] = g / 4;
+        led_smt_data[index][2] = b / 4;
     }
 
-    __attribute__((noinline)) void SetPthLed(int index, uint8_t r, uint8_t g, uint8_t b)
-    {
-        led_pth_data[index][0] = static_cast<uint16_t>(r) * led_brightness / 110;
-        led_pth_data[index][1] = static_cast<uint16_t>(g) * led_brightness / 110;
-        led_pth_data[index][2] = static_cast<uint16_t>(b) * led_brightness / 110;
-    }
-    __attribute__((noinline)) void SetSmtLed(int index, uint8_t r, uint8_t g, uint8_t b)
-    {
-        led_smt_data[index][0] = static_cast<uint16_t>(r) * led_brightness / 40;
-        led_smt_data[index][1] = static_cast<uint16_t>(g) * led_brightness / 40;
-        led_smt_data[index][2] = static_cast<uint16_t>(b) * led_brightness / 40;
-    }
-
-    __attribute__((noinline)) void SetPthLedFloat(int index, float r, float g, float b)
+    void SetPthLedFloat(int index, float r, float g, float b)
     {
         SetPthLed(index, r * 255, g * 255, b * 255);
     }
-    __attribute__((noinline)) void SetSmtLedFloat(int index, float r, float g, float b)
+    void SetSmtLedFloat(int index, float r, float g, float b)
     {
         SetSmtLed(index, r * 255, g * 255, b * 255);
     }

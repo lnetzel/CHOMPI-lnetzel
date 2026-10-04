@@ -230,7 +230,6 @@ uint8_t UsageBarPulseLevel(uint32_t now_ms)
 int main()
 {
     board.Init(true);
-    chompi::SetLedBrightness(10);
     chompi::LedSetup();
     SetStatusLeds(255, 80, 0);
 
