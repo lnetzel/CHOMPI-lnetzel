@@ -35,6 +35,17 @@ constexpr size_t kOverdubKeyLed = 8;
 constexpr uint32_t kBlinkPeriodMs = 300; /**< overdub "are you sure?" blink */
 constexpr uint32_t kFadeMs        = 400; /**< green -> white fade on shutdown */
 
+/** Disk-usage bar on the 15-key lower row (KEY_1..KEY_15, SMT LEDs 24..10,
+ *  per the led_map in chompi-tape's NormalPage.h). The bar only takes over
+ *  that row once the card is healthy; until then the row shows the normal
+ *  status colour like before. */
+constexpr int kBarLeds     = 15;  /**< keys in the lower row */
+constexpr int kBarFirstLed = 24;  /**< SMT LED of KEY_1, leftmost */
+constexpr int kBarBlue     = 255; /**< full bar brightness */
+constexpr float kBarPulseMin = 0.75f;     /**< pulse dips to 75 % brightness */
+constexpr uint32_t kBarPulsePeriodMs = 2500; /**< slow pulse */
+constexpr uint32_t kBarSweepMs       = 50;   /**< per key during the sweep */
+
 /** Restart state machine: the overdub key arms it, the chompi key confirms. */
 enum class ResetState : uint8_t
 {
@@ -49,6 +60,34 @@ uint8_t status_r = 0;
 uint8_t status_g = 0;
 uint8_t status_b = 0;
 
+/** True once the free-space query succeeded: the lower row then belongs to
+ *  the disk-usage bar and SetStatusLeds() leaves those LEDs alone. */
+bool usage_bar_active = false;
+
+/** How much of the card's file system is used, in keys: 50 % = 7.5, so the
+ *  first 7 keys are fully lit and key 8 is half lit. */
+float usage_keys = 0.f;
+
+/** Lights `keys_lit` keys of the lower row in blue, left to right; the
+ *  fractional part lights the next key partially. Nothing is painted while
+ *  the bar is inactive, so error statuses keep the whole row. */
+void PaintUsageBar(float keys_lit, uint8_t blue)
+{
+    if(!usage_bar_active)
+        return;
+    for(int i = 0; i < kBarLeds; ++i)
+    {
+        float fill = keys_lit - static_cast<float>(i);
+        if(fill > 1.f)
+            fill = 1.f;
+        else if(fill < 0.f)
+            fill = 0.f;
+        chompi::SetSmtLed(
+            kBarFirstLed - i, 0, 0, static_cast<uint8_t>(blue * fill));
+    }
+    chompi::fill_led_data();
+}
+
 void SetStatusLeds(uint8_t red, uint8_t green, uint8_t blue)
 {
     status_r = red;
@@ -57,8 +96,12 @@ void SetStatusLeds(uint8_t red, uint8_t green, uint8_t blue)
     for(size_t index = 0; index < chompi::kNumPthLeds - 2 * chompi::kPorchSize;
         ++index)
         chompi::SetPthLed(index, red, green, blue);
-    for(size_t index = 0; index < chompi::kNumSmtLeds - 2 * chompi::kPorchSize;
-        ++index)
+    /** The bar owns SMT LEDs kBarFirstLed-kBarLeds+1 .. kBarFirstLed
+     *  (10..24); the status colour still covers everything below that. */
+    const size_t last_smt
+        = usage_bar_active ? kBarFirstLed - kBarLeds + 1
+                           : chompi::kNumSmtLeds - 2 * chompi::kPorchSize;
+    for(size_t index = 0; index < last_smt; ++index)
         chompi::SetSmtLed(index, red, green, blue);
     chompi::fill_led_data();
 }
@@ -125,7 +168,8 @@ void ShutdownAndReset(bool usb_started)
 }
 
 // Mounts the card briefly to set the CHOMPI-SD volume label, then unmounts
-// again so the computer can take over the card.
+// again so the computer can take over the card. While mounted it also reads
+// how much of the file system is used, for the usage bar on the lower row.
 bool SetVolumeLabel(bool sd_init_ok, bool fatfs_link_ok)
 {
     if(!sd_init_ok || !fatfs_link_ok)
@@ -134,10 +178,52 @@ bool SetVolumeLabel(bool sd_init_ok, bool fatfs_link_ok)
     if(f_mount(&fatfs.GetSDFileSystem(), fatfs.GetSDPath(), 1) != FR_OK)
         return false;
 
+    DWORD free_clusters = 0;
+    FATFS* fs           = &fatfs.GetSDFileSystem();
+    if(f_getfree(fatfs.GetSDPath(), &free_clusters, &fs) == FR_OK
+       && fs->n_fatent > 2)
+    {
+        const DWORD total = fs->n_fatent - 2; /**< clusters on the volume */
+        /* A stale FSINFO block can report 0xFFFFFFFF free clusters; clamp it
+         * so the bar never underflows to "empty" on a full card. */
+        if(free_clusters > total)
+            free_clusters = total;
+        usage_keys = static_cast<float>(total - free_clusters)
+                     * static_cast<float>(kBarLeds)
+                     / static_cast<float>(total);
+        usage_bar_active = true;
+    }
+
     const FRESULT chdrive_result = f_chdrive(fatfs.GetSDPath());
     const FRESULT label_result   = f_setlabel("CHOMPI-SD");
     f_mount(nullptr, fatfs.GetSDPath(), 0);
     return chdrive_result == FR_OK && label_result == FR_OK;
+}
+
+/** Grows the bar from the left, one key at a time, stopping at the used
+ *  level: 50 % fills 7 keys fully and the 8th half. Runs before USB starts,
+ *  so blocking delays here cost nothing. */
+void AnimateUsageBarSweep()
+{
+    const int full_keys = static_cast<int>(usage_keys);
+    for(int i = 0; i <= full_keys; ++i)
+    {
+        PaintUsageBar(static_cast<float>(i), kBarBlue);
+        System::Delay(kBarSweepMs);
+    }
+    PaintUsageBar(usage_keys, kBarBlue);
+}
+
+/** Brightness for the current moment of the slow pulse: a triangle wave
+ *  between kBarPulseMin and full brightness. */
+uint8_t UsageBarPulseLevel(uint32_t now_ms)
+{
+    const uint32_t pos  = now_ms % kBarPulsePeriodMs;
+    const float    half = kBarPulsePeriodMs * 0.5f;
+    const float    ramp
+        = pos < half ? pos / half : (kBarPulsePeriodMs - pos) / half;
+    const float level = kBarPulseMin + (1.f - kBarPulseMin) * ramp;
+    return static_cast<uint8_t>(kBarBlue * level);
 }
 }
 
@@ -201,9 +287,16 @@ int main()
     const bool label_ok = SetVolumeLabel(sd_init_ok, fatfs_link_ok);
 
     if(!card_ready || !label_ok)
+    {
+        usage_bar_active = false; /**< error: the whole row turns red */
         SetStatusLeds(255, 0, 0);
+    }
     else
+    {
         SetStatusLeds(0, 80, 255);
+        if(usage_bar_active)
+            AnimateUsageBarSweep();
+    }
 
     UsbMscSetMedia(block_count, card_ready && block_count > 0);
     const UsbMscInitResult usb_result = UsbMscInit();
@@ -224,6 +317,7 @@ int main()
     ResetState reset_state = ResetState::Idle;
     uint32_t   last_scan   = 0;
     uint32_t   last_blink  = 0;
+    uint32_t   last_bar    = 0;
     bool       blink_on    = false;
     while(1)
     {
@@ -279,6 +373,14 @@ int main()
 
             case ResetState::ShuttingDown:
                 break; // never reached: ShutdownAndReset() does not return
+        }
+
+        /* Slow pulse on the usage bar, refreshed at ~40 Hz. Only the blue
+         * channel changes, so this never disturbs the key LEDs above. */
+        if(usage_bar_active && now - last_bar >= 25)
+        {
+            last_bar = now;
+            PaintUsageBar(usage_keys, UsageBarPulseLevel(now));
         }
     }
 }
