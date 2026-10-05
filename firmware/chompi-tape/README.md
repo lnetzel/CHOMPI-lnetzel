@@ -1,13 +1,14 @@
-# CHOMPI — TAPE v2.1 Firmware for Multi-Firmware Launcher
+# CHOMPI — TAPE v2.0-lnetzel.1 Firmware for Multi-Firmware Launcher
 
-The flagship sampler firmware for **CHOMPI**: the main firmware every CHOMPI ships with.
+Based on upstream origianl 2.0 this is now a modified firmware.
 
-## NEW in 2.1
+## NEW in v2.0-lnetzel.1
 - Compatible with Multi-Firmware Launcher
 - Added paste-append when copying a preset to looper buffer with overdub key.
 
-
 ---
+
+The flagship sampler firmware for **CHOMPI**: the main firmware every CHOMPI ships with.
 
 ## Firmware description
 
