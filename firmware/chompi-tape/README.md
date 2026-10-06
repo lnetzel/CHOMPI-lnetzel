@@ -5,6 +5,9 @@ Based on upstream origianl 2.0 this is now a modified firmware.
 ## NEW in v2.0-lnetzel.1
 - Compatible with Multi-Firmware Launcher
 - Added paste-append when copying a preset to looper buffer with overdub key.
+- Removed the factory hardware self-test to free SRAM. Holding the GAIN encoder
+  at startup no longer has any effect; the firmware always boots into the normal
+  instrument. (The old diagnostic code remains in git history if ever needed.)
 
 ---
 
@@ -21,9 +24,10 @@ tape-style looper, delay and reverb, and MIDI in and out over TRS and USB.
 Toolchain: GNU Arm Embedded 10.3-2021.10. Newer compilers overflow the firmware's SRAM region
 and fail at the link step.
 
-Warning: This firmware is pretty much at capacity, with only 376 bytes of SRAM space remaining.
-This means that any additional tweaks or features will very likely require sacrificing something
-to free up the necessary code space.
+Warning: This firmware is close to capacity. After removal of the hardware self-test
+(2026-10-06 build), measured headroom is 8,712 bytes in SRAM_EXEC (96.40% used) and
+3,476 bytes in SRAM (98.77% used). Any additional tweaks or features will very likely
+require sacrificing something to free up the necessary code space.
 
 ## Repository layout
 

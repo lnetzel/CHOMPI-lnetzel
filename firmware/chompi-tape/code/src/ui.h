@@ -2,7 +2,6 @@
 #include "ui_utils.h"
 #include "NormalPage.h"
 #include "MenuPage.h"
-#include "TestPage.h"
 #include "BootPage.h"
 #include "NoSDPage.h"
 #include "RainbowWavePage.h"
@@ -82,8 +81,6 @@ namespace chompi
             menu_page_.Init(hw_, fx_, copier, enc_rows, def_rows, knob_page,
                 presets_manager, pitch_shift_quant, split_delay);
 
-            test_page_.Init(hw_, fx_);
-
             uint16_t state = 0;
             for (int i = 0; i < 512; i++)
             {
@@ -97,13 +94,6 @@ namespace chompi
                 event_queue.AddButtonPressed(static_cast<int>(Hardware::SwId::SW_TOG), 1);
         }
 
-        inline bool InTestMode() { return test_page_.IsActive(); }
-        void TestMode()
-        {
-            ui.OpenPage(test_page_);
-            normal_page_.SetInitIgnore(false);
-        }
-
         void NoSDCard()
         {
             menu_page_.NoSDCard();
@@ -114,7 +104,6 @@ namespace chompi
             if(run)
             {
                 ui.ClosePage(menu_page_);
-                ui.ClosePage(test_page_);
                 ui.OpenPage(no_sd_page_);
             }
             else
@@ -123,8 +112,7 @@ namespace chompi
 
         void RainbowWave() 
         { 
-            if(!test_page_.IsActive()) 
-                ui.OpenPage(rainbow_page_);
+            ui.OpenPage(rainbow_page_);
         }
         inline bool InRainbows() { return rainbow_page_.IsActive(); }
 
@@ -161,16 +149,11 @@ namespace chompi
                             normal_page_.OpenCubbiSlot(slot);
                         }
  
-                        if(!test_page_.IsActive()) {
-                            fx_->request_fifo.PushBack(KeyRequest(KeyRequest::Type::START, 
-                                key - 36, midi2key[key], event.data[1] + 1));
+                        fx_->request_fifo.PushBack(KeyRequest(KeyRequest::Type::START, 
+                            key - 36, midi2key[key], event.data[1] + 1));
 
-                            if(fx_->GetLooperRecordArm())
-                                fx_->ToggleLooperRecord();
-                        }
-                        else {
-                            event_queue.AddButtonPressed(midi2key[key], 1, true);
-                        }
+                        if(fx_->GetLooperRecordArm())
+                            fx_->ToggleLooperRecord();
                     }
                     break;
                     case NoteOff:
@@ -182,10 +165,6 @@ namespace chompi
 
                         fx_->request_fifo.PushBack(KeyRequest(KeyRequest::Type::STOP, 
                             key - 36, midi2key[key], event.data[1] + 1));
-
-                        if (test_page_.IsActive()) {
-                            event_queue.AddButtonReleased(midi2key[key]);
-                        }
                     }
                     break;
                     case ControlChange:
@@ -233,8 +212,6 @@ namespace chompi
             }
         }
 
-        inline bool GetToggleState() { return toggle_state; }
-
         uint32_t last_force_off;
         void GenerateEvents()
         {
@@ -270,12 +247,6 @@ namespace chompi
                 normal_page_.ResetSmtLeds();
             }
 
-            if(test_page_.IsClosable() && test_page_.IsActive())
-            {
-                ui.ClosePage(test_page_);
-                normal_page_.ResetSmtLeds();
-            }
-
             if(rainbow_page_.IsClosable() && rainbow_page_.IsActive())
             {
                 ui.ClosePage(rainbow_page_);
@@ -291,7 +262,6 @@ namespace chompi
                 {
                     // this should be smoothed
                     normal_page_.SetSwitchState(toggle_state);
-                    test_page_.SetSwitchState(toggle_state);
                     menu_page_.SetSwitchState(toggle_state);
                 }
                 else if (hw_->button_sr.FallingEdge(i))
@@ -310,8 +280,7 @@ namespace chompi
                         && toggle_state
                         && normal_page_.IsActive()
                         && !boot_page_.IsActive()
-                        && !rainbow_page_.IsActive()
-                        && !test_page_.IsActive())
+                        && !rainbow_page_.IsActive())
                     {
                         // normal_page_.CacheLeds();
                         ui.OpenPage(menu_page_);             
@@ -446,14 +415,10 @@ namespace chompi
 
         // inline void TrigClear() { normal_page_.TrigClear(); }
 
-    inline void TestPowerCable(bool cable) { test_page_.SetPowerCable(cable); }
-    inline void TestBMC(bool good) { test_page_.SetBMCGood(good); }
-
     // public so we can check IsActive from main
     BootPage boot_page_;
     NormalPage normal_page_;
     MenuPage menu_page_;
-    TestPage test_page_;
     NoSDPage no_sd_page_;
     RainbowPage rainbow_page_;
     private:
