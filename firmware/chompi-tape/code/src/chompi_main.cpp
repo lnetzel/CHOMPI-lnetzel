@@ -33,8 +33,6 @@ int16_t DSY_SDRAM_BSS loop_mem[kMaxRamBuffSize];
 RamBufferMemory chompi_buff;
 int16_t DSY_SDRAM_BSS chompi_mem[kMaxRamBuffSize]; 
 
-daisysp::Oscillator osc;
-
 // CpuLoadMeter meter;
 uint32_t pret, sd_checkt;
 // bool log_batt;
@@ -61,7 +59,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
 {
     // meter.OnBlockStart();
 
-    if(booting && !ui.InTestMode())
+    if(booting)
     {
         hw.ProcessAllControls();
         ui.GenerateEvents();
@@ -89,15 +87,7 @@ void AudioCallback(AudioHandle::InputBuffer in, AudioHandle::OutputBuffer out, s
     }
     line_in_state = hw.jack_detect.Read();
 
-    if(ui.InTestMode() && ui.GetToggleState())
-    {
-        for(size_t i = 0; i < size; i++)
-        {
-            out[0][i] = out[1][i] = out[2][i] = out[3][i] = osc.Process();
-        }
-    }
-    else
-        engine.Process(in, out, size);
+    engine.Process(in, out, size);
 
     // meter.OnBlockEnd();
 }
@@ -261,20 +251,6 @@ void MainLoop(void* data)
         batt = now;
     }
 
-    if(ui.InTestMode())
-    {
-        hw.MpReadAll();
-
-        while (!hw.read_ready) {
-            System::Delay(1);
-        }
-        ui.TestPowerCable(hw.mp_buff_[1] >> 5 & 1); //VIN_RDY
-
-        // Normal NTC_MISSING, BATT_MISSING, NTC1_FAULT, and NTC2_FAULT
-        ui.TestBMC(hw.mp_buff_[3] == 0); 
-    }
-
-
     if(interrupt)
     {
         // last_read = now;
@@ -366,9 +342,6 @@ int main(void)
                 options.record_latch, options.tape_slew_on,
                 MonitorMode(options.monitor_position));
 
-    osc.Init(hw.seed.AudioSampleRate());
-    osc.SetAmp(.2f);
-
     now = daisy::System::GetNow();
     uit = now;
     pret = now;
@@ -380,13 +353,11 @@ int main(void)
     #endif
 
     // get any junk out of the SRs, takes .5s
-    uint32_t vol_state = 0;
     uint32_t sleep_state = 0;
 
     for(int i = 0; i < 5000; i++)
     {
         hw.ProcessAllControls();
-        vol_state += hw.button_sr.State(int(Hardware::SwId::ENC_6_SW));
         sleep_state += hw.button_sr.State(int(Hardware::SwId::KEY_26))
                         && hw.button_sr.State(int(Hardware::SwId::KEY_27))
                         && hw.button_sr.State(int(Hardware::SwId::KEY_28));
@@ -396,8 +367,6 @@ int main(void)
 
     if(sleep_state > 4000)
         hw.MpWrite(0x08, 0B10111111); // SHIPPING MODE
-    else if(vol_state > 4000)
-        ui.TestMode();
 
     hw.usb_sw.Write(false);     // give USB control
     daisy::System::Delay(1); // Wait a sec
