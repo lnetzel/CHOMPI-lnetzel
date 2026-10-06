@@ -1,6 +1,8 @@
 # Looper Playback Volume Plan
 
-Status: Planned only. No firmware implementation or build verification has been performed.
+Status: Implemented and build-verified 2026-10-06 (GCC 10.3-2021.10). SRAM_EXEC +408 B
+(233,616 B, 96.57%; 8,304 B free), SRAM +8 B (278,900 B, 98.77%; 3,468 B free).
+Hardware acceptance checks below remain outstanding.
 
 ## Behavior
 
@@ -52,7 +54,7 @@ Add a thin `Engine::SetLooperPlaybackGain(float)` forwarding method in `DSPEngin
 
 ### 3. LED and MIDI
 
-Use the existing purple color for page 3, with brightness following the gain and a minimum brightness floor so the page remains identifiable at mute. Do not introduce a new VU meter or DSP telemetry.
+Use yellow color for page 3, with brightness following the gain and a minimum brightness floor so the page remains identifiable at mute. Do not introduce a new VU meter or DSP telemetry.
 
 The unused `cc_map[2][5]` currently contains zero, and physical turns unconditionally transmit their mapped CC. Suppress outgoing MIDI specifically for GAIN page 3 so it does not send accidental CC 0 messages. Leave other mappings unchanged and do not add a dedicated CC.
 

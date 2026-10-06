@@ -1275,6 +1275,8 @@ namespace daisy
         inline void IncrementLooperDubGain(float gain) { looper.IncrementDubGain(gain); }
         inline float GetLooperDubGain() { return looper.GetDubGain(); }
 
+        inline void SetLooperPlaybackGain(float gain) { looper.SetPlaybackGain(gain); }
+
         inline void LooperOpenFile() { looper.OpenFile(); }
 
         inline int GetBank() { return bank[int(voice_mode)];}

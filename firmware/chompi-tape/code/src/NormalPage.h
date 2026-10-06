@@ -119,7 +119,7 @@ namespace chompi
     static const float dark_orange[3] = {.77f, .38f, .06f};
     static const float yellow_green[3] = {.706f, 1.f, 0.f};
 
-    static const uint8_t knob_num_pages[6] = {2, 2, 2, 3, 1, 2};
+    static const uint8_t knob_num_pages[6] = {2, 2, 2, 3, 1, 3};
 
     class NormalPage : public daisy::UiPage
     {
@@ -159,6 +159,7 @@ namespace chompi
             fx_->SetReverse(false);
             
             fx_->SetInputGain(.75f);
+            fx_->SetLooperPlaybackGain(enc_defaults[2][5]);
 
 
             for (int i = 0; i < kNumSmtLeds; i++)
@@ -510,13 +511,23 @@ namespace chompi
 
                         fx_->SetMainGain(value);
                     }
-                    else
+                    else if (page == 1)
                     {
                         r = color_xfade(blue[0], red[0], value);
                         g = color_xfade(blue[1], red[1], value);
                         b = color_xfade(blue[2], red[2], value);
 
                         fx_->SetInputGain(value);
+                    }
+                    else // page 2, looper playback volume
+                    {
+                        float bright = .15f + .85f * value; // brightness floor keeps page visible at mute
+
+                        r = yellow[0] * bright;
+                        g = yellow[1] * bright;
+                        b = yellow[2] * bright;
+
+                        fx_->SetLooperPlaybackGain(value);
                     }
                     SetPthLedFloat(9, r, g, b);
                     break;
@@ -1001,7 +1012,9 @@ namespace chompi
             }
 
             if (stepsPerRevolution == 0) {
-                hw_->SendCC(midi_channel, cc_map[page][encoderID], enc_values[page][encoderID] * 127);
+                // GAIN page 3 has no mapped CC; suppress the cc_map[2][5] == 0 transmission
+                if(!(encoderID == 5 && page == 2))
+                    hw_->SendCC(midi_channel, cc_map[page][encoderID], enc_values[page][encoderID] * 127);
             }
 
 
