@@ -234,6 +234,13 @@ class FileCopier
             RamDir is_looper = RamDir::NONE;
             bool set = false;
             bool append = false;
+
+            /** Optional normalized source range [0, 1], taken from the source
+             *  preset's saved start/end. trim == false (the default) copies the
+             *  full source, preserving the behavior of all existing callers. */
+            bool trim = false;
+            float trim_start = 0.f;
+            float trim_end = 1.f;
         };
 
         FIFO<CopyRequest, 16> req_fifo;
@@ -260,6 +267,36 @@ class FileCopier
 
                 // jump read FIL past the header, set size variables
                 JumpToData(fname, &copysize);
+
+                // Restrict the copy to the source preset's saved start/end
+                // region (SD-card preset -> looper copies). Offsets are relative
+                // to the parsed data chunk and stereo-frame aligned, matching
+                // SampleReader's playback convention for standard WAV files.
+                // copysize == 0 means no data chunk was found; keep the legacy
+                // copy-until-EOF policy for such nonstandard files.
+                if(req.trim && copysize != 0)
+                {
+                    const uint32_t data_start = f_tell(&fptr_read);
+
+                    uint32_t start_byte = req.trim_start * copysize;
+                    start_byte -= start_byte % 4; // stereo frame = 2ch * 16bit
+                    uint32_t end_byte = req.trim_end * copysize;
+                    end_byte -= end_byte % 4;
+
+                    if(end_byte > start_byte
+                        && f_lseek(&fptr_read, data_start + start_byte) == FR_OK)
+                    {
+                        copysize = end_byte - start_byte;
+                    }
+                    else
+                    {
+                        // empty selection or failed seek: reject the copy before
+                        // anything is written to the destination or its metadata
+                        CloseFile(&fptr_read);
+                        copying_ = false;
+                        return;
+                    }
+                }
             }
             else if(is_chompi_ram == CopyRequest::RamDir::FROM)
             {
