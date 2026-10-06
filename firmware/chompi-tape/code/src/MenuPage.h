@@ -779,6 +779,38 @@ namespace chompi
                             selected_slot, ss_bank, ss_mode, set_slot,
                             chompi, looper, copy_append);
 
+                        // SD-card preset -> looper copies transfer only the preset's
+                        // saved start/end region. RAM sources, preset-to-preset
+                        // copies, and presets without saved metadata keep the
+                        // existing full-range behavior.
+                        if(looper == FileCopier::CopyRequest::RamDir::TO && copy_src <= 14)
+                        {
+                            const float trim_start = presets_->GetValue(static_cast<size_t>(cs_mode), cs_bank, copy_src, 1);
+                            const float trim_end   = presets_->GetValue(static_cast<size_t>(cs_mode), cs_bank, copy_src, 2);
+
+                            // 0xff sentinel: no saved metadata, copy the full sample
+                            if(trim_start != 0xff && trim_end != 0xff)
+                            {
+                                if(!(trim_start >= 0.f && trim_start < trim_end && trim_end <= 1.f))
+                                {
+                                    // invalid or empty selection: cancel the copy
+                                    // without touching the looper or its metadata
+                                    preset_mode = PresetMode::NONE;
+                                    copy_src = kSlotNone;
+                                    copy_append = false;
+                                    selected_slot = kSlotNone;
+                                    return false;
+                                }
+
+                                if(trim_start > 0.f || trim_end < 1.f)
+                                {
+                                    req.trim = true;
+                                    req.trim_start = trim_start;
+                                    req.trim_end = trim_end;
+                                }
+                            }
+                        }
+
                         copier_->req_fifo.PushBack(req);
 
                         blink_startt = System::GetNow();

@@ -2,11 +2,13 @@
 
 ## Status
 
-Feasibility investigated; firmware implementation has not started. This document is a portable handoff plan, not executable code. On another computer, open the same repository in VS Code and ask Copilot to implement this plan after reading applicable repository instructions and verifying the current code.
+Implemented 2026-10-06. `FileCopier::CopyRequest` gained optional `trim`/`trim_start`/`trim_end` fields (default full-range), the `COPY_DEST` handler in MenuPage.h snapshots the saved start/end for SD-card preset-to-looper requests (rejecting invalid/empty ranges without pushing the request), and `FileCopier::CopyStart` seeks to the stereo-frame-aligned start offset within the parsed WAV data chunk and bounds `copysize` to the selection. Findings confirmed during implementation: the looper (slot 16) has no preset metadata (`PresetManager::Copy` bounds-checks it out) and LooperEngine always plays the full RAM buffer, so no destination-metadata fixup was needed.
+
+Build verified with the ARM 10.3-2021.10 toolchain: +1,360 B .text, +224 B .bss (17 replicated CopyRequests), bin 234,568 B; ~6.9 KB SRAM_EXEC and ~3.2 KB SRAM headroom remain. Items 1-6 of the verification checklist below require CHOMPI hardware and an SD card and have NOT been run.
 
 ## Goal And Scope
 
-When copying an SD-card preset into the looper (slot 16), copy only the audio between the preset's saved start/end positions. Apply the same selection when appending to an existing loop.
+When copying an SD-card preset into the looper buffer (slot 16), copy only the audio between the preset's saved start/end positions. Apply the same selection when appending to an existing loop.
 
 For example, a 10-second sample trimmed to 25%-75% should contribute only the middle 5 seconds. The original SD-card sample and source preset must remain unchanged.
 

@@ -7,7 +7,8 @@ Based on upstream origianl 2.0 this is now a modified firmware.
 - Removed the factory hardware self-test to free SRAM. Holding the GAIN encoder
   at startup no longer has any effect; the firmware always boots into the normal
   instrument. (The old diagnostic code remains in git history if ever needed.)
-- Added a third page to the GAIN encoder: looper playback volume (see below).
+- Looper Playback Volume - Added a third page to the GAIN encoder to adjust the looper playback volume
+- Trimmed Paste to Looper - When pasting or append-pasting a preset to the looper only the section between start and end position is included.  
 
 ### GAIN encoder pages
 
