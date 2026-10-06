@@ -33,6 +33,7 @@ namespace daisy
             looper.Reset();
 
             fx_env_ = fx_env_target_ = 1.f;
+            playback_gain_ = playback_gain_target_ = 1.f;
         }
 
         void FXEnvelope()
@@ -56,6 +57,7 @@ namespace daisy
             for(size_t i = 0; i < size; i++)
             {
                 daisysp::fonepole(fx_env_, fx_env_target_, .001f);
+                daisysp::fonepole(playback_gain_, playback_gain_target_, .001f);
 
                 if(!first_record || looper.IsResetting())
                 {
@@ -64,8 +66,8 @@ namespace daisy
 
                     looper.PopStereoSamps(f2s16(out_l[i] * fx_env_), f2s16(out_r[i] * fx_env_), &aol, &aor, record, playing);
 
-                    out_l[i] += s162f(aol) * fx_env_;
-                    out_r[i] += s162f(aor) * fx_env_;
+                    out_l[i] += s162f(aol) * fx_env_ * playback_gain_;
+                    out_r[i] += s162f(aor) * fx_env_ * playback_gain_;
                 }
                 else if(!reset)
                 {
@@ -142,6 +144,10 @@ namespace daisy
         }
 
         inline void SetPitch(float val) { looper.SetVarispeed(val); }
+        inline void SetPlaybackGain(float gain)
+        {
+            playback_gain_target_ = gain < 0.f ? 0.f : (gain > 1.f ? 1.f : gain);
+        }
         inline void SetReverse(bool rev) { looper.SetReverse(rev); }
         inline void SetScrub(float scrub) { looper.SetScrub(scrub); }
         inline float GetScrub() { return looper.GetScrub(); }
@@ -284,5 +290,6 @@ namespace daisy
         bool reset, jump_to_start;
 
         float fx_env_, fx_env_target_;
+        float playback_gain_, playback_gain_target_;
     };
 }

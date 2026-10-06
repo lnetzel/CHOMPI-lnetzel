@@ -2,12 +2,39 @@
 
 Based on upstream origianl 2.0 this is now a modified firmware.
 
-## NEW in v2.0-lnetzel.1
-- Compatible with Multi-Firmware Launcher
-- Added paste-append when copying a preset to looper buffer with overdub key.
+
+## NEW in v2.0-lnetzel.2
 - Removed the factory hardware self-test to free SRAM. Holding the GAIN encoder
   at startup no longer has any effect; the firmware always boots into the normal
   instrument. (The old diagnostic code remains in git history if ever needed.)
+- Added a third page to the GAIN encoder: looper playback volume (see below).
+
+### GAIN encoder pages
+
+Short clicks on the GAIN encoder cycle three pages:
+
+1. **Master output volume**
+2. **Input monitor volume**
+3. **Looper playback volume** (yellow LED; brightness follows the setting,
+   with a dim floor so the page stays identifiable at mute)
+
+The looper playback page scales loop playback linearly from mute to 100% of the
+normal loop level. It starts at 100% on every power-up, is never written to the
+SD card, and is kept for the whole session — including across loop clear, load,
+append, and sample changes. It adjusts playback only: stored audio, recording
+level, and overdub feedback are untouched.
+
+Audio-routing notes:
+
+- The gain affects loop playback on both the headphone and line outputs.
+- The gain is applied before any post-looper effects, so effect tails may
+  briefly remain after muting the loop.
+- Resampling captures the adjusted audible mix, including the loop volume
+  setting.
+
+## NEW in v2.0-lnetzel.1
+- Compatible with Multi-Firmware Launcher
+- Added paste-append when copying a preset to looper buffer with overdub key.
 
 ---
 

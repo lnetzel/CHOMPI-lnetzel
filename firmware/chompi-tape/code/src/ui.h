@@ -15,7 +15,7 @@ namespace chompi
     static const float enc_defaults[3][6] = {
         {.83f, 0.f, 1.f, 0.f, .75f, .84f}, // page 1
         {.704f, 0.f, 0.f, 0.f, 0.f, .75f},   // page 2
-        {0.f, 0.f, 0.f, .5f, 0.f, 0.f},   // page 3
+        {0.f, 0.f, 0.f, .5f, 0.f, 1.f},   // page 3
     };
 
     static const uint8_t midi2key[49] = {

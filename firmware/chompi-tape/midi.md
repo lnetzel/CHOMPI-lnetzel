@@ -23,7 +23,7 @@ These set the value of the knob at that position, controlling whichever function
 | 22 | 0–127 | END knob (absolute 0.0–1.0). Page 1: sample end point. Page 2: envelope decay. |
 | 23 | 0–127 | MAGIC knob (absolute 0.0–1.0). Page 1: reverb/delay. Page 2: lofi (saturate). Page 3: filter. |
 | 24 | 0–127 | TRANSPORT knob: looper pitch. **Ignored entirely if the looper is not playing.** |
-| 25 | 0–127 | GAIN knob (absolute 0.0–1.0). Page 1: master gain. Page 2: input gain. |
+| 25 | 0–127 | GAIN knob (absolute 0.0–1.0). Page 1: master gain. Page 2: input gain. Page 3: looper playback volume. |
 
 Notes:
 - The value is applied as `value / 127`, then clamped to 0.0–1.0.
@@ -71,6 +71,7 @@ Physical encoder turns send `value * 127` on the CC assigned to the knob's **cur
 | Looper pitch | TRANSPORT | 1 | 24 | 0–127 absolute |
 | Master gain | GAIN | 1 | 25 | 0–127 absolute |
 | Input gain | GAIN | 2 | 32 | 0–127 absolute |
+| Looper playback volume | GAIN | 3 | — | No CC sent; physical turns on this page are silent |
 
 Additionally, resetting the looper pitch (transport encoder click) sends CC 24 with the default value (≈ 95).
 
