@@ -1,7 +1,33 @@
-# CHOMPI — TAPE v2.0-lnetzel.1 Firmware for Multi-Firmware Launcher
+# CHOMPI — TAPE v2.0-lnetzel.3 Firmware for Multi-Firmware Launcher
 
 Based on upstream origianl 2.0 this is now a modified firmware.
 
+
+## NEW in v2.0-lnetzel.3
+- Reliable preset start/end trimming down to 5 ms range:
+  - Fixed mixed byte/frame units in the trim boundary checks. The old code
+    compared absolute file bytes (including the WAV header) against
+    stereo-frame counts, so it could reject valid trims or accept trims that
+    click at the playhead.
+  - Trim edits now validate every targeted voice before changing any of them
+    (all-or-none). Previously the seven JAMMI voices could end up with mixed
+    start/end boundaries.
+  - Rejected trims roll the encoder value and MIDI feedback back to the
+    retained boundary in both turn directions and for MIDI absolute input,
+    and the saved preset only changes on accepted trims.
+  - Stopped/cached voices and outward trim moves are no longer blocked by the
+    current file position. Active playback still rejects trims that would land
+    inside the already-queued audio region (16,384-byte margin = one streaming
+    FIFO).
+- Added a host-compilable test target for the trim validation arithmetic under
+  `code/tests`. Run it with `make -C firmware/chompi-tape/code/tests test` on
+  any machine with a host C++14 compiler.
+
+Verification (2026-10-07): clean build with GNU Arm Embedded 10.3-2021.10
+passes (bin 239,192 bytes; SRAM_EXEC 98.87% used / 2,728 bytes free, SRAM
+98.85% used / 3,252 bytes free). Exact trim margin thresholds are compile-time
+checked via static_asserts in `code/tests`. On-device checks per
+`plans/trim_controls_checklist.md` are NOT yet performed.
 
 ## NEW in v2.0-lnetzel.2
 - Removed the factory hardware self-test to free SRAM. Holding the GAIN encoder
@@ -9,6 +35,9 @@ Based on upstream origianl 2.0 this is now a modified firmware.
   instrument. (The old diagnostic code remains in git history if ever needed.)
 - Looper Playback Volume - Added a third page to the GAIN encoder to adjust the looper playback volume
 - Trimmed Paste to Looper - When pasting or append-pasting a preset to the looper only the section between start and end position is included.  
+
+## NEW in v2.0-lnetzel.1
+- Added new feature to append a copy/paste to the end of the looper buffer. Could be seen as pattern chaining in a very basic way.
 
 ### GAIN encoder pages
 
@@ -52,10 +81,10 @@ tape-style looper, delay and reverb, and MIDI in and out over TRS and USB.
 Toolchain: GNU Arm Embedded 10.3-2021.10. Newer compilers overflow the firmware's SRAM region
 and fail at the link step.
 
-Warning: This firmware is close to capacity. After removal of the hardware self-test
-(2026-10-06 build), measured headroom is 8,712 bytes in SRAM_EXEC (96.40% used) and
-3,476 bytes in SRAM (98.77% used). Any additional tweaks or features will very likely
-require sacrificing something to free up the necessary code space.
+Warning: This firmware is close to capacity. With the trim-reliability changes
+(2026-10-07 build), measured headroom is 2,728 bytes in SRAM_EXEC (98.87% used)
+and 3,252 bytes in SRAM (98.85% used). Any additional tweaks or features will
+very likely require sacrificing something to free up the necessary code space.
 
 ## Repository layout
 

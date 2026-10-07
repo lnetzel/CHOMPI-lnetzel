@@ -881,34 +881,60 @@ namespace daisy
 
         bool SetStartPoint(float val)
         {
-            bool ret = false;
+            // Validate every targeted voice before mutating any of them.
+            // The IRQ block keeps the audio callback from changing validation
+            // state between preflight and commit (no file I/O happens inside).
+            ScopedIrqBlocker irq_block;
+
             if(voice_mode == VoiceMode::CUBBI)
             {
-                ret = chompi_voice[latest_voice].SetStartPoint(val);
-            }
-            else
-            {
-                for(size_t i = 0; i < kMaxPoly; i++)
-                    ret = chompi_voice[i].SetStartPoint(val);            
+                if(!TrimCheckPasses(chompi_voice[latest_voice].CheckStartPoint(val)))
+                    return false;
+                return chompi_voice[latest_voice].SetStartPoint(val);
             }
 
-            return ret;
+            TrimVoiceState states[kMaxPoly];
+            for(size_t i = 0; i < kMaxPoly; i++)
+                chompi_voice[i].FillTrimVoiceState(states[i]);
+
+            if(!TrimPreflightStart(states, kMaxPoly, val,
+                                   chompi_voice[0].GetMinTrimFrames(),
+                                   kTrimSafetyMarginBytes))
+                return false;
+
+            for(size_t i = 0; i < kMaxPoly; i++)
+                chompi_voice[i].SetStartPoint(val);
+
+            return true;
         }
 
         bool SetEndPoint(float val)
         {
-            bool ret = false;
+            // Validate every targeted voice before mutating any of them.
+            // The IRQ block keeps the audio callback from changing validation
+            // state between preflight and commit (no file I/O happens inside).
+            ScopedIrqBlocker irq_block;
+
             if(voice_mode == VoiceMode::CUBBI)
             {
-                ret = chompi_voice[latest_voice].SetEndPoint(val);
-            }
-            else
-            {
-                for(size_t i = 0; i < kMaxPoly; i++)
-                    ret = chompi_voice[i].SetEndPoint(val);            
+                if(!TrimCheckPasses(chompi_voice[latest_voice].CheckEndPoint(val)))
+                    return false;
+                return chompi_voice[latest_voice].SetEndPoint(val);
             }
 
-            return ret;
+            TrimVoiceState states[kMaxPoly];
+            for(size_t i = 0; i < kMaxPoly; i++)
+                chompi_voice[i].FillTrimVoiceState(states[i]);
+
+            if(!TrimPreflightEnd(states, kMaxPoly, val,
+                                 chompi_voice[0].GetMinTrimFrames(),
+                                 kTrimSafetyMarginBytes))
+                return false;
+
+            for(size_t i = 0; i < kMaxPoly; i++)
+                chompi_voice[i].SetEndPoint(val);
+
+            return true;
         }
 
         void SetAutoLoop(bool loop)

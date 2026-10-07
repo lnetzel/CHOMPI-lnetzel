@@ -5,12 +5,22 @@
 #include "FileStreamingManager.h"
 #include "Control/adsr.h"
 #include "RamBuffer.h"
+#include "TrimValidation.h"
 
 namespace daisy
 {
 
     static const uint16_t kMaxClickSamps = 300; // 6ish ms
-    static const uint16_t kMinLoopLen = kMaxFileStreamingSamps / 2;
+
+    /** Safety margin for active trim edits: one full streaming FIFO of bytes.
+     *  Byte-converted form of the margins the original boundary checks used
+     *  (kMaxFileStreamingSamps int16 elements = 16,384 bytes = 4,096 frames).
+     */
+    static constexpr uint32_t kTrimSafetyMarginBytes
+        = kMaxFileStreamingSamps * sizeof(int16_t);
+
+    static_assert(sizeof(WAV_FormatTypeDef) == kTrimWavHeaderBytes,
+                  "trim validation helper must agree with the real WAV header size");
 
     /** @brief Sampler that uses a file on external media to store the data
      *  This uses a .wav file as the source to be able to be saved/edited
@@ -36,7 +46,17 @@ namespace daisy
         {
             manager_ = &manager;
             read_requests_ = 0;
+            seek_requests_ = 0;
+            open_requests_ = 0;
+            last_read_size_ = 0;
             sr_ = sr;
+
+            // no file open yet: keep metadata reads deterministic
+            memset(&fptr_read, 0, sizeof(FIL));
+
+            // valid normalized boundaries before RestoreDefaults() re-applies them
+            fstart_ = 0.f;
+            fend_   = 1.f;
 
             ram_buff.Init(buff);
 
@@ -83,56 +103,71 @@ namespace daisy
 
         inline void SetStartPointForce(float val) { fstart_ = val; }
 
-        bool SetStartPoint(float val) 
-        { 
-            if(!reverse_ && fstart_ != val)
-            {
-                is_buffered = false;
-            }
+        /** Snapshot everything trim validation needs for this voice. */
+        void FillTrimVoiceState(TrimVoiceState& out)
+        {
+            out.using_ram  = using_ram;
+            out.reverse    = reverse_;
+            out.active     = IsPlaying();
+            out.start_norm = fstart_;
+            out.end_norm   = fend_;
+            out.pending_io = open_requests_ + seek_requests_ + read_requests_;
 
-            uint32_t new_start_point = 0;
-            uint32_t end_point = 0;
             if(using_ram)
             {
-                new_start_point = val * ram_buff.GetSize();
-                new_start_point -= (new_start_point % 2);
-                new_start_point /= 2;
-
-                end_point = fend_ * ram_buff.GetSize();
-                end_point -= (end_point % 2);
-                end_point /= 2;
+                // RAM length is always known; GetSize() counts int16 elements
+                out.payload_known   = true;
+                out.payload_units   = ram_buff.GetSize();
+                out.units_per_frame = 2; // int16 elements per stereo frame
+                out.file_pos_bytes  = 0;
+                out.last_read_bytes = 0;
             }
             else
             {
-                new_start_point = val * (f_size(&fptr_read) - sizeof(WAV_FormatTypeDef));
-                new_start_point -= (new_start_point % 4);
-                new_start_point /= 4; // convert bytes to samples
-
-                end_point = fend_ * (f_size(&fptr_read) - sizeof(WAV_FormatTypeDef));
-                end_point -= (end_point % 4);
-                end_point /= 4; // convert bytes to samples
+                const uint32_t file_size = f_size(&fptr_read);
+                // metadata is only trustworthy once no open is outstanding and
+                // the file is at least a WAV header long
+                out.payload_known   = open_requests_ == 0
+                                      && file_size >= sizeof(WAV_FormatTypeDef);
+                out.payload_units   = out.payload_known
+                                          ? file_size - sizeof(WAV_FormatTypeDef)
+                                          : 0;
+                out.units_per_frame = 4; // bytes per stereo frame
+                out.file_pos_bytes  = f_tell(&fptr_read);
+                out.last_read_bytes = last_read_size_;
             }
+        }
 
-            bool ret = false;
+        /** Side-effect-free validation, shared with the engine preflight. */
+        TrimCheck CheckStartPoint(float val)
+        {
+            TrimVoiceState state;
+            FillTrimVoiceState(state);
+            return ValidateTrimStart(state, val, GetMinTrimFrames(),
+                                     kTrimSafetyMarginBytes);
+        }
 
-            // we're smashing the start point into the play head region, which can cause clicks
-            if(reverse_ && !using_ram &&
-                f_tell(&fptr_read) - read_samps.GetNumElements() * 2 
-                    < new_start_point + kMaxFileStreamingSamps * 2)
+        uint32_t GetMinTrimFrames() const
+        {
+            return TrimMinFramesForRate(static_cast<uint32_t>(sr_ + 0.5f));
+        }
+
+        bool SetStartPoint(float val)
+        {
+            const TrimCheck check = CheckStartPoint(val);
+            if(!TrimCheckPasses(check))
+                return false;
+
+            if(check == TrimCheck::kAccept)
             {
-                // do nothing
-            }
-            else if(end_point - new_start_point < kMinLoopLen || new_start_point >= end_point) // loop would be too short
-            {
-                // do nothing
-            }
-            else
-            {
-                fstart_ = val;
-                ret = true;
+                // invalidate the cache only for an accepted change to the
+                // playback entry boundary (forward start)
+                if(!reverse_)
+                    is_buffered = false;
+                fstart_ = TrimClampNorm(val);
             }
 
-            return ret;
+            return true;
         }
 
         inline uint32_t GetStartPoint() 
@@ -151,55 +186,31 @@ namespace daisy
 
         inline void SetEndPointForce(float val) { fend_ = val; }
 
-        bool SetEndPoint(float val) 
-        { 
-            if(reverse_ && fend_ != val)
+        /** Side-effect-free validation, shared with the engine preflight. */
+        TrimCheck CheckEndPoint(float val)
+        {
+            TrimVoiceState state;
+            FillTrimVoiceState(state);
+            return ValidateTrimEnd(state, val, GetMinTrimFrames(),
+                                   kTrimSafetyMarginBytes);
+        }
+
+        bool SetEndPoint(float val)
+        {
+            const TrimCheck check = CheckEndPoint(val);
+            if(!TrimCheckPasses(check))
+                return false;
+
+            if(check == TrimCheck::kAccept)
             {
-                is_buffered = false;
+                // invalidate the cache only for an accepted change to the
+                // playback entry boundary (reverse end)
+                if(reverse_)
+                    is_buffered = false;
+                fend_ = TrimClampNorm(val);
             }
 
-            uint32_t new_end_point = 0;
-            uint32_t start_point = 0;
-            if(using_ram)
-            {
-                new_end_point = val * ram_buff.GetSize();
-                new_end_point -= (new_end_point % 2);
-                new_end_point /= 2;
-
-                start_point = fstart_ * ram_buff.GetSize();
-                start_point -= (start_point % 2);
-                start_point /= 2;
-            }
-            else
-            {
-                new_end_point = val * (f_size(&fptr_read) - sizeof(WAV_FormatTypeDef));
-                new_end_point -= (new_end_point % 4);
-                new_end_point /= 4; // convert bytes to samples
-
-                start_point = fstart_ * (f_size(&fptr_read) - sizeof(WAV_FormatTypeDef));
-                start_point -= (start_point % 4);
-                start_point /= 4; // convert bytes to samples
-            }
-            
-            bool ret = false;
-
-            // we're smashing the end point into the play head region, which can cause clicks
-            if(!reverse_ && !using_ram &&
-                f_tell(&fptr_read) + kMaxFileStreamingSamps > new_end_point)
-            {
-                // do nothing
-            }
-            else if(new_end_point - start_point < kMinLoopLen || start_point >= new_end_point) // loop would be too short
-            {
-                // do nothing
-            }
-            else
-            {
-                fend_ = val;
-                ret = true;
-            }
-
-            return ret;
+            return true;
         }
 
         inline uint32_t GetEndPoint() 

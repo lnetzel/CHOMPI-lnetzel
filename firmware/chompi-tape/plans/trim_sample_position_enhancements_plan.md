@@ -1,6 +1,7 @@
-# Reliable TAPE Preset Trimming
+# Reliable TAPE Start and End Sample Position Trimming for a Preset
 
-Status: planned, not implemented.
+Status: implemented 2026-10-07. Build and host-side validation checks pass;
+hardware validation pending per [trim_controls_checklist.md](trim_controls_checklist.md).
 
 Correct the byte/frame mismatch in `FileSampleReader`, make preset trim changes
 atomic across their target voices, and keep the UI and saved preset synchronized
