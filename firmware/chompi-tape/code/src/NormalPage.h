@@ -983,32 +983,16 @@ namespace chompi
                 }  
             }
 
-            // don't allow end point too close to start point
-            // TODO: set here, if they don't update, don't update
             if(page == 0 && (encoderID == 1 || encoderID == 2))
             {
-                if ((enc_values[0][1] + .01f) >= enc_values[0][2])
+                const bool accepted = encoderID == 1
+                                          ? fx_->SetStartPoint(enc_values[0][1])
+                                          : fx_->SetEndPoint(enc_values[0][2]);
+                if(!accepted)
                 {
                     enc_values[page][encoderID] = old_val;
-                    // enc_values[0][2] = enc_values[0][1] + .01f;
+                    update_presets = false;
                 }
-                else if(encoderID == 1)
-                {
-                    if(!fx_->SetStartPoint(enc_values[0][1]) && turns > 0)
-                    {
-                        update_presets = false;
-                        enc_values[page][encoderID] = old_val;
-                    }
-                }
-                else if(encoderID == 2)
-                {
-                    if(!fx_->SetEndPoint(enc_values[0][2]) && turns < 0)
-                    {
-                        update_presets = false;
-                        enc_values[page][encoderID] = old_val;                        
-                    }
-                }
-
             }
 
             if (stepsPerRevolution == 0) {
