@@ -36,6 +36,9 @@ checked via static_asserts in `code/tests`. On-device checks per
 - Looper Playback Volume - Added a third page to the GAIN encoder to adjust the looper playback volume
 - Trimmed Paste to Looper - When pasting or append-pasting a preset to the looper only the section between start and end position is included.  
 
+## NEW in v2.0-lnetzel.1
+- Added new feature to append a copy/paste to the end of the looper buffer. Could be seen as pattern chaining in a very basic way.
+
 ### GAIN encoder pages
 
 Short clicks on the GAIN encoder cycle three pages:
