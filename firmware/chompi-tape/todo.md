@@ -6,7 +6,8 @@
 - Remove hardware self-test code to save SRAM - DONE
 - Enhance trimming of sample start and end position - DONE 
 - Implement undo for last recorded overdub
-- Enhance midi CC implementation 
+- Enhance midi CC implementation
+- Enhance trimming of sample start and end position. Smaller jumps below 500 ms.
 
 
 
