@@ -42,6 +42,7 @@ changes or build/hardware verification were performed while preparing the plan.
   entry.
 - A successful undo consumes history. No redo, multilevel history, undo of the
   initial recording, or undo of paste, append, or clear.
+- Do not touch the existing copy paste behavior where Normal paste (selecting paste destination with Play key) replaces looper buffer and Append-Paste (selecting paste destination with Overdub key) is unaffected by this undo feature. UI cannot be altered and no distortion of audio is allowed in any copy/paste behavior. Not pasting to looper or another preset. 
 
 ## Architecture
 

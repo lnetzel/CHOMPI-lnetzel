@@ -1,7 +1,17 @@
-# CHOMPI — TAPE v2.0-lnetzel.3 Firmware for Multi-Firmware Launcher
+# CHOMPI — TAPE v2.0-lnetzel.4 Firmware for Multi-Firmware Launcher
 
 Based on upstream origianl 2.0 this is now a modified firmware.
 
+
+## NEW in v2.0-lnetzel.4
+- Undo overdub:
+  - One undo level. An overdub session is everything written from entering
+    overdub until leaving it, including multiple loop revolutions.
+  - How to use it: While holding SHIFT key press the transport wheel. CHOMPI LED will blink red and the two wheel direction LEDs will blink green. You are basically being asked "Are you sure you want to remove last overdub?"
+    CHOMPI press confirms and will remove the last overdub, Transport Wheel press will cancel.
+  - Maximum loop buffer length has been cut in half to implement this so it's now 82.5 seconds (was about 165 seconds).
+  - There is no redo, once undone, it's gone.
+  - You cannot undo an append-paste to looper, that's not the same as an overdub session. 
 
 ## NEW in v2.0-lnetzel.3
 - Reliable preset start/end trimming down to 5 ms range:
@@ -81,9 +91,9 @@ tape-style looper, delay and reverb, and MIDI in and out over TRS and USB.
 Toolchain: GNU Arm Embedded 10.3-2021.10. Newer compilers overflow the firmware's SRAM region
 and fail at the link step.
 
-Warning: This firmware is close to capacity. With the trim-reliability changes
-(2026-10-07 build), measured headroom is 2,728 bytes in SRAM_EXEC (98.87% used)
-and 3,252 bytes in SRAM (98.85% used). Any additional tweaks or features will
+Warning: This firmware is close to capacity. With the undo-overdub changes
+(2026-10-08 build), measured headroom is 1,200 bytes in SRAM_EXEC (99.50% used)
+and 3,184 bytes in SRAM (98.87% used). Any additional tweaks or features will
 very likely require sacrificing something to free up the necessary code space.
 
 ## Repository layout

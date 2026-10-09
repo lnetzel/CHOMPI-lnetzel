@@ -147,7 +147,9 @@ namespace daisy
             RamBufferMemory* chompi_buff,
             bool latch,
             bool tape_slew,
-            MonitorMode mon_mode)
+            MonitorMode mon_mode,
+            int16_t* undo_audio = nullptr,
+            uint32_t* undo_tags = nullptr)
         {
             voice_mode = VoiceMode::JAMMI;
             latest_voice = 0;
@@ -214,7 +216,7 @@ namespace daisy
             SetVoiceSlot(15, true);
 
             /* looper */
-            looper.Init(samplerate, loop_buff, tape_slew);
+            looper.Init(samplerate, loop_buff, tape_slew, undo_audio, undo_tags);
 
             /** Final output compressors */
             lim_hp_l_.Init();
@@ -410,6 +412,13 @@ namespace daisy
             // then copy to out[2] and out[3] at the end (and apply gain settings)
             std::fill(out[0], out[0] + size, 0.f);
             std::fill(out[1], out[1] + size, 0.f);
+
+            // apply foreground undo-invalidation requests at a block boundary
+            if(undo_invalidate_req_)
+            {
+                looper.InvalidateUndo();
+                undo_invalidate_req_ = false;
+            }
 
             /** TODO: debug why this is happening */
             if(record != true && record != false)
@@ -1305,6 +1314,37 @@ namespace daisy
 
         inline void LooperOpenFile() { looper.OpenFile(); }
 
+        // ====================  last-overdub undo facade  ====================
+
+        /** History available, no undo in flight, no overlapping sample
+         *  recording, no pending invalidation. */
+        inline bool CanUndoLastOverdub()
+        {
+            return looper.CanUndoLastOverdub() && !Recording()
+                && !undo_invalidate_req_;
+        }
+
+        /** Generation of the available history; pass to RequestUndoLastOverdub. */
+        inline uint32_t GetUndoGeneration() { return looper.GetUndoAvailableGeneration(); }
+
+        /** Post an undo request; audio validates the generation at a block boundary. */
+        inline void RequestUndoLastOverdub(uint32_t generation) { looper.RequestUndo(generation); }
+
+        /** True while an undo is fading, restoring, or has a request/commit in flight. */
+        inline bool UndoBusy() { return looper.UndoBusy(); }
+
+        /** UI-side modal lock for looper controls during confirmation. */
+        inline void SetUndoUiLock(bool locked) { undo_ui_lock_ = locked; }
+        inline bool GetLooperControlsLocked() { return undo_ui_lock_ || looper.UndoBusy(); }
+
+        /** Foreground: request history invalidation (e.g. copier writes).
+         *  Audio applies it at the next block boundary. */
+        inline void InvalidateLooperUndo() { undo_invalidate_req_ = true; }
+        inline bool LooperUndoInvalidatePending() { return undo_invalidate_req_; }
+
+        /** Foreground (main loop): bounded restore chunks + tag maintenance. */
+        inline void ServiceUndoRestore() { looper.ServiceUndoRestore(); }
+
         inline int GetBank() { return bank[int(voice_mode)];}
         inline size_t GetVoiceBank() 
         {
@@ -1626,6 +1666,10 @@ namespace daisy
         
         bool fx_pre_loop;
         float fx_env_, fx_env_target_;
+
+        /** last-overdub undo cross-thread state */
+        volatile bool undo_invalidate_req_ = false;
+        bool undo_ui_lock_ = false;
 
         int bank[int(VoiceMode::LAST)];
 

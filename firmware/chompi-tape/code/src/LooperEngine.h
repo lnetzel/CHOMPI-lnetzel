@@ -18,15 +18,21 @@ namespace daisy
         LooperEngine() {}
         ~LooperEngine() {}
 
-        void Init(float sr, RamBufferMemory* loop_buff, bool tape_slew)
+        void Init(float sr, RamBufferMemory* loop_buff, bool tape_slew,
+                  int16_t* undo_audio = nullptr, uint32_t* undo_tags = nullptr)
         {
-            looper.Init(sr, loop_buff, tape_slew);
+            looper.Init(sr, loop_buff, tape_slew, undo_audio, undo_tags);
 
             record = false;
             first_record = true;
             record_target = false;
             record_arm = false;
             playing = false;
+
+            undo_request_pending_ = false;
+            undo_commit_requested_ = false;
+            undo_request_generation_ = 0;
+            undo_fade_ = 1.f;
 
             char name_buffer[32];
             sprintf(name_buffer, "TAPE/looper.wav");
@@ -46,6 +52,8 @@ namespace daisy
 
         void Process(float* out_l, float* out_r, size_t size)
         {
+            ServiceUndoRequests(); // block-boundary undo request/commit
+
             if(IsFirstRecording() && !IsRecording() && !looper.IsResetting())
                 return;
 
@@ -53,6 +61,9 @@ namespace daisy
 
             if(fx_env_ < .01f)
                 fx_env_target_ = 1.f;
+
+            const bool undo_fading = looper.GetUndoState() == LooperUndoState::FadeOutForUndo;
+            const bool undo_suspended = looper.GetUndoState() == LooperUndoState::RestoreSuspended;
 
             for(size_t i = 0; i < size; i++)
             {
@@ -64,10 +75,19 @@ namespace daisy
                     int16_t aol = 0;
                     int16_t aor = 0;
 
-                    looper.PopStereoSamps(f2s16(out_l[i] * fx_env_), f2s16(out_r[i] * fx_env_), &aol, &aor, record, playing);
+                    // no loop DSP reads/writes while suspended for restore
+                    if(!undo_suspended)
+                        looper.PopStereoSamps(f2s16(out_l[i] * fx_env_), f2s16(out_r[i] * fx_env_), &aol, &aor, record, playing);
 
-                    out_l[i] += s162f(aol) * fx_env_ * playback_gain_;
-                    out_r[i] += s162f(aor) * fx_env_ * playback_gain_;
+                    float loop_gain = fx_env_ * playback_gain_;
+                    if(undo_fading) // fade only the looper contribution
+                    {
+                        loop_gain *= undo_fade_;
+                        undo_fade_ = undo_fade_ > kUndoFadeDec ? undo_fade_ - kUndoFadeDec : 0.f;
+                    }
+
+                    out_l[i] += s162f(aol) * loop_gain;
+                    out_r[i] += s162f(aor) * loop_gain;
                 }
                 else if(!reset)
                 {
@@ -80,7 +100,100 @@ namespace daisy
                     ToggleRecord(); // play mode
                 }
             }
+
+            if(undo_fading && undo_fade_ <= 0.f)
+                looper.SuspendUndoDsp(); // -> RestoreSuspended
         }
+
+        // ====================  last-overdub undo  ====================
+
+        /** UI/foreground posts an undo request carrying the expected
+         *  generation; validated at the next block boundary.
+         */
+        void RequestUndo(uint32_t generation)
+        {
+            undo_request_generation_ = generation;
+            undo_request_pending_ = true;
+        }
+
+        bool UndoBusy()
+        {
+            const LooperUndoState s = looper.GetUndoState();
+            return undo_request_pending_ || undo_commit_requested_
+                || s == LooperUndoState::FadeOutForUndo
+                || s == LooperUndoState::RestoreSuspended;
+        }
+
+        bool CanUndoLastOverdub()
+        {
+            return looper.GetUndoState() == LooperUndoState::Available
+                && !UndoBusy();
+        }
+
+        inline uint32_t GetUndoAvailableGeneration() { return looper.GetUndoAvailableGeneration(); }
+
+        /** Drop history (clear/load/new base recording paths). */
+        inline void InvalidateUndo() { looper.InvalidateUndo(); }
+
+        /** Foreground: tag-table maintenance + bounded restore chunks. */
+        void ServiceUndoRestore()
+        {
+            looper.ServiceUndoMaintenance();
+
+            if(looper.GetUndoState() == LooperUndoState::RestoreSuspended)
+            {
+                if(!looper.RestoreUndoChunk())
+                    undo_commit_requested_ = true; // commit at next block boundary
+            }
+        }
+
+    private:
+        /** Accept a valid undo request / commit a finished restore,
+         *  only at audio block boundaries.
+         */
+        void ServiceUndoRequests()
+        {
+            if(undo_request_pending_)
+            {
+                undo_request_pending_ = false;
+
+                if(undo_request_generation_ == looper.GetUndoAvailableGeneration()
+                   && looper.GetUndoState() == LooperUndoState::Available)
+                {
+                    // clear record/play targets and arms, then fade the
+                    // looper contribution down before suspending loop DSP
+                    record = false;
+                    record_target = false;
+                    play_target = false;
+                    record_arm = false;
+
+                    undo_fade_ = 1.f;
+                    looper.BeginUndoFadeOut();
+                }
+                // stale/invalid generations are rejected silently
+            }
+
+            if(undo_commit_requested_)
+            {
+                undo_commit_requested_ = false;
+
+                if(looper.GetUndoState() == LooperUndoState::RestoreSuspended)
+                {
+                    looper.ResetAfterRestore();
+
+                    record = false;
+                    record_target = false;
+                    play_target = false;
+                    record_arm = false;
+                    playing = false;
+                    // first_record stays false; pitch/direction/feedback/
+                    // playback volume preserved by ResetAfterRestore
+                    undo_fade_ = 1.f;
+                }
+            }
+        }
+
+    public:
 
         inline bool IsPlaying() { return playing && !first_record; }
         inline bool IsFirstRecording() { return first_record; }
@@ -128,7 +241,14 @@ namespace daisy
                 looper.ReadyToRecord();
 
                 if(IsFirstRecording())
+                {
+                    looper.InvalidateUndo(); // new base recording drops history
                     looper.ResetRamBuff();
+                }
+                else
+                {
+                    looper.BeginUndoSession(); // genuine overdub start
+                }
             }
 
             if(play_target)
@@ -196,6 +316,12 @@ namespace daisy
                 {
                     record_target = record = false;
                 }
+                else
+                {
+                    // automatic transition from initial recording into overdub:
+                    // establish the undo session before its first destructive write
+                    looper.BeginUndoSession();
+                }
 
                 if(first_record) // reload, then overdub
                 {
@@ -255,6 +381,7 @@ namespace daisy
 
         void Reset()
         {
+            looper.InvalidateUndo(); // clear drops history
             looper.Reset();
             reset = true;
 
@@ -267,6 +394,8 @@ namespace daisy
 
         void OpenFile()
         {
+            looper.InvalidateUndo(); // load replaces loop audio
+
             first_record = false;
             playing = false;
             record = false;
@@ -291,5 +420,12 @@ namespace daisy
 
         float fx_env_, fx_env_target_;
         float playback_gain_, playback_gain_target_;
+
+        /** last-overdub undo request/commit state */
+        volatile bool undo_request_pending_;
+        volatile bool undo_commit_requested_;
+        uint32_t undo_request_generation_;
+        float undo_fade_;
+        const float kUndoFadeDec = .0005f; // ~42 ms fade at 48 kHz
     };
 }

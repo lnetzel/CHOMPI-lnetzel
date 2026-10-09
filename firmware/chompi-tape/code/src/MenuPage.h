@@ -22,6 +22,19 @@ namespace chompi
             LAST,
         };
 
+        /** Last-overdub undo confirmation, separate from preset selection.
+         *  Opened by a shifted wheel click. Button events are edge-triggered,
+         *  so the opening CHOMPI hold (no new rising edge) and the opening
+         *  wheel click (consumed by the open itself) can never count as
+         *  Yes/Cancel — only fresh presses register.
+         */
+        enum class UndoConfirmState : uint8_t
+        {
+            Inactive = 0,
+            AwaitingDecision,    // fresh CHOMPI = confirm, fresh wheel = cancel
+            Applying,            // fade + restore in flight
+        };
+
 
         void Init(Hardware *hw, Engine *fx, FileCopier *copier, float** enc_arr, const float** def_arr,
             uint8_t* page, PresetManager* pre, bool ps_quant, bool split_delay)
@@ -57,6 +70,35 @@ namespace chompi
             fx_->SetWarble(warble);
 
             ss_bank = fx_->GetBank();
+
+            undo_confirm_ = UndoConfirmState::Inactive;
+        }
+
+        void CancelUndoConfirm()
+        {
+            undo_confirm_ = UndoConfirmState::Inactive;
+            fx_->SetUndoUiLock(false);
+        }
+
+        /** Completion / staleness polling. Safe to call from any context
+         *  that runs regularly (Draw, SetSwitchState).
+         */
+        void PollUndoConfirm()
+        {
+            if(undo_confirm_ == UndoConfirmState::Inactive)
+                return;
+
+            if(undo_confirm_ == UndoConfirmState::Applying)
+            {
+                // restore committed (or a stale request was rejected)
+                if(!fx_->UndoBusy())
+                    CancelUndoConfirm();
+            }
+            else if(!fx_->CanUndoLastOverdub())
+            {
+                // history invalidated or went stale while pending
+                CancelUndoConfirm();
+            }
         }
 
         void Draw(const daisy::UiCanvasDescriptor &canvasDescriptor) override
@@ -70,6 +112,8 @@ namespace chompi
                 blink_state = !blink_state;
                 last_blink = now;
             }
+
+            PollUndoConfirm();
 
             // chompi key
             if (chompi_key_pressed && preset_mode == PresetMode::NONE)
@@ -401,6 +445,17 @@ namespace chompi
             else
                 SetSmtLedFloat(mode, 0.f, 0.f, 0.f);
 
+            // undo confirmation takes priority over normal shift/pitch
+            // indicators: CHOMPI PTH 0 blinks red, wheel direction PTH 5/6
+            // blink green in phase (250 ms on / 250 ms off)
+            if(undo_confirm_ != UndoConfirmState::Inactive)
+            {
+                SetPthLedFloat(0, blink_state ? 1.f : 0.f, 0.f, 0.f);
+                const float wb = blink_state ? 1.f : 0.f;
+                SetPthLedFloat(5, 0.f, wb, 0.f);
+                SetPthLedFloat(6, 0.f, wb, 0.f);
+            }
+
             // ========   send the data   =========
             fill_led_data();
         }
@@ -630,6 +685,41 @@ namespace chompi
                 return true;
 
             bool rising = numberOfPresses == 1;
+
+            // Modal undo confirmation: CHOMPI + wheel are owned by the prompt;
+            // looper transport and operation-selection buttons are consumed;
+            // musical notes and non-looper controls keep working.
+            if(undo_confirm_ != UndoConfirmState::Inactive)
+            {
+                if(buttonID == static_cast<uint16_t>(Hardware::SwId::KEY_26))
+                {
+                    chompi_key_pressed = rising; // coherent held-state bookkeeping
+
+                    if(undo_confirm_ == UndoConfirmState::AwaitingDecision && rising)
+                    {
+                        fx_->RequestUndoLastOverdub(fx_->GetUndoGeneration());
+                        undo_confirm_ = UndoConfirmState::Applying;
+                    }
+                    return true;
+                }
+
+                if(buttonID == ENC_5_SW)
+                {
+                    // fresh wheel press cancels; every wheel edge is consumed
+                    if(undo_confirm_ == UndoConfirmState::AwaitingDecision && rising)
+                        CancelUndoConfirm();
+                    return true;
+                }
+
+                // consume operation-selection and looper transport buttons
+                if(buttonID == static_cast<uint16_t>(Hardware::SwId::KEY_23) // erase
+                   || buttonID == static_cast<uint16_t>(Hardware::SwId::KEY_24) // copy
+                   || buttonID == static_cast<uint16_t>(Hardware::SwId::KEY_25) // save
+                   || buttonID == static_cast<uint16_t>(Hardware::SwId::KEY_27) // play
+                   || buttonID == static_cast<uint16_t>(Hardware::SwId::KEY_28)) // loop
+                    return true;
+            }
+
             switch (buttonID)
             {
             // NO CONNECT, SKIP THESE
@@ -669,9 +759,22 @@ namespace chompi
             break;
             }
 
-            // reset the looper pitch via fall through
+            // shifted wheel click: undo confirm, or consume
             case ENC_5_SW:
-                return false;
+            {
+                // Open only with valid completed undo history; never hijack an
+                // active save/copy/erase selection or copy operation. With no
+                // valid undo the click is consumed without changing audio or pitch.
+                if(rising
+                   && preset_mode == PresetMode::NONE
+                   && !copier_->IsCopying()
+                   && fx_->CanUndoLastOverdub())
+                {
+                    undo_confirm_ = UndoConfirmState::AwaitingDecision;
+                    fx_->SetUndoUiLock(true);
+                }
+                return true;
+            }
 
             case static_cast<uint16_t>(Hardware::SwId::ENC_1_SW): // attack knob
                 if(rising)
@@ -981,6 +1084,11 @@ namespace chompi
 
             // white keys and play/pause
             default:
+                // while the undo prompt is modal, route notes to NormalPage
+                // (press and release) without preset selection
+                if(undo_confirm_ != UndoConfirmState::Inactive)
+                    return false;
+
                 // play pause, overdub gain setting
                 if((buttonID == 33 || buttonID == 34) && preset_mode == PresetMode::NONE)
                 {
@@ -1092,7 +1200,19 @@ namespace chompi
             preset_mode = PresetMode::NONE;
         }
 
-        inline void SetSwitchState(bool state) { switch_state = state; }
+        inline void SetSwitchState(bool state)
+        {
+            // leaving the shift/menu context cancels a pending prompt
+            // without changing audio; a confirmed (Applying) undo is never
+            // interrupted by toggle changes
+            if(!state
+               && undo_confirm_ != UndoConfirmState::Inactive
+               && undo_confirm_ != UndoConfirmState::Applying)
+                CancelUndoConfirm();
+
+            switch_state = state;
+            PollUndoConfirm();
+        }
 
         bool IsClosable()
         { 
@@ -1101,7 +1221,8 @@ namespace chompi
                 && ((preset_mode == PresetMode::SAVING && !copier_->IsCopying())    // (finished saving OR
                 || (preset_mode == PresetMode::COPYING && !copier_->IsCopying())    // finished copying OR
                 || (preset_mode == PresetMode::ERASING && !fx_->IsErasing())        // finished erasing OR
-                || (preset_mode == PresetMode::NONE && !chompi_key_pressed)         // did nothing OR
+                || (preset_mode == PresetMode::NONE && !chompi_key_pressed          // did nothing OR
+                    && undo_confirm_ == UndoConfirmState::Inactive)                 // (and no pending undo prompt)
                 || (preset_mode != PresetMode::COPYING  && preset_mode != PresetMode::SAVING 
                     && preset_mode != PresetMode::ERASING && !switch_state)) // NOT working on a copy/save/erase and the mode switch went up)
             )
@@ -1174,5 +1295,6 @@ namespace chompi
         bool switch_state;
 
         PresetMode preset_mode = PresetMode::NONE;
+        UndoConfirmState undo_confirm_ = UndoConfirmState::Inactive;
     };
 } // namespace chompi

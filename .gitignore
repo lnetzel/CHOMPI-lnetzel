@@ -7,6 +7,7 @@ Icon?
 # Editor state
 .cortex-debug.*.state.json
 .vs/
+.vscode/settings.json
 
 # Firmware build output
 firmware/chompi-usb-storage/code/src/build/
