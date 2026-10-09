@@ -7,7 +7,7 @@ Based on upstream origianl 2.0 this is now a modified firmware.
 - Undo overdub:
   - One undo level. An overdub session is everything written from entering
     overdub until leaving it, including multiple loop revolutions.
-  - How to use it: While holding SHIFT key press the transport wheel. CHOMPI LED will blinks red and the two wheel direction LEDs will blink green. You are basically being asked "Are you sure you want to remove last overdub?"
+  - How to use it: While holding SHIFT key press the transport wheel. CHOMPI LED will blink red and the two wheel direction LEDs will blink green. You are basically being asked "Are you sure you want to remove last overdub?"
     CHOMPI press confirms and will remove the last overdub, Transport Wheel press will cancel.
   - Maximum loop buffer length has been cut in half to implement this so it's now 82.5 seconds (was about 165 seconds).
   - There is no redo, once undone, it's gone.

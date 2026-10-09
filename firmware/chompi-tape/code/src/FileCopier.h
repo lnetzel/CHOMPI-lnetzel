@@ -64,6 +64,23 @@ class FileCopier
             if(!copying_)
                 return false;
 
+            // Never mutate the loop during a confirmed undo; await the
+            // invalidation ack before the first source read so no chunk is lost.
+            if(is_looper_ram == CopyRequest::RamDir::TO && !looper_undo_ready_)
+            {
+                if(fx_->UndoBusy())
+                    return true;
+                if(!looper_undo_invalidate_sent_)
+                {
+                    fx_->InvalidateLooperUndo();
+                    looper_undo_invalidate_sent_ = true;
+                    return true;
+                }
+                if(fx_->LooperUndoInvalidatePending())
+                    return true;
+                looper_undo_ready_ = true;
+            }
+
 
             if(!CopySizeFull() && !IsEOF())
             {
@@ -97,24 +114,6 @@ class FileCopier
                 }
                 else if(is_looper_ram == CopyRequest::RamDir::TO)
                 {
-                    // Never mutate the loop during a confirmed undo; before
-                    // the first mutation, request history invalidation and
-                    // await the audio-side block-boundary acknowledgment.
-                    if(!looper_undo_ready_)
-                    {
-                        if(fx_->UndoBusy())
-                            return true;
-                        if(!looper_undo_invalidate_sent_)
-                        {
-                            fx_->InvalidateLooperUndo();
-                            looper_undo_invalidate_sent_ = true;
-                            return true;
-                        }
-                        if(fx_->LooperUndoInvalidatePending())
-                            return true;
-                        looper_undo_ready_ = true;
-                    }
-
                     if(!append_xfade_done)
                     {
                         ApplyAppendCrossfade((int16_t*)buff, read_num / 2);
