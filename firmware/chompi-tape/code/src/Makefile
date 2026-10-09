@@ -1,5 +1,5 @@
 # Project Name
-TARGET = CHOMPI_TAPE_2.0-lnetzel.3
+TARGET = TAPE-lnetzel-1.0
 
 DEBUG=0
 # OPT=-O0
