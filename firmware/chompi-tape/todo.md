@@ -5,7 +5,8 @@
 - Copy/Paste to Looper will consider start/end position of preset (no need for UI) - DONE
 - Remove hardware self-test code to save SRAM - DONE
 - Enhance trimming of sample start and end position - DONE 
-- Implement undo for last recorded overdub
+- Implement undo for last recorded overdub -DONE
+- Add sample rate reduction to fx pg.4
 - Enhance midi CC implementation
 - Enhance trimming of sample start and end position. Smaller jumps below 500 ms.
 

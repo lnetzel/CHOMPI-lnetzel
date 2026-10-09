@@ -15,6 +15,10 @@
         "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make clean >/dev/null && make -j4 2>&1 \\| tail -15; echo EXIT=\\$\\{PIPESTATUS\\[0\\]\\}; ls -l build/\\*\\.bin'$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-usb-storage/code/src && make clean >/dev/null && make -j4 > /tmp/usbstor_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/usbstor_build\\.log; tail -n 12 /tmp/usbstor_build\\.log; ls -l build/\\*\\.bin'$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }
