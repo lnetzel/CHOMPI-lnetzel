@@ -723,6 +723,9 @@ bool UsbMscBusIdle()
     return eject_seen || usb_device.dev_state == USBD_STATE_SUSPENDED;
 }
 
+/** The host ejected the drive (START STOP UNIT, LoEj set, Start clear). */
+bool UsbMscEjected() { return eject_seen; }
+
 void UsbMscStop() { USBD_Stop(&usb_device); }
 
 void UsbMscProcess()

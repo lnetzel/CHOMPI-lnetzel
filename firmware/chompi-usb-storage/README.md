@@ -21,7 +21,8 @@ Verified on Windows. macOS uses the same standard class driver but has not been 
    bootloader installing it.
 2. Wait for the LEDs to turn **green**, then connect the USB-C port to the computer.
 3. The card appears as a drive named `CHOMPI-SD`.
-4. **Eject** the drive in the operating system before unplugging the cable.
+4. **Eject** the drive in the operating system before unplugging the cable. CHOMPI then
+   restarts (see [Restarting](#restarting)).
 
 ## Disk usage bar
 
@@ -45,6 +46,12 @@ Press the blinking overdub key again to cancel; nothing changes.
 
 The overdub key glows red in every LED status — even on an SD or USB error — so the device
 can always be restarted without power cycling.
+
+**Ejecting** the drive on the computer restarts CHOMPI the same way, a quarter of a second
+later. With the [Multi-Firmware Launcher](https://github.com/sfaber02/CHOMPI/releases), that
+brings the picker back without touching CHOMPI, so a script can copy files and return to an
+instrument firmware on its own (on Linux: `eject /dev/sdX`). Only a real eject does this;
+unmounting alone leaves the drive attached.
 
 To return to the instrument, put another firmware's `.bin` on the card, eject, and restart.
 

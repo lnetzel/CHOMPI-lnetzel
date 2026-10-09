@@ -18,4 +18,5 @@ void UsbMscProcess();
 uint32_t UsbMscTraceCount();
 bool UsbMscFormatTrace(uint32_t seq, char* line, size_t size);
 bool UsbMscBusIdle();
+bool UsbMscEjected();
 void UsbMscStop();
