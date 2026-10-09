@@ -33,6 +33,9 @@ constexpr size_t kChompiKeyLed  = 0;
 constexpr size_t kOverdubKeyLed = 8;
 
 constexpr uint32_t kBlinkPeriodMs = 300; /**< overdub "are you sure?" blink */
+/** After the host ejects the drive, keep serving USB this long (its status
+ *  reply, anything the host still sends) before restarting. */
+constexpr uint32_t kEjectRestartMs = 250;
 constexpr uint32_t kFadeMs        = 400; /**< green -> white fade on shutdown */
 
 /** Disk-usage bar on the 15-key lower row (KEY_1..KEY_15, SMT LEDs 24..10,
@@ -318,9 +321,22 @@ int main()
     uint32_t   last_blink  = 0;
     uint32_t   last_bar    = 0;
     bool       blink_on    = false;
+    uint32_t   ejected_at  = 0;
+    bool       ejected     = false;
     while(1)
     {
         UsbMscProcess();
+
+        /* Ejecting the drive restarts CHOMPI, as the overdub key does, so
+         * a computer can hand it back to the launcher with no one at the
+         * panel. */
+        if(!ejected && UsbMscEjected())
+        {
+            ejected    = true;
+            ejected_at = System::GetNow();
+        }
+        if(ejected && System::GetNow() - ejected_at >= kEjectRestartMs)
+            ShutdownAndReset(usb_ready);
 
         /* Scan the keys at ~1 kHz so USB transfers keep full speed. */
         const uint32_t now = System::GetNow();
