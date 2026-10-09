@@ -12,10 +12,11 @@
 namespace chompi
 {
 
-    static const float enc_defaults[3][6] = {
+    static const float enc_defaults[4][6] = {
         {.83f, 0.f, 1.f, 0.f, .75f, .84f}, // page 1
         {.704f, 0.f, 0.f, 0.f, 0.f, .75f},   // page 2
         {0.f, 0.f, 0.f, .5f, 0.f, 1.f},   // page 3
+        {0.f, 0.f, 0.f, 0.f, 0.f, 0.f},   // page 4
     };
 
     static const uint8_t midi2key[49] = {
@@ -491,10 +492,10 @@ namespace chompi
         uint8_t midi_in_ch;
 
         // this way both UI pages can interact with it
-        float enc_values[3][6];
-        float* enc_rows[3] = {enc_values[0], enc_values[1], enc_values[2]};
+        float enc_values[4][6];
+        float* enc_rows[4] = {enc_values[0], enc_values[1], enc_values[2], enc_values[3]};
 
-        const float* def_rows[3] = {enc_defaults[0], enc_defaults[1], enc_defaults[2]};
+        const float* def_rows[4] = {enc_defaults[0], enc_defaults[1], enc_defaults[2], enc_defaults[3]};
 
         uint8_t knob_page[6] = {0, 0, 0, 0, 0, 0};
 

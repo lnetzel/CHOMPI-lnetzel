@@ -1,6 +1,6 @@
 # Project Name
 
-TARGET = TAPE-lnetzel-1.1
+TARGET = TAPE-lnetzel-1.2
 
 DEBUG=0
 # OPT=-O0

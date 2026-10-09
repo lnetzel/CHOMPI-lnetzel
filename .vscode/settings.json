@@ -19,6 +19,18 @@
         "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-usb-storage/code/src && make clean >/dev/null && make -j4 > /tmp/usbstor_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/usbstor_build\\.log; tail -n 12 /tmp/usbstor_build\\.log; ls -l build/\\*\\.bin'$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make -j4 > /tmp/tape_srr_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/tape_srr_build\\.log'; Get-Content C:\\\\msys64\\\\tmp\\\\tape_srr_build\\.log -Tail 30$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && \\{ tail -c 1500 /tmp/tape_srr_build\\.log; /c/armgnu/10\\.3-2021\\.10/bin/arm-none-eabi-size -A build/TAPE-lnetzel-1\\.1\\.elf build/TAPE-lnetzel-1\\.2\\.elf \\| grep -E \"elf\\|\\^\\\\\\.text\\|\\^\\\\\\.data\\|\\^\\\\\\.bss\\|\\^\\\\\\.itcm\\|\\^\\\\\\.dtcm\\|Total\"; ls -l build/\\*\\.bin; \\} > /tmp/srr_summary\\.txt 2>&1'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make -j4 > /tmp/tape_srr_build2\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/tape_srr_build2\\.log; grep -E \"error\\|SRAM\\|EXIT\" /tmp/tape_srr_build2\\.log > /tmp/srr2_summary\\.txt; ls -l build/TAPE-lnetzel-1\\.2\\.bin >> /tmp/srr2_summary\\.txt'$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

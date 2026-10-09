@@ -243,9 +243,13 @@ namespace chompi
                 {
                     SetPthLedFloat(4, warble, warble, warble);
                 }
-                else // filter
+                else if(knob_page[3] == 2) // filter
                 {
                     SetPthLedFloat(4, resonance, resonance, resonance);
+                }
+                else // sample rate reducer has no shift param
+                {
+                    SetPthLedFloat(4, 0.f, 0.f, 0.f);
                 }
 
                 if(input_toggled)
@@ -812,11 +816,13 @@ namespace chompi
                     enc_values[0][3] = enc_defaults[0][3];
                     enc_values[1][3] = enc_defaults[1][3];
                     enc_values[2][3] = enc_defaults[2][3];
+                    enc_values[3][3] = enc_defaults[3][3];
 
                     fx_->SetReverb(enc_values[0][3]);
                     fx_->SetDelayFeedback(enc_values[0][3]);
                     fx_->SetSaturate(enc_values[1][3]);
                     fx_->SetFilter(enc_values[2][3]);
+                    fx_->SetSampleReducer(enc_values[3][3]);
 
                     delay_time = .5f;
                     resonance = 0.f;

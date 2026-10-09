@@ -181,6 +181,10 @@ namespace daisy
             cutoff_target_ = .5f;
             res_ = res_target_ = 0.f;
 
+            rd_l_.Init();
+            rd_r_.Init();
+            reduce_ = false;
+
             SetSaturate(0.f);
 
             mgain_ = mgain_target_ = .8f;
@@ -273,6 +277,18 @@ namespace daisy
         {
             for(size_t i = 0; i < size; i++)
             {
+                // processed even when bypassed to keep reducer state continuous (as in Tempo)
+                if(reduce_)
+                {
+                    outl[i] = rd_l_.Process(outl[i]);
+                    outr[i] = rd_r_.Process(outr[i]);
+                }
+                else
+                {
+                    rd_l_.Process(outl[i]);
+                    rd_r_.Process(outr[i]);
+                }
+
                 // slew controls at audio rate
                 fonepole(cutoff_, cutoff_target_, .001f);
                 fonepole(res_, res_target_, .001f);
@@ -1186,6 +1202,23 @@ namespace daisy
 
         inline void SetFilter(float val) { cutoff_target_ = val; }
         inline void SetFilterResonance(float val) { res_target_ = val; }
+
+        // Tempo mapping, but top rate raised from 0.45 (21.6 kHz) to 2/3 (32 kHz at 48 kHz)
+        void SetSampleReducer(float amount)
+        {
+            if(amount > 0.f)
+            {
+                amount = (1.0f - amount) * (2.f / 3.f);
+                amount = fclamp(amount, .01f, 1.f);
+                rd_l_.SetFreq(amount);
+                rd_r_.SetFreq(amount);
+                reduce_ = true;
+            }
+            else
+            {
+                reduce_ = false;
+            }
+        }
         inline void SetSaturate(float val) 
         { 
             val = logf(1.7f * val + 1.f); 
@@ -1652,6 +1685,8 @@ namespace daisy
         daisysp::DcBlock dcblock_line_in_r_;
         daisysp::DcBlock dcblock_fx_l_;
         daisysp::DcBlock dcblock_fx_r_;
+        daisysp::SampleRateReducer rd_l_, rd_r_;
+        bool reduce_;
 
         size_t latest_voice;
 

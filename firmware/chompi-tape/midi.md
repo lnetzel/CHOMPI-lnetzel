@@ -21,7 +21,7 @@ These set the value of the knob at that position, controlling whichever function
 | 20 | 0–127 | SPEED knob (absolute 0.0–1.0). Page 1: speed / global pitch. Page 2: sample gain. |
 | 21 | 0–127 | START knob (absolute 0.0–1.0). Page 1: sample start point. Page 2: envelope attack. |
 | 22 | 0–127 | END knob (absolute 0.0–1.0). Page 1: sample end point. Page 2: envelope decay. |
-| 23 | 0–127 | MAGIC knob (absolute 0.0–1.0). Page 1: reverb/delay. Page 2: lofi (saturate). Page 3: filter. |
+| 23 | 0–127 | MAGIC knob (absolute 0.0–1.0). Page 1: reverb/delay. Page 2: lofi (saturate). Page 3: filter. Page 4: sample rate reduction. |
 | 24 | 0–127 | TRANSPORT knob: looper pitch. **Ignored entirely if the looper is not playing.** |
 | 25 | 0–127 | GAIN knob (absolute 0.0–1.0). Page 1: master gain. Page 2: input gain. Page 3: looper playback volume. |
 
@@ -68,6 +68,7 @@ Physical encoder turns send `value * 127` on the CC assigned to the knob's **cur
 | Reverb / delay | MAGIC | 1 | 23 | 0–127 absolute |
 | Lofi (saturate) | MAGIC | 2 | 31 | 0–127 absolute |
 | Filter | MAGIC | 3 | 33 | 0–127 absolute |
+| Sample rate reduction | MAGIC | 4 | 34 | 0–127 absolute |
 | Looper pitch | TRANSPORT | 1 | 24 | 0–127 absolute |
 | Master gain | GAIN | 1 | 25 | 0–127 absolute |
 | Input gain | GAIN | 2 | 32 | 0–127 absolute |

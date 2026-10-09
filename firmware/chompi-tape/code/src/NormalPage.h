@@ -7,10 +7,11 @@
 
 namespace chompi
 {
-        static const uint8_t cc_map[3][6] = {
+        static const uint8_t cc_map[4][6] = {
             {20, 21, 22, 23, 24, 25},
             {28, 29, 30, 31, 0, 32},
-            {0, 0, 0, 33, 0, 0}};
+            {0, 0, 0, 33, 0, 0},
+            {0, 0, 0, 34, 0, 0}};
 
         static const uint8_t key_map[40] = {
             0x01, /**< ENC_1_SW  page */
@@ -119,7 +120,7 @@ namespace chompi
     static const float dark_orange[3] = {.77f, .38f, .06f};
     static const float yellow_green[3] = {.706f, 1.f, 0.f};
 
-    static const uint8_t knob_num_pages[6] = {2, 2, 2, 3, 1, 3};
+    static const uint8_t knob_num_pages[6] = {2, 2, 2, 4, 1, 3};
 
     class NormalPage : public daisy::UiPage
     {
@@ -145,7 +146,7 @@ namespace chompi
 
             for (int knob = 0; knob < 6; knob++)
             {
-                for (int page = 0; page < 3; page++)
+                for (int page = 0; page < 4; page++)
                 {
                     enc_values[page][knob] = enc_defaults[page][knob];
                 }
@@ -395,12 +396,19 @@ namespace chompi
                         g = color_triple_xfade(yellow[1], orange[1], red[1], value);
                         b = color_triple_xfade(yellow[2], orange[2], red[2], value);
                     }
-                    else // filter
+                    else if (page == 2) // filter
                     {
                         fx_->SetFilter(value);
                         r = color_triple_xfade(purple[0], pink[0], 1.f, value);
                         g = color_triple_xfade(purple[1], pink[1], 1.f, value);
                         b = color_triple_xfade(purple[2], pink[2], 1.f, value);
+                    }
+                    else // sample rate reducer
+                    {
+                        fx_->SetSampleReducer(value);
+                        r = color_xfade(green[0] * .1f, green[0], value);
+                        g = color_xfade(green[1] * .1f, green[1], value);
+                        b = color_xfade(green[2] * .1f, green[2], value);
                     }
 
                     if(!switch_state)
@@ -952,6 +960,11 @@ namespace chompi
                     || (encoderID == 4 && !quantized_pitch_))
                 {
                     inc = turns * kEncoderFineStep;
+                }
+                else if (encoderID == 3 && page == 3)
+                {
+                    // 0.01 per detent (turns arrive x3) = ~320 Hz per click
+                    inc = turns * kEncoderCoarseStep / 3.f;
                 }
 
                 enc_values[page][encoderID] += inc;
