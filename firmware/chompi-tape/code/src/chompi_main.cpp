@@ -28,7 +28,11 @@ daisysp::Reverb DSY_DTCMRAM_BSS reverb;
 chompi::InterpolatedDelayLine::AudioSample DSY_SDRAM_BSS del_mem[kMaxDelayTime];
 
 RamBufferMemory loop_buff;
-int16_t DSY_SDRAM_BSS loop_mem[kMaxRamBuffSize]; 
+int16_t DSY_SDRAM_BSS loop_mem[kMaxLooperRamBuffSize]; // live loop half (15,847,424 B)
+
+// last-overdub undo: snapshot half + per-page generation tags
+int16_t DSY_SDRAM_BSS undo_mem[kMaxLooperRamBuffSize];
+uint32_t DSY_SDRAM_BSS undo_tags[kLooperUndoNumPages];
 
 RamBufferMemory chompi_buff;
 int16_t DSY_SDRAM_BSS chompi_mem[kMaxRamBuffSize]; 
@@ -226,6 +230,9 @@ void MainLoop(void* data)
         uit = now;
     }
 
+    // bounded foreground undo-restore chunks (no-op unless restoring)
+    engine.ServiceUndoRestore();
+
     if (now - pre_startt > 5000)
     {
         ui.TestPresets();
@@ -335,12 +342,13 @@ int main(void)
 
     // meter.Init(hw.seed.AudioSampleRate(), hw.seed.AudioBlockSize());
 
-    loop_buff.Init(&loop_mem[0]);
+    loop_buff.Init(&loop_mem[0], kMaxLooperRamBuffSize);
     chompi_buff.Init(&chompi_mem[0]);
     engine.Init(hw.seed.AudioSampleRate(), &reverb, &del_mem[0], 
                 &loop_buff, &chompi_buff, 
                 options.record_latch, options.tape_slew_on,
-                MonitorMode(options.monitor_position));
+                MonitorMode(options.monitor_position),
+                &undo_mem[0], &undo_tags[0]);
 
     now = daisy::System::GetNow();
     uit = now;

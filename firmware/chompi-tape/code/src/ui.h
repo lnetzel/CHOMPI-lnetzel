@@ -124,6 +124,8 @@ namespace chompi
         bool key_cc[2];
         void ProcessMidi()
         {
+            const bool looper_locked = fx_->GetLooperControlsLocked();
+
             daisy::MidiEvent event;
             while(hw_->GetMidi(event))
             {
@@ -152,7 +154,7 @@ namespace chompi
                         fx_->request_fifo.PushBack(KeyRequest(KeyRequest::Type::START, 
                             key - 36, midi2key[key], event.data[1] + 1));
 
-                        if(fx_->GetLooperRecordArm())
+                        if(fx_->GetLooperRecordArm() && !looper_locked)
                             fx_->ToggleLooperRecord();
                     }
                     break;
@@ -179,7 +181,8 @@ namespace chompi
                         {
                             uint8_t knob = cc - 20;
 
-                            if(knob == 4 && !fx_->IsLooperPlaying())
+                            // looper pitch/scrub wheel locked during undo confirm
+                            if(knob == 4 && (!fx_->IsLooperPlaying() || looper_locked))
                                 break;
 
                             event_queue.AddEncoderTurned(knob, val, 1);
@@ -196,13 +199,22 @@ namespace chompi
                             else if(val < 42)
                                 key_cc[idx] = false;
 
+                            // keep the edge bookkeeping current while locked so
+                            // releases can't leave latched states or replay later
                             if(!last && key_cc[idx]) // rising edge
                             {
-                                event_queue.AddButtonPressed(cc + 7, 1, true);
+                                if(!looper_locked)
+                                {
+                                    event_queue.AddButtonPressed(cc + 7, 1, true);
+                                    key_cc_delivered_[idx] = true;
+                                }
                             }
                             else if(last && !key_cc[idx]) // falling edge
                             {
-                                event_queue.AddButtonReleased(cc + 7);
+                                // pass the release of a press delivered before the lock
+                                if(!looper_locked || key_cc_delivered_[idx])
+                                    event_queue.AddButtonReleased(cc + 7);
+                                key_cc_delivered_[idx] = false;
                             }
                         }
                     }
@@ -240,6 +252,7 @@ namespace chompi
 
 
             toggle_state = hw_->GetToggleState();
+            const bool looper_locked = fx_->GetLooperControlsLocked();
 
             if(menu_page_.IsActive() && menu_page_.IsClosable())
             {
@@ -266,6 +279,18 @@ namespace chompi
                 }
                 else if (hw_->button_sr.FallingEdge(i))
                 {
+                    // looper transport locked during undo confirmation: consume
+                    // presses while locked, but pass the release of any press
+                    // that was delivered before the lock so no state latches
+                    if(i == static_cast<int>(Hardware::SwId::KEY_27)
+                       || i == static_cast<int>(Hardware::SwId::KEY_28))
+                    {
+                        const uint8_t tidx = i == static_cast<int>(Hardware::SwId::KEY_27) ? 0 : 1;
+                        if(looper_locked && !transport_delivered_[tidx])
+                            continue; // press was consumed while locked: swallow release
+                        transport_delivered_[tidx] = false;
+                    }
+
                     // chompi key changes page to MenuPage
                     if (i == static_cast<int>(Hardware::SwId::KEY_26))
                     {
@@ -275,6 +300,16 @@ namespace chompi
                 }
                 else if (hw_->button_sr.RisingEdge(i))
                 {
+                    // looper transport locked during undo confirmation
+                    if(i == static_cast<int>(Hardware::SwId::KEY_27)
+                       || i == static_cast<int>(Hardware::SwId::KEY_28))
+                    {
+                        const uint8_t tidx = i == static_cast<int>(Hardware::SwId::KEY_27) ? 0 : 1;
+                        if(looper_locked)
+                            continue; // consumed; no matching release will be sent
+                        transport_delivered_[tidx] = true;
+                    }
+
                     // chompi key changes page to MenuPage
                     if (i == static_cast<int>(Hardware::SwId::KEY_26)
                         && toggle_state
@@ -290,9 +325,23 @@ namespace chompi
             }
 
             if (hw_->enc[4].FallingEdge())
-                event_queue.AddButtonReleased(ENC_5_SW);
+            {
+                if(wheel_menu_owned_ && !menu_page_.IsActive())
+                {
+                    // trailing release of a menu-owned wheel press: swallow it
+                    // so NormalPage cannot reset the looper pitch
+                }
+                else
+                    event_queue.AddButtonReleased(ENC_5_SW);
+
+                wheel_menu_owned_ = false;
+            }
             else if (hw_->enc[4].RisingEdge())
+            {
+                // remember whether the menu owns this press/release pair
+                wheel_menu_owned_ = menu_page_.IsActive();
                 event_queue.AddButtonPressed(ENC_5_SW, 1);
+            }
 
             for (int i = 0; i < static_cast<int>(Hardware::EncoderId::ENC_LAST); i++)
             {
@@ -300,6 +349,10 @@ namespace chompi
                 if (inc == 1 || inc == -1)
                 {
                     uint8_t enc = encoder_map[i];
+
+                    // wheel rotation (looper pitch/scrub) locked during undo confirm
+                    if(looper_locked && enc == 4)
+                        continue;
 
                     if(enc == 0 || enc == 4) // pitch knobs are finer
                         event_queue.AddEncoderTurned(enc, inc, 0);
@@ -429,6 +482,11 @@ namespace chompi
         PresetManager* presets_manager;
 
         bool toggle_state;
+
+        /** undo-confirm event bookkeeping */
+        bool transport_delivered_[2] = {false, false}; // KEY_27/KEY_28 press delivered
+        bool key_cc_delivered_[2] = {false, false};    // MIDI CC 26/27 press delivered
+        bool wheel_menu_owned_ = false;                // wheel press opened in menu context
 
         uint8_t midi_in_ch;
 

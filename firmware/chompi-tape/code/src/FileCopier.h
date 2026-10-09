@@ -41,6 +41,9 @@ class FileCopier
                 copying_ = true;
                 req = req_fifo.PopFront();
 
+                looper_undo_ready_ = false;
+                looper_undo_invalidate_sent_ = false;
+
                 is_chompi_ram = req.is_chompi;
                 is_looper_ram = req.is_looper;
 
@@ -94,6 +97,24 @@ class FileCopier
                 }
                 else if(is_looper_ram == CopyRequest::RamDir::TO)
                 {
+                    // Never mutate the loop during a confirmed undo; before
+                    // the first mutation, request history invalidation and
+                    // await the audio-side block-boundary acknowledgment.
+                    if(!looper_undo_ready_)
+                    {
+                        if(fx_->UndoBusy())
+                            return true;
+                        if(!looper_undo_invalidate_sent_)
+                        {
+                            fx_->InvalidateLooperUndo();
+                            looper_undo_invalidate_sent_ = true;
+                            return true;
+                        }
+                        if(fx_->LooperUndoInvalidatePending())
+                            return true;
+                        looper_undo_ready_ = true;
+                    }
+
                     if(!append_xfade_done)
                     {
                         ApplyAppendCrossfade((int16_t*)buff, read_num / 2);
@@ -486,6 +507,10 @@ class FileCopier
 
         enum { kAppendXfade = 240 }; // ~5ms @ 48kHz stereo
         bool append_xfade_done;
+
+        // undo handshaking for loop-destined copies
+        bool looper_undo_ready_ = false;
+        bool looper_undo_invalidate_sent_ = false;
 
         FIL fptr_read;
         FIL fptr_write;

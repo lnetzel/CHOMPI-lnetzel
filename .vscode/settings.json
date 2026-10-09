@@ -1,0 +1,36 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make -j4 2>&1 \\| tail -30'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^Get-ChildItem 'c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-tape\\\\code\\\\src\\\\\\*\\.h','c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-tape\\\\code\\\\src\\\\\\*\\.cpp' \\| ForEach-Object \\{ \"\\$\\(\\$_\\.Name\\): \\$\\(\\(Get-Content \\$_\\.FullName\\)\\.Count\\)\" \\}$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && \\{ arm-none-eabi-size build/CHOMPI_TAPE_2\\.0-lnetzel\\.3\\.elf; grep -E \"undo_mem\\|undo_tags\\|loop_mem\\|chompi_mem\" build/CHOMPI_TAPE_2\\.0-lnetzel\\.3\\.map \\| head; \\} > /tmp/undo_map\\.log 2>&1'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && touch chompi_main\\.cpp && make -j4 > /tmp/undo_build\\.log 2>&1; tail -25 /tmp/undo_build\\.log'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^\\(Get-Item C:\\\\msys64\\\\tmp\\\\undo_build\\.log\\)\\.Length$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && touch chompi_main\\.cpp && make -j4 2>&1 \\| tail -n 15'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make -j4 > /tmp/undo_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/undo_build\\.log'; Get-Content C:\\\\msys64\\\\tmp\\\\undo_build\\.log -Tail 20$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src; make -j4 > /tmp/undo_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/undo_build\\.log'; Get-Content C:\\\\msys64\\\\tmp\\\\undo_build\\.log -Tail 20$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

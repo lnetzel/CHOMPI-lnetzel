@@ -844,7 +844,7 @@ namespace chompi
                             key_map[buttonID] - 60, buttonID, 127.f));
                     }
 
-                    if(fx_->GetLooperRecordArm())
+                    if(fx_->GetLooperRecordArm() && !fx_->GetLooperControlsLocked())
                         fx_->ToggleLooperRecord();
 
                     // this can take some time, so it must happen last
