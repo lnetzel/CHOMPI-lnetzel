@@ -3,7 +3,7 @@
 Based on upstream origianl 2.0 this is now a modified firmware.
 
 
-## NEW in v2.0-lnetzel.4
+## NEW in TAPE-lnetzel-1.1
 - Undo overdub:
   - One undo level. An overdub session is everything written from entering
     overdub until leaving it, including multiple loop revolutions.
@@ -13,7 +13,7 @@ Based on upstream origianl 2.0 this is now a modified firmware.
   - There is no redo, once undone, it's gone.
   - You cannot undo an append-paste to looper, that's not the same as an overdub session. 
 
-## NEW in v2.0-lnetzel.3
+## NEW in TAPE-lnetzel-1.0
 - Reliable preset start/end trimming down to 5 ms range:
   - Fixed mixed byte/frame units in the trim boundary checks. The old code
     compared absolute file bytes (including the WAV header) against
