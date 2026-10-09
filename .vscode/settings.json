@@ -1,0 +1,20 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make -j4 2>&1 \\| tail -25'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make clean > /tmp/tape_build\\.log 2>&1 && make -j4 >> /tmp/tape_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/tape_build\\.log; ls -l build/\\*\\.bin >> /tmp/tape_build\\.log'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'tail -20 /tmp/tape_build\\.log'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-tape/code/src && make clean >/dev/null && make -j4 2>&1 \\| tail -15; echo EXIT=\\$\\{PIPESTATUS\\[0\\]\\}; ls -l build/\\*\\.bin'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}
