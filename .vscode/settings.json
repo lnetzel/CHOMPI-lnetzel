@@ -68,6 +68,11 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "C:\\msys64\\usr\\bin\\bash.exe": true
+        "C:\\msys64\\usr\\bin\\bash.exe": true,
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src && make > /tmp/organ_build3\\.log 2>&1' ; type C:\\\\msys64\\\\tmp\\\\organ_build3\\.log$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "&": true
     }
 }

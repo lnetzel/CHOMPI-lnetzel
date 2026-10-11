@@ -1,4 +1,4 @@
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 1
 
 
    1              		.cpu cortex-m7
@@ -58,7 +58,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
   44 0004 0446     		mov	r4, r0
   11:encoder.cpp   ****     updated_     = false;
   45              		.loc 1 11 18 view .LVU4
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 2
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 2
 
 
   46 0006 0025     		movs	r5, #0
@@ -118,7 +118,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
   17:encoder.cpp   ****     hw_b_.mode = DSY_GPIO_MODE_INPUT;
   78              		.loc 1 17 5 view .LVU21
   18:encoder.cpp   ****     hw_b_.pull = DSY_GPIO_PULLUP;
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 3
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 3
 
 
   79              		.loc 1 18 5 view .LVU22
@@ -178,7 +178,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
  125              		.thumb_func
  127              	_ZN6chompi13ChompiEncoder8DebounceEv:
  128              	.LVL6:
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 4
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 4
 
 
  129              	.LFB619:
@@ -238,7 +238,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
   45:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
   46:encoder.cpp   **** 
   47:encoder.cpp   ****         // infer increment direction
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 5
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 5
 
 
   48:encoder.cpp   ****         inc_ = 0; // reset inc_ first
@@ -298,7 +298,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
   41:encoder.cpp   **** 
  194              		.loc 1 41 22 view .LVU58
  195 002c 2771     		strb	r7, [r4, #4]
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 6
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 6
 
 
   44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
@@ -358,7 +358,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
   53:encoder.cpp   ****         {
  233              		.loc 1 53 37 is_stmt 0 view .LVU76
  234 0064 0228     		cmp	r0, #2
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 7
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 7
 
 
  235 0066 D4D1     		bne	.L8
@@ -418,7 +418,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
  278 0002 0446     		mov	r4, r0
  279 0004 1546     		mov	r5, r2
  280 0006 0E46     		mov	r6, r1
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 8
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 8
 
 
  281              		.loc 1 67 41 view .LVU86
@@ -478,7 +478,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
   77:encoder.cpp   **** 
  314              		.loc 1 77 24 view .LVU103
  315 002e D2B2     		uxtb	r2, r2
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 9
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 9
 
 
   81:encoder.cpp   ****         if((a_ & 0x07) == 0x04 && (b_ & 0x03) == 0x00)
@@ -538,7 +538,7 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
  349              		.loc 1 93 1 view .LVU117
  350 0052 70BD     		pop	{r4, r5, r6, pc}
  351              	.LVL21:
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 10
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 10
 
 
  352              	.L28:
@@ -576,18 +576,18 @@ ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
  382              		.file 19 "../../../chompi-wave/code/libs/libDaisy/src/per/gpio.h"
  383              		.file 20 "encoder.h"
  384              		.file 21 "<built-in>"
-ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 11
+ARM GAS  C:\msys64\tmp\ccuCZCfS.s 			page 11
 
 
 DEFINED SYMBOLS
                             *ABS*:00000000 encoder.cpp
-C:\msys64\tmp\ccL0Acux.s:19     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 $t
-C:\msys64\tmp\ccL0Acux.s:26     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 _ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f
-C:\msys64\tmp\ccL0Acux.s:115    .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:0000005c $d
-C:\msys64\tmp\ccL0Acux.s:120    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 $t
-C:\msys64\tmp\ccL0Acux.s:127    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 _ZN6chompi13ChompiEncoder8DebounceEv
-C:\msys64\tmp\ccL0Acux.s:255    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 $t
-C:\msys64\tmp\ccL0Acux.s:262    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 _ZN6chompi13ChompiEncoder8DebounceEbb
+C:\msys64\tmp\ccuCZCfS.s:19     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 $t
+C:\msys64\tmp\ccuCZCfS.s:26     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 _ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f
+C:\msys64\tmp\ccuCZCfS.s:115    .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:0000005c $d
+C:\msys64\tmp\ccuCZCfS.s:120    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 $t
+C:\msys64\tmp\ccuCZCfS.s:127    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 _ZN6chompi13ChompiEncoder8DebounceEv
+C:\msys64\tmp\ccuCZCfS.s:255    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 $t
+C:\msys64\tmp\ccuCZCfS.s:262    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 _ZN6chompi13ChompiEncoder8DebounceEbb
 
 UNDEFINED SYMBOLS
 _ZN5daisy6System6GetNowEv

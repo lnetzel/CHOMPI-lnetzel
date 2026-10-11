@@ -26,10 +26,10 @@ The implementation is done when the firmware builds cleanly; hardware verificati
 
 ### FR-0a — SD card
 
-An SD card is expected at runtime. It shall be used to save and load the four pipe levels. Main volume is not saved by the organ; it follows the existing hardware-volume behaviour (FR-4). The storage format shall be designed so that it can later hold multiple presets/registrations.
+An SD card is expected at runtime. It shall be used to save and load the four pipe levels and the four pipe waveform-morph settings. Main volume is not saved by the organ; it follows the existing hardware-volume behaviour (FR-4). The storage format shall be designed so that it can later hold multiple presets/registrations.
 
-- **Save:** Levels shall be auto-saved a few seconds after the last encoder change. SD writes shall never interrupt audio.
-- **Load:** Levels shall be loaded at boot. If the card or settings file is missing or unreadable, defaults (see section 5) shall be used and the instrument shall remain playable.
+- **Save:** Settings shall be auto-saved a few seconds after the last encoder change. SD writes shall never interrupt audio.
+- **Load:** Settings shall be loaded at boot. If the card or settings file is missing or unreadable, defaults (see section 5) shall be used and the instrument shall remain playable.
 
 ### FR-1 — Organ pipes / registrations
 
@@ -55,7 +55,7 @@ The four non-wheel knob encoders, left to right, shall control the volume of the
 | Encoder 3 | `ENC_2` | 2⅔′ pipe volume |
 | Encoder 4 | `ENC_3` | 2′ pipe volume |
 
-`ENC_5` (the transport wheel) is not a pipe-volume control and has no function in v1. Encoder push-switches have no function in v1.
+`ENC_5` (the transport wheel) is not a pipe-volume control and has no function in v1.
 
 Control behaviour:
 
@@ -65,6 +65,19 @@ Control behaviour:
 - The control range shall have 32 steps (clicks) from silence (step 0) to maximum (step 32).
 - One click shall always change the level by exactly one step (no acceleration).
 - The level shall map to gain with a squared curve: gain = (step / 32)². This makes each click sound roughly like an even step in loudness.
+
+### FR-2b — Per-pipe encoder pages (volume / waveform)
+
+Each of the four pipe encoders shall have two pages, toggled per pipe by pressing that pipe's encoder push-switch:
+
+- **Page 1 (default at boot):** pipe volume (FR-2).
+- **Page 2:** pipe waveform morph. Turning the encoder morphs that pipe's oscillator from sine (step 0, leftmost) through square (step 16, centre) to sawtooth (step 32, rightmost), with a smooth crossfade between adjacent waveforms. The crossfade is smoothstep-eased within each half of the morph so the blend lingers near the pure waveforms (more usable sweet spots, especially near sine). The control range shall have 32 steps, one step per click, no acceleration.
+
+- Pages are per pipe: each pipe's waveform is adjusted independently, and pipes can have different waveforms.
+- Waveform changes shall apply to sounding notes immediately and without clicks.
+- Waveform settings shall be auto-saved to SD and loaded at boot like pipe levels (FR-0a); the page state itself is not saved and always starts on page 1.
+- While a pipe encoder is on page 2, its knob LED shall be blue (brightness tracking the morph position); on page 1 the knob LED is white as before.
+- While a page-2 encoder is being turned, the white-key value bar shall be blue (leftmost white key = sine, middle = square, rightmost = sawtooth), with the same ~0.5 s timeout as the volume bar.
 
 ### FR-3 — Default pipe levels
 
@@ -82,6 +95,20 @@ The fifth encoder, located on the right (`ENC_6`), shall control the overall out
 - Turning left shall decrease the overall volume.
 - Main volume shall affect the combined output of all four registrations and all active voices.
 - Changing main volume shall not change the individual pipe-volume settings.
+- `ENC_6` has a second page for overdrive, toggled by its push-switch; see FR-4b.
+
+### FR-4b — Overdrive (volume-encoder page 2)
+
+The `ENC_6` encoder shall have two pages, toggled by pressing the `ENC_6` push-switch:
+
+- **Page 1 (default at boot):** main volume (FR-4).
+- **Page 2:** overdrive amount. Turning right increases the overdrive from 0 % (step 0, exact bypass) to 100 % (step 32); 32 steps, one step per click, no acceleration.
+
+- The overdrive is a soft-clipping (tanh) saturation stage applied to the organ mix before the master volume, so the drive character does not depend on the listening level (see DSP-5).
+- The overdrive defaults to 0 % at boot and is not saved.
+- While page 2 is active, the `ENC_6` knob LED shall be red, with brightness tracking the overdrive amount (with a floor so the page stays visible at 0 %).
+- While the overdrive is being turned, the white-key value bar shall be uniformly red (no gradient), with the same ~0.5 s timeout as the volume bar.
+- SHIFT + `ENC_6` remains fine-tune (FR-5a) on both pages.
 
 ### FR-5 — Keyboard input
 
@@ -113,8 +140,12 @@ The lowest key shall play C3 (MIDI note 48, ≈130.8 Hz); keys ascend chromatica
   | 71 | 4′ pipe level |
   | 72 | 2⅔′ pipe level |
   | 73 | 2′ pipe level |
+  | 74 | 8′ pipe waveform morph |
+  | 75 | 4′ pipe waveform morph |
+  | 76 | 2⅔′ pipe waveform morph |
+  | 77 | 2′ pipe waveform morph |
 
-  Incoming CC values 0–127 map to steps 0–32 (rounded). Turning a pipe encoder sends the matching CC with the step scaled to 0–127. Levels changed by CC are auto-saved like encoder changes (FR-0a).
+  Incoming CC values 0–127 map to steps 0–32 (rounded). Turning a pipe encoder sends the matching CC with the step scaled to 0–127. Values changed by CC are auto-saved like encoder changes (FR-0a).
 
 ### FR-5c — Octave shift
 
@@ -124,7 +155,21 @@ Like the CHOMPI-WAVE octave shift, but with a ±2 octave range:
 - The offset shall be clamped to ±2 octaves and shall reset to 0 at every boot (not saved).
 - Octave shift shall transpose played keys and their MIDI note-out; incoming MIDI notes are not transposed.
 - While SHIFT is held, the KEY_16/KEY_17 key LEDs shall indicate the active shift direction (dim orange = 1 octave, bright = 2 octaves).
-- These two key presses shall not play notes while SHIFT is held; note-off tracking shall use the note that was started at note-on, so changing octave mid-note never leaves stuck notes.
+- These two key presses shall not play notes while SHIFT is held.
+- If the octave shift is changed while keys are being played, the active voices shall also be transposed to the new octave; note-off tracking shall use the note that was started at note-on, so changing octave mid-note never leaves stuck notes.
+
+### FR-5d — Note latch (LOOP key)
+
+KEY_28 (the LOOP/Overdub key) shall toggle a key latch:
+
+- Pressing LOOP toggles the latch on and off. The LOOP key LED (PTH 8) shall be solid red while the latch is active and off otherwise.
+- While the latch is active, releasing a key shall not stop its note; the note keeps sounding. Notes started while the latch is active also latch.
+- Pressing LOOP while no keys are held shall arm the latch: subsequently played notes latch.
+- Pressing LOOP again shall unlatch: each latched note whose key is not physically held shall be released (5 ms release per DSP-3). A latched note whose key is physically held down again at unlatch time keeps sounding and releases normally when the key is released.
+- The latch applies only to physical keyboard keys; incoming MIDI Note Off messages shall always release their notes.
+- MIDI note-out Note Off for a latched key shall be sent when the note actually stops (at unlatch), not at physical key release.
+- Latched notes count toward the six-voice polyphony limit and follow the FR-6 voice-stealing policy.
+- The latch state is not saved and is off at boot.
 
 ### FR-6 — Polyphony
 
@@ -141,7 +186,7 @@ The instrument shall support **six simultaneous notes**.
 
 ### DSP-1 — Oscillator generation
 
-The initial sound source may use sine-wave oscillators for all four registrations. The implementation should be structured so that other oscillator waveforms or waveform morphing can be added later without redesigning the voice architecture.
+Each pipe registration uses a per-pipe morphable waveform: sine at morph step 0, square at step 16, sawtooth at step 32, crossfading smoothly for in-between steps (smoothstep-eased per segment so the morph lingers near the pure waveforms). Square and sawtooth shall use anti-aliased (polyBLEP) oscillators so the high registrations do not alias. The implementation should remain structured so that other oscillator waveforms can be added later without redesigning the voice architecture.
 
 For a played fundamental frequency `f`, the nominal registration frequencies shall be:
 
@@ -173,6 +218,16 @@ The audio sample rate and block size shall be the same as in chompi-wave.
 
 The design shall be suitable for real-time operation on the CHOMPI Daisy Seed platform. Six voices with four sine oscillators each are expected to be a modest oscillator workload. No on-device CPU-load indicator is required.
 
+### DSP-5 — Overdrive
+
+The overdrive is an overdrive-pedal-style saturation stage on the final organ mix, placed before the master-volume gain, so the drive character does not depend on the listening level:
+
+- Drive amount `d` (0–1, in 32 steps) sets the pre-gain `g = 1 + 63 × d²` (1×–64×, quadratic feel).
+- The shaped signal is `tanh(g × x)`, fully wet (no dry blend), so harmonic content is always present when the drive is above 0 %.
+- The post gain `0.33 / tanh(0.33 × g)` anchors a ⅓-full-scale input to the same output level, so turning the knob up adds harmonics and compression instead of just loudness (like a pedal with automatic level compensation).
+- Step 0 (0 %) is an exact bypass.
+- The drive amount shall be smoothed so changes do not produce clicks.
+
 ## 4. User interaction requirements
 
 - The five encoders shall retain the control assignments specified in FR-2 and FR-4 while the organ instrument is active.
@@ -180,8 +235,10 @@ The design shall be suitable for real-time operation on the CHOMPI Daisy Seed pl
 - Pipe volume changes shall take effect smoothly without audible clicks.
 - The main volume control shall change loudness without altering the balance between the four registrations.
 - LED feedback (CHOMPI has no display):
-  - While a pipe encoder or the main-volume encoder is being turned, the key LEDs shall show the level as a bar on the white keys only (leftmost white key = 0 %, rightmost white key = 100 %; pipe bars use per-pipe colors, the volume bar is white). The bar disappears about 0.5 s after the last click.
+  - While a pipe encoder or the main-volume encoder is being turned, the key LEDs shall show the value as a bar on the white keys only (leftmost white key = 0 %, rightmost white key = 100 %). Volume bars (page-1 pipes and main volume) shall color the lit keys by position: green for the first 50 %, orange 50–75 %, red above 75 %. The page-2 waveform bar is uniformly blue; the overdrive bar is uniformly red. The bar disappears about 0.5 s after the last click.
+  - Pipe knob LEDs shall show the pipe's value: white for page 1 (volume), blue for page 2 (waveform morph). The `ENC_6` knob LED follows the position-gradient colors on page 1 (volume) and is red on page 2 (overdrive, FR-4b).
   - Otherwise, key LEDs shall light up for currently held notes.
+  - The LOOP key LED shall be solid red while the note latch is active (FR-5d); latched notes' key LEDs stay lit like held notes.
   - While SHIFT is held, the KEY_16/KEY_17 key LEDs shall indicate the octave-shift state (see FR-5c).
 
 ## 5. Initial parameter defaults
@@ -192,11 +249,12 @@ The design shall be suitable for real-time operation on the CHOMPI Daisy Seed pl
 | 4′ pipe volume | Step 24 / 32 (gain 0.5625) |
 | 2⅔′ pipe volume | Step 24 / 32 (gain 0.5625) |
 | 2′ pipe volume | Step 24 / 32 (gain 0.5625) |
-| Main volume | Existing hardware-volume behaviour |
+| Main volume | 25 % of maximum at boot; existing hardware-volume behaviour otherwise |
 | Octave shift | 0 (not saved) |
 | Polyphony | 6 voices |
-| Pipe waveform | Sine |
-| Overdrive | Not required in the first implementation |
+| Pipe waveform | Sine (morph step 0) |
+| Encoder page | Page 1 (volume) for all pipes (not saved) |
+| Overdrive | 0 % (step 0, not saved) |
 
 Saved levels from the SD card (FR-0a) override these defaults at boot.
 
@@ -219,8 +277,6 @@ The initial implementation is acceptable when:
 
 The following features are potential future extensions, not requirements for the initial version:
 
-- Waveform morphing (for example, sine to square).
-- Organ overdrive/distortion inspired by the Yamaha YC series.
 - Vibrato or chorus.
 - Reverb.
 - Multiple presets/registrations (saving the current levels is in scope, see FR-0a).

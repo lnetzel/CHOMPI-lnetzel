@@ -250,7 +250,7 @@ build/chompi_main.o: chompi_main.cpp \
  ../../../chompi-wave/code/libs/DaisySP/Source/Utility/port.h \
  ../../../chompi-wave/code/libs/DaisySP/Source/Utility/samplehold.h \
  ../../../chompi-wave/code/libs/DaisySP/Source/Utility/smooth_random.h \
- OrganEngine.h MidiHandler.h SettingsManager.h
+ OrganEngine.h MidiHandler.h
 ../../../chompi-wave/code/libs/libDaisy/Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h7xx.h:
 ../../../chompi-wave/code/libs/libDaisy/Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h750xx.h:
 ../../../chompi-wave/code/libs/libDaisy/Drivers/CMSIS/Include/core_cm7.h:
@@ -507,4 +507,3 @@ temp_led_stuff.h:
 ../../../chompi-wave/code/libs/DaisySP/Source/Utility/smooth_random.h:
 OrganEngine.h:
 MidiHandler.h:
-SettingsManager.h:

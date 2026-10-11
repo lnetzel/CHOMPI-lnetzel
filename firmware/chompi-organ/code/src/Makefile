@@ -15,8 +15,6 @@ LDSCRIPT = chompi_sram.lds
 CPP_SOURCES = chompi_main.cpp \
 	encoder.cpp
 
-USE_FATFS = 1
-
 # Libs: reuse chompi-wave's libDaisy/DaisySP (same toolchain, prebuilt)
 LIBDAISY_DIR = ../../../chompi-wave/code/libs/libDaisy
 DAISYSP_DIR = ../../../chompi-wave/code/libs/DaisySP

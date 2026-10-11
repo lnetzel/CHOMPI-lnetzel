@@ -1,6 +1,7 @@
 /** @file MidiHandler.h
  *  @brief Minimal MIDI in/out for the organ: fixed channel 1, notes both ways,
- *  CC 70-73 for the four pipe levels. UART (5-pin DIN) uses DMA transmit;
+ *  CC 70-73 for the four pipe levels, CC 74-77 for the four pipe waveform
+ *  morphs. UART (5-pin DIN) uses DMA transmit;
  *  adapted from chompi-wave's MidiManager.h (see FR-5b).
  */
 #pragma once
@@ -20,6 +21,7 @@ class OrganMidi
   public:
     static constexpr uint8_t kChannel     = 0; /* MIDI channel 1 */
     static constexpr uint8_t kPipeCcBase  = 70;
+    static constexpr uint8_t kWaveCcBase  = 74;
     static constexpr uint8_t kKeyVelocity = 100;
 
     void Init(chompi::OrganEngine *engine)
@@ -67,16 +69,23 @@ class OrganMidi
                 {
                     const uint8_t cc  = event.data[0];
                     const uint8_t val = event.data[1];
+                    /* 0-127 -> 0-32, rounded */
+                    const int step = (static_cast<int>(val)
+                                          * chompi::OrganEngine::kMaxSteps
+                                      + 63)
+                                     / 127;
                     if(cc >= kPipeCcBase && cc < kPipeCcBase + chompi::OrganEngine::kNumPipes)
                     {
-                        /* 0-127 -> 0-32, rounded */
-                        const int step = (static_cast<int>(val)
-                                              * chompi::OrganEngine::kMaxSteps
-                                          + 63)
-                                         / 127;
                         engine_->SetPipeStep(cc - kPipeCcBase, step);
                         if(cc_level_callback_)
-                            cc_level_callback_(cc - kPipeCcBase);
+                            cc_level_callback_(cc - kPipeCcBase, 0);
+                    }
+                    else if(cc >= kWaveCcBase
+                            && cc < kWaveCcBase + chompi::OrganEngine::kNumPipes)
+                    {
+                        engine_->SetPipeWaveStep(cc - kWaveCcBase, step);
+                        if(cc_level_callback_)
+                            cc_level_callback_(cc - kWaveCcBase, 1);
                     }
                     break;
                 }
@@ -116,21 +125,35 @@ class OrganMidi
 
     void SendPipeCC(int pipe, int step)
     {
+        SendStepCC(kPipeCcBase + pipe, step);
+    }
+
+    void SendWaveCC(int pipe, int step)
+    {
+        SendStepCC(kWaveCcBase + pipe, step);
+    }
+
+    /** Optional hook so the UI can show the level bar on CC changes.
+ *      wave_page: 0 = volume bar, 1 = waveform bar. */
+    void SetCcLevelCallback(void (*cb)(int pipe, int wave_page))
+    {
+        cc_level_callback_ = cb;
+    }
+
+  private:
+    void SendStepCC(int cc, int step)
+    {
         const uint8_t val = static_cast<uint8_t>(
             (step * 127 + chompi::OrganEngine::kMaxSteps / 2)
             / chompi::OrganEngine::kMaxSteps);
         uint8_t buf[3] = {static_cast<uint8_t>(0xB0 | kChannel),
-                          static_cast<uint8_t>(kPipeCcBase + pipe),
+                          static_cast<uint8_t>(cc),
                           val};
         QueueDmaMessage(buf, 3);
         if(usb_midi_active_)
-            usb_midi.SendCC(kChannel, kPipeCcBase + pipe, val);
+            usb_midi.SendCC(kChannel, cc, val);
     }
 
-    /** Optional hook so the UI can show the level bar on CC changes. */
-    void SetCcLevelCallback(void (*cb)(int pipe)) { cc_level_callback_ = cb; }
-
-  private:
     bool GetMidi(MidiEvent &event)
     {
         uart_midi.Listen();
@@ -214,5 +237,5 @@ class OrganMidi
     MidiUartHandler      uart_midi;
     MidiUsbHandler       usb_midi;
     bool                 usb_midi_active_ = true;
-    void (*cc_level_callback_)(int pipe)   = nullptr;
+    void (*cc_level_callback_)(int pipe, int wave_page) = nullptr;
 };

@@ -4,27 +4,21 @@
  *  Runs the spec in firmware/chompi-organ/chompi-organ- specification.md.
  *  Three execution contexts, like the other CHOMPI firmwares:
  *   1. AudioCallback() - audio ISR: MIDI in, control polling, audio render.
- *   2. MainLoop()      - MIDI out, SD auto-save, LEDs, battery checks.
- *   3. Boot            - SD mount + settings load before audio starts.
+ *   2. MainLoop()      - MIDI out, LEDs, battery checks.
+ *   3. Boot            - control-surface settle before audio starts.
  */
 #include "hardware.h"
 #include "temp_led_stuff.h"
 #include "daisysp.h"
-#include "fatfs.h"
 #include "OrganEngine.h"
 #include "MidiHandler.h"
-#include "SettingsManager.h"
 
 using namespace daisy;
 using namespace chompi;
 
-Hardware        hw;
-OrganEngine     engine;
-OrganMidi       midi;
-SettingsManager settings;
-
-SdmmcHandler   sdmmc;
-FatFSInterface fsi;
+Hardware    hw;
+OrganEngine engine;
+OrganMidi   midi;
 
 /** SwId index -> MIDI note, copied from chompi-wave's NormalPage.h.
  *  The 25 playable keys are SwId 7..31 (KEY_16, KEY_2..KEY_5, KEY_17..KEY_19,
@@ -123,46 +117,89 @@ static const uint8_t led_map[40] = {
 static const int pipe_encoder[OrganEngine::kNumPipes] = {3, 0, 1, 2};
 static const int kVolEnc = 5; /* ENC_6 */
 
-/** Per-pipe bar colors (teal, green, orange, red) */
-static const float pipe_colors[OrganEngine::kNumPipes][3] = {
-    {.14f, 1.f, .92f},
-    {0.f, 1.f, 0.f},
-    {1.f, .6f, .24f},
-    {1.f, 0.f, 0.f},
-};
-
 /** SMT LED indices of the 15 white keys, left (C3) to right (C5). */
 static constexpr int     kNumWhiteKeys = 15;
 static const uint8_t white_key_led[kNumWhiteKeys] = {
     24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10
 };
 
+/** Key-bar color modes. */
+enum BarKind
+{
+    kBarVolume, /**< green/orange/red position gradient */
+    kBarWave,   /**< uniformly blue: waveform morph bar */
+    kBarDrive   /**< uniformly red: overdrive bar */
+};
+
+/** Key-bar color by white-key position w (0 = leftmost): volume bars
+ *  (page-1 pipes + master volume) run green for the first 50% of keys,
+ *  orange 50-75%, red above 75%. The page-2 waveform bar (kBarWave)
+ *  is uniformly blue; the overdrive bar (kBarDrive) is uniformly red. */
+static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
+{
+    if(kind == kBarWave)
+    {
+        r = 0.f;
+        g = 0.f;
+        b = 1.f; /* blue: the whole waveform bar */
+        return;
+    }
+    if(kind == kBarDrive)
+    {
+        r = 1.f;
+        g = 0.f;
+        b = 0.f; /* red: the whole overdrive bar, no gradient */
+        return;
+    }
+    r = 0.f;
+    g = 1.f;
+    b = 0.f; /* green: first 50% of keys */
+    if(w >= 11) /* keys 11-14: above 75% */
+    {
+        r = 1.f;
+        g = 0.f; /* red */
+    }
+    else if(w >= 7) /* keys 7-10: 50-75% */
+    {
+        r = 1.f;
+        g = .6f; /* orange */
+    }
+}
+
 /* ---- cross-context (ISR <-> main loop) UI state ---- */
 static volatile int      bar_pipe_  = -1;     /* pipe/volume bar showing */
+static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = waveform/drive */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
+static volatile bool wave_page_[OrganEngine::kNumPipes]; /* per-pipe encoder page */
+static volatile bool vol_drive_page_ = false; /* ENC_6 page: 0 = volume, 1 = overdrive */
 
 /* ---- key/encoder edge tracking (audio ISR only) ---- */
 static volatile bool prev_key_[40];
 static uint8_t       active_note_[40];      /* note used at note-on, +1 (0 = none) */
 static volatile int  octave_ = 0;           /* -2..+2, SHIFT+KEY_16/KEY_17 */
 static int      prev_enc_[6];
+static bool     prev_enc_sw_[4];            /* ENC_1..4_SW push-switch states */
 static uint32_t last_click_t_[6];           /* chatter filter timestamps */
 static bool     shift_held_ = false;
+static bool     latch_on_   = false;        /* KEY_28 (LOOP) toggles key latch */
+static bool     latched_[40];               /* key released while latch on: note
+                                             * keeps sounding until unlatch */
 
 /** MIDI out goes through this queue so DMA transmits only happen in the
  *  main loop, never inside the audio ISR. */
 struct OutMsg
 {
-    uint8_t kind; /* 0 = note on, 1 = note off, 2 = pipe CC */
+    uint8_t kind; /* 0 = note on, 1 = note off, 2 = pipe CC, 3 = wave CC */
     uint8_t a;    /* note or pipe index */
     uint8_t b;    /* step (CC only) */
 };
 static FIFO<OutMsg, 64> out_q;
 
-static void CcLevelCallback(int pipe)
+static void CcLevelCallback(int pipe, int wave_page)
 {
     bar_pipe_  = pipe;
+    bar_page_  = wave_page;
     bar_until_ = System::GetNow() + 500;
 }
 
@@ -171,6 +208,72 @@ static void PollControls()
 {
     /* shift key (CHOMPI key) */
     shift_held_ = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_26));
+
+    /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3): press toggles
+     * that pipe's encoder between page 1 (volume) and page 2 (waveform);
+     * show the newly active page's value bar as confirmation */
+    for(int i = 0; i < 4; i++)
+    {
+        const bool down = hw.button_sr.State(i);
+        if(down && !prev_enc_sw_[i])
+        {
+            for(int p = 0; p < OrganEngine::kNumPipes; p++)
+            {
+                if(pipe_encoder[p] == i)
+                {
+                    wave_page_[p] = !wave_page_[p];
+                    bar_pipe_     = p;
+                    bar_page_     = wave_page_[p] ? 1 : 0;
+                    bar_until_    = System::GetNow() + 500;
+                }
+            }
+        }
+        prev_enc_sw_[i] = down;
+    }
+
+    /* ENC_6_SW (volume-knob push, SwId 32): press toggles the volume
+     * encoder between page 1 (master volume) and page 2 (overdrive);
+     * show the newly active page's value bar as confirmation */
+    {
+        const int  vsw  = static_cast<int>(Hardware::SwId::ENC_6_SW);
+        const bool down = hw.button_sr.State(vsw);
+        if(down && !prev_key_[vsw])
+        {
+            vol_drive_page_ = !vol_drive_page_;
+            bar_pipe_       = kVolBar;
+            bar_page_       = vol_drive_page_ ? 1 : 0;
+            bar_until_      = System::GetNow() + 500;
+        }
+        prev_key_[vsw] = down;
+    }
+
+    /* KEY_28 (LOOP) toggles the key latch. While latched, releasing a key
+     * keeps its note sounding; unlatching releases every latched note whose
+     * key is not physically held down again (those keep sounding and release
+     * normally on key release). Applies to physical keys only, never MIDI. */
+    {
+        const int  loop_sw = static_cast<int>(Hardware::SwId::KEY_28);
+        const bool down    = hw.button_sr.State(loop_sw);
+        if(down && !prev_key_[loop_sw])
+        {
+            latch_on_ = !latch_on_;
+            if(!latch_on_)
+            {
+                for(int swid = 7; swid < 32; swid++)
+                {
+                    if(latched_[swid] && active_note_[swid] != 0
+                       && !hw.button_sr.State(swid))
+                    {
+                        const uint8_t note = active_note_[swid] - 1;
+                        engine.NoteOff(note);
+                        out_q.PushBack({1, note, 0});
+                    }
+                    latched_[swid] = false;
+                }
+            }
+        }
+        prev_key_[loop_sw] = down;
+    }
 
     /* playable keys: SwId 7..31 (SHIFT+KEY_16/KEY_17 = octave down/up) */
     for(int swid = 7; swid < 32; swid++)
@@ -197,6 +300,7 @@ static void PollControls()
             n              = n < 0 ? 0 : (n > 127 ? 127 : n);
             const uint8_t note = static_cast<uint8_t>(n);
             active_note_[swid] = note + 1;
+            latched_[swid]     = false; /* re-press of a latched key retriggers */
             engine.NoteOn(note, 1.f);
             out_q.PushBack({0, note, 0});
         }
@@ -204,10 +308,18 @@ static void PollControls()
         {
             /* note-off uses the note that was started (octave may have
              * changed, or shift may now be held, while the key was down) */
-            const uint8_t note   = active_note_[swid] - 1;
-            active_note_[swid]   = 0;
-            engine.NoteOff(note);
-            out_q.PushBack({1, note, 0});
+            if(latch_on_)
+            {
+                /* latched: keep sounding; note-off is deferred to unlatch */
+                latched_[swid] = true;
+            }
+            else
+            {
+                const uint8_t note   = active_note_[swid] - 1;
+                active_note_[swid]   = 0;
+                engine.NoteOff(note);
+                out_q.PushBack({1, note, 0});
+            }
         }
     }
 
@@ -237,12 +349,21 @@ static void PollControls()
             {
                 engine.AddFineTuneCents(delta); /* SHIFT+ENC_6: fine tune */
             }
+            else if(vol_drive_page_)
+            {
+                /* volume-encoder page 2: overdrive amount, 32 steps */
+                engine.SetDriveStep(engine.GetDriveStep() + delta);
+                bar_pipe_  = kVolBar;
+                bar_page_  = 1;
+                bar_until_ = System::GetNow() + 500;
+            }
             else
             {
                 /* existing CHOMPI volume-knob behaviour: 100 clicks, 0..1 */
                 float g = engine.GetMasterGain() + delta * .01f;
                 engine.SetMasterGain(g);
                 bar_pipe_  = kVolBar;
+                bar_page_  = 0;
                 bar_until_ = System::GetNow() + 500;
             }
         }
@@ -252,10 +373,25 @@ static void PollControls()
             {
                 if(pipe_encoder[p] != i)
                     continue;
-                engine.SetPipeStep(p, engine.GetPipeStep(p) + delta);
-                out_q.PushBack({2, static_cast<uint8_t>(p),
-                                static_cast<uint8_t>(engine.GetPipeStep(p))});
-                settings.NotifyChanged();
+                if(wave_page_[p])
+                {
+                    engine.SetPipeWaveStep(p,
+                                           engine.GetPipeWaveStep(p) + delta);
+                    out_q.PushBack(
+                        {3,
+                         static_cast<uint8_t>(p),
+                         static_cast<uint8_t>(engine.GetPipeWaveStep(p))});
+                    bar_page_ = 1;
+                }
+                else
+                {
+                    engine.SetPipeStep(p, engine.GetPipeStep(p) + delta);
+                    out_q.PushBack(
+                        {2,
+                         static_cast<uint8_t>(p),
+                         static_cast<uint8_t>(engine.GetPipeStep(p))});
+                    bar_page_ = 0;
+                }
                 bar_pipe_  = p;
                 bar_until_ = System::GetNow() + 500;
             }
@@ -282,27 +418,46 @@ static void UpdateLeds()
     if(bar_pipe_ >= 0 && now < bar_until_)
     {
         const int p = bar_pipe_;
-        /* level bar spans the 15 white keys only: leftmost white = 0%,
-         * rightmost white = 100%; pipes use their colors, volume is white */
-        float r = 1.f, g = 1.f, b = 1.f;
-        int   lit;
+        /* value bar spans the 15 white keys only: leftmost white = 0%,
+         * rightmost white = 100%. Volume bars (page-1 pipes + master) use
+         * the green/orange/red position gradient; the page-2 waveform bar
+         * is uniformly blue and the overdrive bar is uniformly red. */
+        int    lit;
+        BarKind kind = kBarVolume;
         if(p == kVolBar)
         {
-            lit = static_cast<int>(engine.GetMasterGain() * kNumWhiteKeys
-                                   + .5f);
+            if(bar_page_ == 1)
+            {
+                /* volume-knob page 2: overdrive amount */
+                lit  = (engine.GetDriveStep() * kNumWhiteKeys + 16)
+                       / OrganEngine::kMaxSteps;
+                kind = kBarDrive;
+            }
+            else
+            {
+                lit = static_cast<int>(engine.GetMasterGain() * kNumWhiteKeys
+                                       + .5f);
+            }
+        }
+        else if(bar_page_ == 1)
+        {
+            lit  = (engine.GetPipeWaveStep(p) * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxSteps;
+            kind = kBarWave;
         }
         else
         {
             lit = (engine.GetPipeStep(p) * kNumWhiteKeys + 16)
                   / OrganEngine::kMaxSteps;
-            r = pipe_colors[p][0];
-            g = pipe_colors[p][1];
-            b = pipe_colors[p][2];
         }
         for(int i = 0; i < 25; i++)
             SetSmtLedFloat(i, 0.f, 0.f, 0.f);
         for(int w = 0; w < lit && w < kNumWhiteKeys; w++)
+        {
+            float r, g, b;
+            BarKeyColor(w, kind, r, g, b);
             SetSmtLedFloat(white_key_led[w], r, g, b);
+        }
     }
     else
     {
@@ -328,20 +483,56 @@ static void UpdateLeds()
         }
     }
 
-    /* knob LEDs: pipe levels on PTH 1-4, master volume on PTH 9 */
+    /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
+     * Page 2 pipes glow blue (brightness tracks the morph position with a
+     * floor so the page stays visible at pure sine); page 1 is white. */
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
-        const float s = engine.GetPipeStep(p) * (1.f / OrganEngine::kMaxSteps);
-        SetPthLedFloat(p + 1, s, s, s);
+        if(wave_page_[p])
+        {
+            const float s = .2f
+                            + .8f * engine.GetPipeWaveStep(p)
+                                  * (1.f / OrganEngine::kMaxSteps);
+            SetPthLedFloat(p + 1, 0.f, 0.f, s);
+        }
+        else
+        {
+            const float s = engine.GetPipeStep(p)
+                            * (1.f / OrganEngine::kMaxSteps);
+            SetPthLedFloat(p + 1, s, s, s);
+        }
     }
-    const float v = engine.GetMasterGain();
-    SetPthLedFloat(9, v, v, v);
+    /* master-volume knob LED (PTH 9): on volume-encoder page 2 it tracks
+     * the overdrive amount in red (with a brightness floor so the page
+     * stays visible at 0%). On page 1 brightness tracks the level and the
+     * color follows the same position gradient as the white-key volume bar
+     * (green up to 50%, orange 50-75%, red above 75%) */
+    if(vol_drive_page_)
+    {
+        const float s = .2f
+                        + .8f * engine.GetDriveStep()
+                                  * (1.f / OrganEngine::kMaxSteps);
+        SetPthLedFloat(9, s, 0.f, 0.f);
+    }
+    else
+    {
+        const float v = engine.GetMasterGain();
+        if(v > .75f)
+            SetPthLedFloat(9, v, 0.f, 0.f); /* red */
+        else if(v > .5f)
+            SetPthLedFloat(9, v, .6f * v, 0.f); /* orange */
+        else
+            SetPthLedFloat(9, 0.f, v, 0.f); /* green */
+    }
 
     /* shift indicator on the CHOMPI key LED */
     if(shift_held_)
         SetPthLedFloat(0, .67f, 0.f, 1.f);
     else
         SetPthLedFloat(0, 0.f, 0.f, 0.f);
+
+    /* latch indicator on the LOOP key LED (PTH 8): solid red while latched */
+    SetPthLedFloat(8, latch_on_ ? 1.f : 0.f, 0.f, 0.f);
 
     fill_led_data();
 }
@@ -360,11 +551,11 @@ void MainLoop(void *data)
             midi.SendNoteOn(msg.a);
         else if(msg.kind == 1)
             midi.SendNoteOff(msg.a);
-        else
+        else if(msg.kind == 2)
             midi.SendPipeCC(msg.a, msg.b);
+        else
+            midi.SendWaveCC(msg.a, msg.b);
     }
-
-    settings.Poll();
 
     const uint32_t now = System::GetNow();
     if(now - ledt > 16)
@@ -399,26 +590,14 @@ int main(void)
         System::Delay(10);
     }
 
-    /* SD card: mount, then load saved pipe levels (defaults if absent) */
-    System::Delay(100);
-    SdmmcHandler::Config sd_cfg;
-    sd_cfg.speed = SdmmcHandler::Speed::FAST;
-    sd_cfg.width = SdmmcHandler::BusWidth::BITS_4;
-    sdmmc.Init(sd_cfg);
-    System::Delay(100);
-    fsi.Init(FatFSInterface::Config::MEDIA_SD);
-    System::Delay(100);
-    settings.Init(&engine);
-    if(f_mount(&fsi.GetSDFileSystem(), fsi.GetSDPath(), 1) == FR_OK)
-        settings.Load();
-
     engine.Init(hw.seed.AudioSampleRate());
 
     LedSetup();
 
-    hw.StartAudio(AudioCallback);
-
-    /* flush the shift registers for 0.5 s; KEY_26+27+28 held = shipping mode */
+    /* Flush the shift registers for 0.5 s BEFORE starting audio;
+     * KEY_26+27+28 held = shipping mode. The 4021 debounce counters start
+     * at 0, which State() reads as "pressed", so polling controls before
+     * they settle would fire bogus key/LOOP presses at boot. */
     uint32_t sleep_state = 0;
     for(int i = 0; i < 5000; i++)
     {
@@ -431,13 +610,29 @@ int main(void)
     if(sleep_state > 4000)
         hw.MpWrite(0x08, 0B10111111); /* SHIPPING MODE */
 
+    /* Capture the settled control states as the edge baseline: nothing held
+     * at power-on fires a note-on or toggles the latch, so the organ always
+     * boots silent with the latch off. */
     for(int i = 0; i < 40; i++)
     {
-        prev_key_[i]    = false;
+        prev_key_[i]    = hw.button_sr.State(i);
         active_note_[i] = 0;
+        latched_[i]     = false;
     }
+    latch_on_ = false;
     for(int i = 0; i < 6; i++)
-        prev_enc_[i] = 0;
+    {
+        prev_enc_[i]     = hw.enc_trackers[i];
+        last_click_t_[i] = 0;
+    }
+    for(int p = 0; p < OrganEngine::kNumPipes; p++)
+    {
+        wave_page_[p]   = false;
+        prev_enc_sw_[p] = hw.button_sr.State(p);
+    }
+    vol_drive_page_ = false;
+
+    hw.StartAudio(AudioCallback);
 
     /* give USB control, enable AutoDPDM, take USB control (as chompi-wave) */
     hw.usb_sw.Write(false);

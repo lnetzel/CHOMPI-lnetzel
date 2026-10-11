@@ -1,13 +1,22 @@
 /** @file OrganEngine.h
- *  @brief Polyphonic organ voice engine: 6 voices x 4 sine pipe registrations.
+ *  @brief Polyphonic organ voice engine: 6 voices x 4 pipe registrations.
  *
  *  Implements FR-1/FR-6 and DSP-1..DSP-3 of chompi-organ- specification.md:
  *  - Pipe ratios 1x / 2x / 2^(19/12)x / 4x with 20 kHz octave foldback
+ *  - Per-pipe waveform morph: sine -> square -> sawtooth, 32 steps,
+ *    triangle-weight crossfade of three oscillators per pipe (polyBLEP
+ *    square/saw keep the high registrations alias-free); a smoothstep
+ *    easing on each morph segment keeps the blend lingering near the
+ *    pure waveforms, so the first clicks stay in sine territory
  *  - Free-running oscillators (phase never reset at note-on)
  *  - Fixed 5 ms linear attack/release gate envelope; 5 ms steal fade
  *  - Oldest-first voice stealing; same-note retrigger reuses its voice
  *  - Fixed 1/24 output scale so 6 voices x 4 pipes cannot clip
  *  - Pipe levels in 32 steps, gain = (step/32)^2, smoothed per sample
+ *  - Overdrive: 32-step overdrive-pedal stage on the mix (pre-gain into a
+ *    tanh soft clip with level-anchored post gain), placed before the
+ *    master gain so the drive character is level-independent; 0% is an
+ *    exact bypass (DSP-5)
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
@@ -19,9 +28,18 @@ namespace chompi
 class OrganEngine
 {
   public:
-    static constexpr int kNumVoices = 6;
-    static constexpr int kNumPipes  = 4;
-    static constexpr int kMaxSteps  = 32;
+    static constexpr int kNumVoices    = 6;
+    static constexpr int kNumPipes     = 4;
+    static constexpr int kMaxSteps     = 32;
+    static constexpr int kNumWaveforms = 3;
+
+    /** Oscillator slot order within each pipe's morph chain. */
+    enum Waveform : uint8_t
+    {
+        kWaveSin = 0,
+        kWaveSqr,
+        kWaveSaw
+    };
 
     /** Pipe frequency ratios: 8', 4', 2 2/3' (equal-tempered), 2' */
     static float PipeRatio(int p)
@@ -34,9 +52,11 @@ class OrganEngine
             default: return 1.f;
         }
     }
-    static constexpr float kFoldbackHz  = 20000.f;
-    static constexpr float kMixScale    = 1.f / 24.f;
-    static constexpr int   kDefaultStep = 24;
+    static constexpr float kFoldbackHz     = 20000.f;
+    static constexpr float kMixScale       = 1.f / 24.f;
+    static constexpr int   kDefaultStep     = 24;
+    static constexpr int   kDefaultWaveStep = 0; /* sine */
+    static constexpr int   kDefaultDriveStep = 0; /* overdrive off */
 
     void Init(float sample_rate)
     {
@@ -58,20 +78,32 @@ class OrganEngine
             voice.age          = 0;
             for(int p = 0; p < kNumPipes; p++)
             {
-                voice.osc[p].Init(sample_rate);
-                voice.osc[p].SetWaveform(daisysp::Oscillator::WAVE_SIN);
-                voice.osc[p].SetAmp(1.f);
-                voice.osc[p].SetFreq(100.f);
+                for(int w = 0; w < kNumWaveforms; w++)
+                {
+                    voice.osc[p][w].Init(sample_rate);
+                    voice.osc[p][w].SetAmp(1.f);
+                    voice.osc[p][w].SetFreq(100.f);
+                }
+                voice.osc[p][kWaveSin].SetWaveform(daisysp::Oscillator::WAVE_SIN);
+                voice.osc[p][kWaveSqr].SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SQUARE);
+                voice.osc[p][kWaveSaw].SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
             }
         }
 
         for(int p = 0; p < kNumPipes; p++)
         {
-            pipe_steps[p] = kDefaultStep;
-            pipe_gain_[p] = pipe_gain_target_[p] = StepToGain(kDefaultStep);
+            pipe_steps[p]      = kDefaultStep;
+            pipe_gain_[p]      = pipe_gain_target_[p] = StepToGain(kDefaultStep);
+            pipe_wave_steps[p] = kDefaultWaveStep;
+            pipe_wave_[p]      = pipe_wave_target_[p]
+                = StepToMorph(kDefaultWaveStep);
         }
 
         master_gain_ = master_gain_target_ = kDefaultMasterGain;
+
+        drive_step_ = kDefaultDriveStep;
+        drive_ = drive_target_
+            = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
 
         for(int n = 0; n < 128; n++)
             note_held_[n] = false;
@@ -88,6 +120,31 @@ class OrganEngine
     }
 
     int GetPipeStep(int pipe) const { return pipe_steps[pipe]; }
+
+    /** Apply one encoder click (or MIDI CC step) to a pipe's waveform morph.
+ *      Step 0 = sine, 16 = square, 32 = sawtooth; in-between steps crossfade.
+ */
+    void SetPipeWaveStep(int pipe, int step)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        step = step < 0 ? 0 : (step > kMaxSteps ? kMaxSteps : step);
+        pipe_wave_steps[pipe]    = static_cast<uint8_t>(step);
+        pipe_wave_target_[pipe]  = StepToMorph(step);
+    }
+
+    int GetPipeWaveStep(int pipe) const { return pipe_wave_steps[pipe]; }
+
+    /** Apply one encoder click to the overdrive amount (0..kMaxSteps).
+ *      Step 0 is an exact bypass; higher steps increase the pre-gain. */
+    void SetDriveStep(int step)
+    {
+        step = step < 0 ? 0 : (step > kMaxSteps ? kMaxSteps : step);
+        drive_step_   = static_cast<uint8_t>(step);
+        drive_target_ = static_cast<float>(step) * (1.f / kMaxSteps);
+    }
+
+    int GetDriveStep() const { return drive_step_; }
 
     void SetMasterGain(float g)
     {
@@ -190,10 +247,30 @@ class OrganEngine
     {
         for(size_t i = 0; i < size; i++)
         {
-            /* Smooth pipe gains and master gain (~1 ms slew, no zipper noise) */
+            /* Smooth pipe gains, morphs and master gain (~1 ms slew) */
+            float wv[kNumPipes][kNumWaveforms];
             for(int p = 0; p < kNumPipes; p++)
+            {
                 daisysp::fonepole(pipe_gain_[p], pipe_gain_target_[p], .001f);
+                daisysp::fonepole(pipe_wave_[p], pipe_wave_target_[p], .001f);
+
+                /* Triangle morph weights over morph x in 0..2:
+                 * sine fades out 0->1, saw fades in 1->2, square peaks at 1.
+                 * Each segment's coordinate runs through MorphEase
+                 * (smoothstep) first, so the blend lingers near the pure
+                 * waveforms: the first clicks stay in sine territory and
+                 * each pipe keeps more playable sweet spots. The weights
+                 * still sum to 1, so loudness stays flat across the sweep. */
+                const float x    = pipe_wave_[p] * 2.f;
+                const float seg  = x < 1.f ? x : x - 1.f;
+                const float ease = MorphEase(seg);
+                const float xe   = x < 1.f ? ease : 1.f + ease;
+                wv[p][kWaveSin] = xe < 1.f ? 1.f - xe : 0.f;
+                wv[p][kWaveSaw] = xe > 1.f ? xe - 1.f : 0.f;
+                wv[p][kWaveSqr] = 1.f - wv[p][kWaveSin] - wv[p][kWaveSaw];
+            }
             daisysp::fonepole(master_gain_, master_gain_target_, .001f);
+            daisysp::fonepole(drive_, drive_target_, .001f);
 
             float mix = 0.f;
 
@@ -205,7 +282,18 @@ class OrganEngine
 
                 float sig = 0.f;
                 for(int p = 0; p < kNumPipes; p++)
-                    sig += voice.osc[p].Process() * pipe_gain_[p];
+                {
+                    float psig = 0.f;
+                    for(int w = 0; w < kNumWaveforms; w++)
+                    {
+                        /* Skip silent morph legs (phase stalls while the
+                         * weight is 0, which is inaudible behind the
+                         * crossfade) to keep CPU near the sine-only budget */
+                        if(wv[p][w] > 0.f)
+                            psig += voice.osc[p][w].Process() * wv[p][w];
+                    }
+                    sig += psig * pipe_gain_[p];
+                }
 
                 switch(voice.state)
                 {
@@ -240,7 +328,22 @@ class OrganEngine
                 mix += sig * voice.env * voice.velocity;
             }
 
-            const float out_sig = mix * kMixScale * master_gain_;
+            /* Overdrive (DSP-5): overdrive-pedal style — quadratic-mapped
+             * pre-gain (1..64x) into a tanh soft clipper, fully wet (no dry
+             * blend, so harmonics are always audible above 0%). Post gain
+             * anchors a 1/3-full-scale input to the same output level, so
+             * turning the knob up adds crunch/compression instead of just
+             * loudness; step 0 is an exact bypass. Runs before the master
+             * gain so the drive character does not depend on the listening
+             * level. */
+            float out_sig = mix * kMixScale;
+            if(drive_ > 0.f)
+            {
+                const float g    = 1.f + drive_ * drive_ * 63.f;
+                const float post = 0.33f / tanhf(0.33f * g);
+                out_sig          = tanhf(g * out_sig) * post;
+            }
+            out_sig *= master_gain_;
             out[0][i] = out_sig; /* headphone L */
             out[1][i] = out_sig; /* headphone R */
             out[2][i] = out_sig; /* master L */
@@ -260,7 +363,7 @@ class OrganEngine
 
     struct Voice
     {
-        daisysp::Oscillator osc[kNumPipes];
+        daisysp::Oscillator osc[kNumPipes][kNumWaveforms];
         VoiceState          state;
         uint8_t             note;
         uint8_t             pending_note;
@@ -274,6 +377,20 @@ class OrganEngine
     {
         const float x = static_cast<float>(step) / kMaxSteps;
         return x * x;
+    }
+
+    static float StepToMorph(int step)
+    {
+        return static_cast<float>(step) / kMaxSteps; /* 0..1 */
+    }
+
+    /** Easing applied within each half of the morph (sine->square and
+     *  square->saw). Smoothstep: flat ends make the blend linger near the
+     *  pure waveforms. For an even longer sine-land use t*t; for less
+     *  easing, blend toward linear: .5f*(t + t*t*(3.f - 2.f*t)). */
+    static float MorphEase(float t)
+    {
+        return t * t * (3.f - 2.f * t);
     }
 
     float NoteToHz(uint8_t note) const
@@ -293,7 +410,8 @@ class OrganEngine
             float f = base * PipeRatio(p);
             while(f > kFoldbackHz)
                 f *= .5f; /* organ foldback: drop whole octaves */
-            voice.osc[p].SetFreq(f);
+            for(int w = 0; w < kNumWaveforms; w++)
+                voice.osc[p][w].SetFreq(f);
         }
     }
 
@@ -306,7 +424,7 @@ class OrganEngine
         UpdateFreqs(voice);
     }
 
-    static constexpr float kDefaultMasterGain = .84f;
+    static constexpr float kDefaultMasterGain = .25f; /* 25% at boot */
 
     float    sample_rate_;
     float    env_inc_;
@@ -316,12 +434,18 @@ class OrganEngine
     bool     freqs_dirty_;
     float    pipe_gain_[kNumPipes];
     float    pipe_gain_target_[kNumPipes];
+    float    pipe_wave_[kNumPipes];
+    float    pipe_wave_target_[kNumPipes];
     float    master_gain_;
     float    master_gain_target_;
+    float    drive_;
+    float    drive_target_;
+    uint8_t  drive_step_;
     bool     note_held_[128];
 
   public:
     uint8_t pipe_steps[kNumPipes];
+    uint8_t pipe_wave_steps[kNumPipes];
 };
 
 } // namespace chompi
