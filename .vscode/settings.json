@@ -19,6 +19,55 @@
         "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-usb-storage/code/src && make clean >/dev/null && make -j4 > /tmp/usbstor_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/usbstor_build\\.log; tail -n 12 /tmp/usbstor_build\\.log; ls -l build/\\*\\.bin'$/": {
             "approve": true,
             "matchCommandLine": true
-        }
+        },
+        "/^\\(Get-Item 'c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-wave\\\\code\\\\src\\\\chompi_main\\.cpp'\\)\\.Length$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^New-Item -ItemType Directory -Force -Path 'c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-organ\\\\code\\\\src' \\| Out-Null; Copy-Item 'c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-wave\\\\code\\\\src\\\\hardware\\.h','c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-wave\\\\code\\\\src\\\\encoder\\.h','c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-wave\\\\code\\\\src\\\\encoder\\.cpp','c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-wave\\\\code\\\\src\\\\temp_led_stuff\\.h','c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-wave\\\\code\\\\src\\\\chompi_sram\\.lds' 'c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-organ\\\\code\\\\src\\\\'; Get-ChildItem 'c:\\\\Dev\\\\CHOMPI-lnetzel\\\\firmware\\\\chompi-organ\\\\code\\\\src' \\| Select-Object Name$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src && make -j4 2>&1 \\| tee /tmp/organ_build\\.log \\| tail -40'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'ls /c/Dev/CHOMPI-lnetzel/firmware/chompi-wave/code/libs/libDaisy/ \\| head; ls /c/Dev/CHOMPI-lnetzel/firmware/chompi-wave/code/libs/libDaisy/core/ 2>/dev/null \\| head -5'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src && ls \\.\\./\\.\\./chompi-wave/code/libs/libDaisy/core/Makefile && echo OK'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src && ls \\.\\./\\.\\./ && ls \\.\\./\\.\\./chompi-wave/ 2>&1 \\| head -3 && ls /c/Dev/CHOMPI-lnetzel/firmware/chompi-wave/code/libs/ && file /c/Dev/CHOMPI-lnetzel/firmware/chompi-wave/code/libs/libDaisy 2>/dev/null; stat -c \"%N\" /c/Dev/CHOMPI-lnetzel/firmware/chompi-wave/code/libs/libDaisy'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src && make -j4 > /tmp/organ_build\\.log 2>&1; echo EXIT=\\$\\?; tail -30 /tmp/organ_build\\.log'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'grep -nE \"error\\|Error\\|warning\\|arm-none-eabi-g\\\\\\+\\\\\\+\\.\\*-o build/CHOMPI\\|\\\\\\.bin\\|\\\\\\.elf\" /tmp/organ_build\\.log \\| tail -20; echo ---; ls -la /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src/build/ 2>/dev/null \\| tail -8'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'grep -nE \"error\\|Error\" /tmp/organ_build\\.log \\| head -20; echo ---; tail -12 /tmp/organ_build\\.log; echo ---; ls /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src/build/ \\| tail -8'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'tail -15 /tmp/organ_build\\.log'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'export PATH=\"/c/armgnu/10\\.3-2021\\.10/bin:\\$PATH\"; cd /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src && make -j4 > /tmp/organ_build\\.log 2>&1; echo EXIT=\\$\\? >> /tmp/organ_build\\.log'; Write-Host \"done\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "/^& C:\\\\msys64\\\\usr\\\\bin\\\\bash\\.exe -lc 'grep -c error /tmp/organ_build\\.log; tail -6 /tmp/organ_build\\.log; ls /c/Dev/CHOMPI-lnetzel/firmware/chompi-organ/code/src/build/\\*\\.bin 2>/dev/null'$/": {
+            "approve": true,
+            "matchCommandLine": true
+        },
+        "C:\\msys64\\usr\\bin\\bash.exe": true
     }
 }

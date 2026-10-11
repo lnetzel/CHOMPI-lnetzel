@@ -1,0 +1,597 @@
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 1
+
+
+   1              		.cpu cortex-m7
+   2              		.arch armv7e-m
+   3              		.fpu fpv5-d16
+   4              		.eabi_attribute 28, 1
+   5              		.eabi_attribute 20, 1
+   6              		.eabi_attribute 21, 1
+   7              		.eabi_attribute 23, 3
+   8              		.eabi_attribute 24, 1
+   9              		.eabi_attribute 25, 1
+  10              		.eabi_attribute 26, 1
+  11              		.eabi_attribute 30, 2
+  12              		.eabi_attribute 34, 1
+  13              		.eabi_attribute 18, 4
+  14              		.file	"encoder.cpp"
+  15              		.text
+  16              	.Ltext0:
+  17              		.cfi_sections	.debug_frame
+  18              		.section	.text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f,"ax",%progbits
+  19              		.align	1
+  20              		.p2align 2,,3
+  21              		.global	_ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f
+  22              		.syntax unified
+  23              		.thumb
+  24              		.thumb_func
+  26              	_ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:
+  27              	.LVL0:
+  28              	.LFB618:
+  29              		.file 1 "encoder.cpp"
+   1:encoder.cpp   **** #include "encoder.h"
+   2:encoder.cpp   **** 
+   3:encoder.cpp   **** using namespace chompi;
+   4:encoder.cpp   **** 
+   5:encoder.cpp   **** void ChompiEncoder::Init(dsy_gpio_pin a,
+   6:encoder.cpp   ****                    dsy_gpio_pin b,
+   7:encoder.cpp   ****                    dsy_gpio_pin click,
+   8:encoder.cpp   ****                    float        update_rate)
+   9:encoder.cpp   **** {
+  30              		.loc 1 9 1 view -0
+  31              		.cfi_startproc
+  32              		@ args = 0, pretend = 0, frame = 16
+  33              		@ frame_needed = 0, uses_anonymous_args = 0
+  10:encoder.cpp   ****     last_update_ = daisy::System::GetNow();
+  34              		.loc 1 10 5 view .LVU1
+   9:encoder.cpp   ****     last_update_ = daisy::System::GetNow();
+  35              		.loc 1 9 1 is_stmt 0 view .LVU2
+  36 0000 30B5     		push	{r4, r5, lr}
+  37              		.cfi_def_cfa_offset 12
+  38              		.cfi_offset 4, -12
+  39              		.cfi_offset 5, -8
+  40              		.cfi_offset 14, -4
+  41 0002 85B0     		sub	sp, sp, #20
+  42              		.cfi_def_cfa_offset 32
+   9:encoder.cpp   ****     last_update_ = daisy::System::GetNow();
+  43              		.loc 1 9 1 view .LVU3
+  44 0004 0446     		mov	r4, r0
+  11:encoder.cpp   ****     updated_     = false;
+  45              		.loc 1 11 18 view .LVU4
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 2
+
+
+  46 0006 0025     		movs	r5, #0
+   9:encoder.cpp   ****     last_update_ = daisy::System::GetNow();
+  47              		.loc 1 9 1 view .LVU5
+  48 0008 ADF80C10 		strh	r1, [sp, #12]	@ movhi
+  49 000c ADF80820 		strh	r2, [sp, #8]	@ movhi
+  50 0010 ADF80430 		strh	r3, [sp, #4]	@ movhi
+  10:encoder.cpp   ****     last_update_ = daisy::System::GetNow();
+  51              		.loc 1 10 41 view .LVU6
+  52 0014 FFF7FEFF 		bl	_ZN5daisy6System6GetNowEv
+  53              	.LVL1:
+  12:encoder.cpp   **** 
+  13:encoder.cpp   ****     // Init GPIO for A, and B
+  14:encoder.cpp   ****     hw_a_.pin  = a;
+  54              		.loc 1 14 16 view .LVU7
+  55 0018 BDF80C20 		ldrh	r2, [sp, #12]
+  15:encoder.cpp   ****     hw_a_.mode = DSY_GPIO_MODE_INPUT;
+  56              		.loc 1 15 16 view .LVU8
+  57 001c 4FF48073 		mov	r3, #256
+  10:encoder.cpp   ****     updated_     = false;
+  58              		.loc 1 10 18 view .LVU9
+  59 0020 2060     		str	r0, [r4]
+  11:encoder.cpp   **** 
+  60              		.loc 1 11 5 is_stmt 1 view .LVU10
+  16:encoder.cpp   ****     hw_a_.pull = DSY_GPIO_PULLUP;
+  17:encoder.cpp   ****     hw_b_.pin  = b;
+  18:encoder.cpp   ****     hw_b_.mode = DSY_GPIO_MODE_INPUT;
+  19:encoder.cpp   ****     hw_b_.pull = DSY_GPIO_PULLUP;
+  20:encoder.cpp   ****     dsy_gpio_init(&hw_a_);
+  61              		.loc 1 20 18 is_stmt 0 view .LVU11
+  62 0022 04F11800 		add	r0, r4, #24
+  14:encoder.cpp   ****     hw_a_.mode = DSY_GPIO_MODE_INPUT;
+  63              		.loc 1 14 16 view .LVU12
+  64 0026 2283     		strh	r2, [r4, #24]	@ movhi
+  17:encoder.cpp   ****     hw_b_.mode = DSY_GPIO_MODE_INPUT;
+  65              		.loc 1 17 16 view .LVU13
+  66 0028 BDF80820 		ldrh	r2, [sp, #8]
+  15:encoder.cpp   ****     hw_a_.pull = DSY_GPIO_PULLUP;
+  67              		.loc 1 15 16 view .LVU14
+  68 002c 6383     		strh	r3, [r4, #26]	@ movhi
+  18:encoder.cpp   ****     hw_b_.pull = DSY_GPIO_PULLUP;
+  69              		.loc 1 18 16 view .LVU15
+  70 002e E383     		strh	r3, [r4, #30]	@ movhi
+  17:encoder.cpp   ****     hw_b_.mode = DSY_GPIO_MODE_INPUT;
+  71              		.loc 1 17 16 view .LVU16
+  72 0030 A283     		strh	r2, [r4, #28]	@ movhi
+  11:encoder.cpp   **** 
+  73              		.loc 1 11 18 view .LVU17
+  74 0032 2571     		strb	r5, [r4, #4]
+  14:encoder.cpp   ****     hw_a_.mode = DSY_GPIO_MODE_INPUT;
+  75              		.loc 1 14 5 is_stmt 1 view .LVU18
+  15:encoder.cpp   ****     hw_a_.pull = DSY_GPIO_PULLUP;
+  76              		.loc 1 15 5 view .LVU19
+  16:encoder.cpp   ****     hw_b_.pin  = b;
+  77              		.loc 1 16 5 view .LVU20
+  17:encoder.cpp   ****     hw_b_.mode = DSY_GPIO_MODE_INPUT;
+  78              		.loc 1 17 5 view .LVU21
+  18:encoder.cpp   ****     hw_b_.pull = DSY_GPIO_PULLUP;
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 3
+
+
+  79              		.loc 1 18 5 view .LVU22
+  19:encoder.cpp   ****     dsy_gpio_init(&hw_a_);
+  80              		.loc 1 19 5 view .LVU23
+  81              		.loc 1 20 5 view .LVU24
+  82              		.loc 1 20 18 is_stmt 0 view .LVU25
+  83 0034 FFF7FEFF 		bl	dsy_gpio_init
+  84              	.LVL2:
+  21:encoder.cpp   ****     dsy_gpio_init(&hw_b_);
+  85              		.loc 1 21 5 is_stmt 1 view .LVU26
+  86              		.loc 1 21 18 is_stmt 0 view .LVU27
+  87 0038 04F11C00 		add	r0, r4, #28
+  88 003c FFF7FEFF 		bl	dsy_gpio_init
+  89              	.LVL3:
+  22:encoder.cpp   ****     // Default Initialization for Switch
+  23:encoder.cpp   ****     sw_.Init(click);
+  90              		.loc 1 23 5 is_stmt 1 view .LVU28
+  91              		.loc 1 23 13 is_stmt 0 view .LVU29
+  92 0040 9FED060A 		vldr.32	s0, .L4
+  93 0044 0199     		ldr	r1, [sp, #4]
+  94 0046 04F10800 		add	r0, r4, #8
+  95 004a FFF7FEFF 		bl	_ZN5daisy6Switch4InitE12dsy_gpio_pinf
+  96              	.LVL4:
+  24:encoder.cpp   ****     // Set initial states, etc.
+  25:encoder.cpp   ****     inc_ = 0;
+  97              		.loc 1 25 5 is_stmt 1 view .LVU30
+  26:encoder.cpp   ****     a_ = b_ = 0xff;
+  98              		.loc 1 26 8 is_stmt 0 view .LVU31
+  99 004e 4FF6FF73 		movw	r3, #65535
+  25:encoder.cpp   ****     a_ = b_ = 0xff;
+ 100              		.loc 1 25 10 view .LVU32
+ 101 0052 6562     		str	r5, [r4, #36]
+ 102              		.loc 1 26 5 is_stmt 1 view .LVU33
+ 103              		.loc 1 26 8 is_stmt 0 view .LVU34
+ 104 0054 2384     		strh	r3, [r4, #32]	@ movhi
+  27:encoder.cpp   **** }
+ 105              		.loc 1 27 1 view .LVU35
+ 106 0056 05B0     		add	sp, sp, #20
+ 107              		.cfi_def_cfa_offset 12
+ 108              		@ sp needed
+ 109 0058 30BD     		pop	{r4, r5, pc}
+ 110              	.LVL5:
+ 111              	.L5:
+ 112              		.loc 1 27 1 view .LVU36
+ 113 005a 00BF     		.align	2
+ 114              	.L4:
+ 115 005c 00000000 		.word	0
+ 116              		.cfi_endproc
+ 117              	.LFE618:
+ 119              		.section	.text._ZN6chompi13ChompiEncoder8DebounceEv,"ax",%progbits
+ 120              		.align	1
+ 121              		.p2align 2,,3
+ 122              		.global	_ZN6chompi13ChompiEncoder8DebounceEv
+ 123              		.syntax unified
+ 124              		.thumb
+ 125              		.thumb_func
+ 127              	_ZN6chompi13ChompiEncoder8DebounceEv:
+ 128              	.LVL6:
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 4
+
+
+ 129              	.LFB619:
+  28:encoder.cpp   **** 
+  29:encoder.cpp   **** // Bitwise shifts in new reading of pins so that pin needs to consistently
+  30:encoder.cpp   **** // read one way or the other for a few samples before being treated as a state change
+  31:encoder.cpp   **** // this rejects noise/switch bouncing.
+  32:encoder.cpp   **** void ChompiEncoder::Debounce()
+  33:encoder.cpp   **** {
+ 130              		.loc 1 33 1 is_stmt 1 view -0
+ 131              		.cfi_startproc
+ 132              		@ args = 0, pretend = 0, frame = 0
+ 133              		@ frame_needed = 0, uses_anonymous_args = 0
+  34:encoder.cpp   ****     // update no faster than 1kHz
+  35:encoder.cpp   ****     uint32_t now = daisy::System::GetNow();
+ 134              		.loc 1 35 5 view .LVU38
+  33:encoder.cpp   ****     // update no faster than 1kHz
+ 135              		.loc 1 33 1 is_stmt 0 view .LVU39
+ 136 0000 F8B5     		push	{r3, r4, r5, r6, r7, lr}
+ 137              		.cfi_def_cfa_offset 24
+ 138              		.cfi_offset 3, -24
+ 139              		.cfi_offset 4, -20
+ 140              		.cfi_offset 5, -16
+ 141              		.cfi_offset 6, -12
+ 142              		.cfi_offset 7, -8
+ 143              		.cfi_offset 14, -4
+  33:encoder.cpp   ****     // update no faster than 1kHz
+ 144              		.loc 1 33 1 view .LVU40
+ 145 0002 0446     		mov	r4, r0
+ 146              		.loc 1 35 41 view .LVU41
+ 147 0004 FFF7FEFF 		bl	_ZN5daisy6System6GetNowEv
+ 148              	.LVL7:
+  36:encoder.cpp   ****     updated_     = false;
+ 149              		.loc 1 36 18 view .LVU42
+ 150 0008 0026     		movs	r6, #0
+  37:encoder.cpp   **** 
+  38:encoder.cpp   ****     if(now - last_update_ >= 1)
+ 151              		.loc 1 38 5 view .LVU43
+ 152 000a 2368     		ldr	r3, [r4]
+  36:encoder.cpp   ****     updated_     = false;
+ 153              		.loc 1 36 18 view .LVU44
+ 154 000c 2671     		strb	r6, [r4, #4]
+ 155              	.LVL8:
+  36:encoder.cpp   ****     updated_     = false;
+ 156              		.loc 1 36 5 is_stmt 1 view .LVU45
+ 157              		.loc 1 38 5 view .LVU46
+ 158 000e 8342     		cmp	r3, r0
+ 159 0010 05D1     		bne	.L18
+ 160              	.LVL9:
+ 161              	.L8:
+  39:encoder.cpp   ****     {
+  40:encoder.cpp   ****         last_update_ = now;
+  41:encoder.cpp   ****         updated_     = true;
+  42:encoder.cpp   **** 
+  43:encoder.cpp   ****         // Shift Button states to debounce
+  44:encoder.cpp   ****         a_ = (a_ << 1) | dsy_gpio_read(&hw_a_);
+  45:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+  46:encoder.cpp   **** 
+  47:encoder.cpp   ****         // infer increment direction
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 5
+
+
+  48:encoder.cpp   ****         inc_ = 0; // reset inc_ first
+  49:encoder.cpp   ****         if((a_ & 0x03) == 0x02 && (b_ & 0x03) == 0x00)
+  50:encoder.cpp   ****         {
+  51:encoder.cpp   ****             inc_ = 1;
+  52:encoder.cpp   ****         }
+  53:encoder.cpp   ****         else if((b_ & 0x03) == 0x02 && (a_ & 0x03) == 0x00)
+  54:encoder.cpp   ****         {
+  55:encoder.cpp   ****             inc_ = -1;
+  56:encoder.cpp   ****         }
+  57:encoder.cpp   ****     }
+  58:encoder.cpp   **** 
+  59:encoder.cpp   ****     // Debounce built-in switch
+  60:encoder.cpp   ****     sw_.Debounce();
+ 162              		.loc 1 60 5 view .LVU47
+ 163              		.loc 1 60 17 is_stmt 0 view .LVU48
+ 164 0012 04F10800 		add	r0, r4, #8
+  61:encoder.cpp   **** }
+ 165              		.loc 1 61 1 view .LVU49
+ 166 0016 BDE8F840 		pop	{r3, r4, r5, r6, r7, lr}
+ 167              		.cfi_remember_state
+ 168              		.cfi_restore 14
+ 169              		.cfi_restore 7
+ 170              		.cfi_restore 6
+ 171              		.cfi_restore 5
+ 172              		.cfi_restore 4
+ 173              		.cfi_restore 3
+ 174              		.cfi_def_cfa_offset 0
+ 175              	.LVL10:
+  60:encoder.cpp   **** }
+ 176              		.loc 1 60 17 view .LVU50
+ 177 001a FFF7FEBF 		b	_ZN5daisy6Switch8DebounceEv
+ 178              	.LVL11:
+ 179              	.L18:
+ 180              		.cfi_restore_state
+  40:encoder.cpp   ****         updated_     = true;
+ 181              		.loc 1 40 9 is_stmt 1 view .LVU51
+  41:encoder.cpp   **** 
+ 182              		.loc 1 41 22 is_stmt 0 view .LVU52
+ 183 001e 0127     		movs	r7, #1
+  44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+ 184              		.loc 1 44 15 view .LVU53
+ 185 0020 94F82050 		ldrb	r5, [r4, #32]	@ zero_extendqisi2
+  40:encoder.cpp   ****         updated_     = true;
+ 186              		.loc 1 40 22 view .LVU54
+ 187 0024 2060     		str	r0, [r4]
+  41:encoder.cpp   **** 
+ 188              		.loc 1 41 9 is_stmt 1 view .LVU55
+  44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+ 189              		.loc 1 44 39 is_stmt 0 view .LVU56
+ 190 0026 04F11800 		add	r0, r4, #24
+ 191              	.LVL12:
+  44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+ 192              		.loc 1 44 18 view .LVU57
+ 193 002a BD40     		lsls	r5, r5, r7
+  41:encoder.cpp   **** 
+ 194              		.loc 1 41 22 view .LVU58
+ 195 002c 2771     		strb	r7, [r4, #4]
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 6
+
+
+  44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+ 196              		.loc 1 44 9 is_stmt 1 view .LVU59
+  44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+ 197              		.loc 1 44 39 is_stmt 0 view .LVU60
+ 198 002e FFF7FEFF 		bl	dsy_gpio_read
+ 199              	.LVL13:
+  44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+ 200              		.loc 1 44 24 view .LVU61
+ 201 0032 6DB2     		sxtb	r5, r5
+ 202 0034 2843     		orrs	r0, r0, r5
+  45:encoder.cpp   **** 
+ 203              		.loc 1 45 15 view .LVU62
+ 204 0036 94F82150 		ldrb	r5, [r4, #33]	@ zero_extendqisi2
+  45:encoder.cpp   **** 
+ 205              		.loc 1 45 18 view .LVU63
+ 206 003a BD40     		lsls	r5, r5, r7
+  44:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
+ 207              		.loc 1 44 12 view .LVU64
+ 208 003c 84F82000 		strb	r0, [r4, #32]
+  45:encoder.cpp   **** 
+ 209              		.loc 1 45 9 is_stmt 1 view .LVU65
+  45:encoder.cpp   **** 
+ 210              		.loc 1 45 39 is_stmt 0 view .LVU66
+ 211 0040 04F11C00 		add	r0, r4, #28
+ 212 0044 FFF7FEFF 		bl	dsy_gpio_read
+ 213              	.LVL14:
+ 214 0048 94F82030 		ldrb	r3, [r4, #32]	@ zero_extendqisi2
+  45:encoder.cpp   **** 
+ 215              		.loc 1 45 24 view .LVU67
+ 216 004c 6DB2     		sxtb	r5, r5
+  48:encoder.cpp   ****         if((a_ & 0x03) == 0x02 && (b_ & 0x03) == 0x00)
+ 217              		.loc 1 48 14 view .LVU68
+ 218 004e 6662     		str	r6, [r4, #36]
+ 219 0050 03F00303 		and	r3, r3, #3
+  45:encoder.cpp   **** 
+ 220              		.loc 1 45 24 view .LVU69
+ 221 0054 2843     		orrs	r0, r0, r5
+  49:encoder.cpp   ****         {
+ 222              		.loc 1 49 9 view .LVU70
+ 223 0056 022B     		cmp	r3, #2
+  45:encoder.cpp   **** 
+ 224              		.loc 1 45 24 view .LVU71
+ 225 0058 C0B2     		uxtb	r0, r0
+  45:encoder.cpp   **** 
+ 226              		.loc 1 45 12 view .LVU72
+ 227 005a 84F82100 		strb	r0, [r4, #33]
+  48:encoder.cpp   ****         if((a_ & 0x03) == 0x02 && (b_ & 0x03) == 0x00)
+ 228              		.loc 1 48 9 is_stmt 1 view .LVU73
+  49:encoder.cpp   ****         {
+ 229              		.loc 1 49 9 view .LVU74
+ 230 005e 09D0     		beq	.L19
+  53:encoder.cpp   ****         {
+ 231              		.loc 1 53 14 view .LVU75
+ 232 0060 00F00300 		and	r0, r0, #3
+  53:encoder.cpp   ****         {
+ 233              		.loc 1 53 37 is_stmt 0 view .LVU76
+ 234 0064 0228     		cmp	r0, #2
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 7
+
+
+ 235 0066 D4D1     		bne	.L8
+ 236 0068 002B     		cmp	r3, #0
+ 237 006a D2D1     		bne	.L8
+  55:encoder.cpp   ****         }
+ 238              		.loc 1 55 13 is_stmt 1 view .LVU77
+  55:encoder.cpp   ****         }
+ 239              		.loc 1 55 18 is_stmt 0 view .LVU78
+ 240 006c 4FF0FF33 		mov	r3, #-1
+ 241 0070 6362     		str	r3, [r4, #36]
+ 242 0072 CEE7     		b	.L8
+ 243              	.L19:
+  49:encoder.cpp   ****         {
+ 244              		.loc 1 49 32 discriminator 1 view .LVU79
+ 245 0074 8307     		lsls	r3, r0, #30
+ 246 0076 CCD1     		bne	.L8
+  51:encoder.cpp   ****         }
+ 247              		.loc 1 51 13 is_stmt 1 view .LVU80
+  51:encoder.cpp   ****         }
+ 248              		.loc 1 51 18 is_stmt 0 view .LVU81
+ 249 0078 6762     		str	r7, [r4, #36]
+ 250 007a CAE7     		b	.L8
+ 251              		.cfi_endproc
+ 252              	.LFE619:
+ 254              		.section	.text._ZN6chompi13ChompiEncoder8DebounceEbb,"ax",%progbits
+ 255              		.align	1
+ 256              		.p2align 2,,3
+ 257              		.global	_ZN6chompi13ChompiEncoder8DebounceEbb
+ 258              		.syntax unified
+ 259              		.thumb
+ 260              		.thumb_func
+ 262              	_ZN6chompi13ChompiEncoder8DebounceEbb:
+ 263              	.LVL15:
+ 264              	.LFB620:
+  62:encoder.cpp   **** 
+  63:encoder.cpp   **** void ChompiEncoder::Debounce(bool a_state, bool b_state)
+  64:encoder.cpp   **** {
+ 265              		.loc 1 64 1 is_stmt 1 view -0
+ 266              		.cfi_startproc
+ 267              		@ args = 0, pretend = 0, frame = 0
+ 268              		@ frame_needed = 0, uses_anonymous_args = 0
+  65:encoder.cpp   ****     
+  66:encoder.cpp   ****     // update no faster than 1kHz
+  67:encoder.cpp   ****     uint32_t now = daisy::System::GetNow();
+ 269              		.loc 1 67 5 view .LVU83
+  64:encoder.cpp   ****     
+ 270              		.loc 1 64 1 is_stmt 0 view .LVU84
+ 271 0000 70B5     		push	{r4, r5, r6, lr}
+ 272              		.cfi_def_cfa_offset 16
+ 273              		.cfi_offset 4, -16
+ 274              		.cfi_offset 5, -12
+ 275              		.cfi_offset 6, -8
+ 276              		.cfi_offset 14, -4
+  64:encoder.cpp   ****     
+ 277              		.loc 1 64 1 view .LVU85
+ 278 0002 0446     		mov	r4, r0
+ 279 0004 1546     		mov	r5, r2
+ 280 0006 0E46     		mov	r6, r1
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 8
+
+
+ 281              		.loc 1 67 41 view .LVU86
+ 282 0008 FFF7FEFF 		bl	_ZN5daisy6System6GetNowEv
+ 283              	.LVL16:
+  68:encoder.cpp   ****     updated_     = false;
+  69:encoder.cpp   **** 
+  70:encoder.cpp   ****     if(now - last_update_ >= 1)
+ 284              		.loc 1 70 5 view .LVU87
+ 285 000c 2268     		ldr	r2, [r4]
+  68:encoder.cpp   ****     updated_     = false;
+ 286              		.loc 1 68 18 view .LVU88
+ 287 000e 0023     		movs	r3, #0
+ 288              	.LVL17:
+  68:encoder.cpp   ****     updated_     = false;
+ 289              		.loc 1 68 5 is_stmt 1 view .LVU89
+ 290              		.loc 1 70 5 is_stmt 0 view .LVU90
+ 291 0010 8242     		cmp	r2, r0
+  68:encoder.cpp   ****     updated_     = false;
+ 292              		.loc 1 68 18 view .LVU91
+ 293 0012 2371     		strb	r3, [r4, #4]
+ 294              		.loc 1 70 5 is_stmt 1 view .LVU92
+ 295 0014 19D0     		beq	.L20
+  71:encoder.cpp   ****     {
+  72:encoder.cpp   ****         last_update_ = now;
+ 296              		.loc 1 72 9 view .LVU93
+  73:encoder.cpp   ****         updated_     = true;
+  74:encoder.cpp   **** 
+  75:encoder.cpp   ****         // Shift Button states to debounce
+  76:encoder.cpp   ****         a_ = (a_ << 1) | a_state;
+ 297              		.loc 1 76 15 is_stmt 0 view .LVU94
+ 298 0016 94F82010 		ldrb	r1, [r4, #32]	@ zero_extendqisi2
+  77:encoder.cpp   ****         b_ = (b_ << 1) | b_state;
+ 299              		.loc 1 77 15 view .LVU95
+ 300 001a 94F82120 		ldrb	r2, [r4, #33]	@ zero_extendqisi2
+  76:encoder.cpp   ****         b_ = (b_ << 1) | b_state;
+ 301              		.loc 1 76 24 view .LVU96
+ 302 001e 46EA4101 		orr	r1, r6, r1, lsl #1
+  72:encoder.cpp   ****         updated_     = true;
+ 303              		.loc 1 72 22 view .LVU97
+ 304 0022 2060     		str	r0, [r4]
+  73:encoder.cpp   **** 
+ 305              		.loc 1 73 9 is_stmt 1 view .LVU98
+ 306              		.loc 1 77 24 is_stmt 0 view .LVU99
+ 307 0024 45EA4202 		orr	r2, r5, r2, lsl #1
+  78:encoder.cpp   **** 
+  79:encoder.cpp   ****         // infer increment direction
+  80:encoder.cpp   ****         inc_ = 0; // reset inc_ first
+ 308              		.loc 1 80 14 view .LVU100
+ 309 0028 6362     		str	r3, [r4, #36]
+  76:encoder.cpp   ****         b_ = (b_ << 1) | b_state;
+ 310              		.loc 1 76 24 view .LVU101
+ 311 002a C9B2     		uxtb	r1, r1
+  73:encoder.cpp   **** 
+ 312              		.loc 1 73 22 view .LVU102
+ 313 002c 0123     		movs	r3, #1
+  77:encoder.cpp   **** 
+ 314              		.loc 1 77 24 view .LVU103
+ 315 002e D2B2     		uxtb	r2, r2
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 9
+
+
+  81:encoder.cpp   ****         if((a_ & 0x07) == 0x04 && (b_ & 0x03) == 0x00)
+ 316              		.loc 1 81 9 view .LVU104
+ 317 0030 01F00700 		and	r0, r1, #7
+ 318              	.LVL18:
+  73:encoder.cpp   **** 
+ 319              		.loc 1 73 22 view .LVU105
+ 320 0034 2371     		strb	r3, [r4, #4]
+  76:encoder.cpp   ****         b_ = (b_ << 1) | b_state;
+ 321              		.loc 1 76 9 is_stmt 1 view .LVU106
+  76:encoder.cpp   ****         b_ = (b_ << 1) | b_state;
+ 322              		.loc 1 76 12 is_stmt 0 view .LVU107
+ 323 0036 84F82010 		strb	r1, [r4, #32]
+  77:encoder.cpp   **** 
+ 324              		.loc 1 77 9 is_stmt 1 view .LVU108
+ 325              		.loc 1 81 9 is_stmt 0 view .LVU109
+ 326 003a 0428     		cmp	r0, #4
+  77:encoder.cpp   **** 
+ 327              		.loc 1 77 12 view .LVU110
+ 328 003c 84F82120 		strb	r2, [r4, #33]
+  80:encoder.cpp   ****         if((a_ & 0x07) == 0x04 && (b_ & 0x03) == 0x00)
+ 329              		.loc 1 80 9 is_stmt 1 view .LVU111
+ 330              		.loc 1 81 9 view .LVU112
+ 331 0040 04D0     		beq	.L27
+ 332              	.L23:
+  82:encoder.cpp   ****         {
+  83:encoder.cpp   ****             inc_ = 1;
+  84:encoder.cpp   ****         }
+  85:encoder.cpp   ****         else if((b_ & 0x07) == 0x04 && (a_ & 0x03) == 0x00)
+ 333              		.loc 1 85 14 view .LVU113
+ 334 0042 02F00702 		and	r2, r2, #7
+ 335 0046 042A     		cmp	r2, #4
+ 336 0048 04D0     		beq	.L28
+ 337              	.LVL19:
+ 338              	.L20:
+  86:encoder.cpp   ****         {
+  87:encoder.cpp   ****             inc_ = -1;
+  88:encoder.cpp   ****         }
+  89:encoder.cpp   ****     }
+  90:encoder.cpp   **** 
+  91:encoder.cpp   ****     // Debounce built-in switch
+  92:encoder.cpp   ****     // sw_.Debounce();
+  93:encoder.cpp   **** }
+ 339              		.loc 1 93 1 is_stmt 0 view .LVU114
+ 340 004a 70BD     		pop	{r4, r5, r6, pc}
+ 341              	.LVL20:
+ 342              	.L27:
+  81:encoder.cpp   ****         {
+ 343              		.loc 1 81 32 discriminator 1 view .LVU115
+ 344 004c 9007     		lsls	r0, r2, #30
+ 345 004e F8D1     		bne	.L23
+ 346              	.L26:
+  87:encoder.cpp   ****         }
+ 347              		.loc 1 87 18 view .LVU116
+ 348 0050 6362     		str	r3, [r4, #36]
+ 349              		.loc 1 93 1 view .LVU117
+ 350 0052 70BD     		pop	{r4, r5, r6, pc}
+ 351              	.LVL21:
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 10
+
+
+ 352              	.L28:
+  85:encoder.cpp   ****         {
+ 353              		.loc 1 85 37 discriminator 1 view .LVU118
+ 354 0054 8B07     		lsls	r3, r1, #30
+ 355 0056 F8D1     		bne	.L20
+  87:encoder.cpp   ****         }
+ 356              		.loc 1 87 13 is_stmt 1 view .LVU119
+  87:encoder.cpp   ****         }
+ 357              		.loc 1 87 18 is_stmt 0 view .LVU120
+ 358 0058 4FF0FF33 		mov	r3, #-1
+ 359 005c F8E7     		b	.L26
+ 360              		.cfi_endproc
+ 361              	.LFE620:
+ 363 005e 00BF     		.text
+ 364              	.Letext0:
+ 365              		.file 2 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\machine\\_default_types.h"
+ 366              		.file 3 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\sys\\_stdint.h"
+ 367              		.file 4 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\stdint.h"
+ 368              		.file 5 "c:\\armgnu\\10.3-2021.10\\lib\\gcc\\arm-none-eabi\\10.3.1\\include\\stddef.h"
+ 369              		.file 6 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\c++\\10.3.1\\cmath"
+ 370              		.file 7 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\c++\\10.3.1\\bits\\std_abs.h"
+ 371              		.file 8 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\c++\\10.3.1\\cstdlib"
+ 372              		.file 9 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\c++\\10.3.1\\cstdint"
+ 373              		.file 10 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\c++\\10.3.1\\arm-none-eabi\\thumb\\v7e
+ 374              		.file 11 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\math.h"
+ 375              		.file 12 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\stdlib.h"
+ 376              		.file 13 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\c++\\10.3.1\\math.h"
+ 377              		.file 14 "c:\\armgnu\\10.3-2021.10\\arm-none-eabi\\include\\c++\\10.3.1\\stdlib.h"
+ 378              		.file 15 "../../../chompi-wave/code/libs/libDaisy/src/daisy_core.h"
+ 379              		.file 16 "../../../chompi-wave/code/libs/libDaisy/src/per/tim.h"
+ 380              		.file 17 "../../../chompi-wave/code/libs/libDaisy/src/sys/system.h"
+ 381              		.file 18 "../../../chompi-wave/code/libs/libDaisy/src/hid/switch.h"
+ 382              		.file 19 "../../../chompi-wave/code/libs/libDaisy/src/per/gpio.h"
+ 383              		.file 20 "encoder.h"
+ 384              		.file 21 "<built-in>"
+ARM GAS  C:\msys64\tmp\ccL0Acux.s 			page 11
+
+
+DEFINED SYMBOLS
+                            *ABS*:00000000 encoder.cpp
+C:\msys64\tmp\ccL0Acux.s:19     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 $t
+C:\msys64\tmp\ccL0Acux.s:26     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 _ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f
+C:\msys64\tmp\ccL0Acux.s:115    .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:0000005c $d
+C:\msys64\tmp\ccL0Acux.s:120    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 $t
+C:\msys64\tmp\ccL0Acux.s:127    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 _ZN6chompi13ChompiEncoder8DebounceEv
+C:\msys64\tmp\ccL0Acux.s:255    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 $t
+C:\msys64\tmp\ccL0Acux.s:262    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 _ZN6chompi13ChompiEncoder8DebounceEbb
+
+UNDEFINED SYMBOLS
+_ZN5daisy6System6GetNowEv
+dsy_gpio_init
+_ZN5daisy6Switch4InitE12dsy_gpio_pinf
+_ZN5daisy6Switch8DebounceEv
+dsy_gpio_read
