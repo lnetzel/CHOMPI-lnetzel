@@ -71,13 +71,13 @@ Control behaviour:
 Each of the four pipe encoders shall have two pages, toggled per pipe by pressing that pipe's encoder push-switch:
 
 - **Page 1 (default at boot):** pipe volume (FR-2).
-- **Page 2:** pipe waveform morph. Turning the encoder morphs that pipe's oscillator from sine (step 0, leftmost) through square (step 16, centre) to sawtooth (step 32, rightmost), with a smooth crossfade between adjacent waveforms. The crossfade is smoothstep-eased within each half of the morph so the blend lingers near the pure waveforms (more usable sweet spots, especially near sine). The control range shall have 32 steps, one step per click, no acceleration.
+- **Page 2:** pipe waveform morph. Turning the encoder morphs that pipe's oscillator from sine (step 0, leftmost) to square (step 64, rightmost), with a smooth crossfade between the two waveforms. The crossfade is smoothstep-eased so the blend lingers near the pure waveforms (more usable sweet spots, especially near sine). The control range shall have 64 steps, one step per click, no acceleration.
 
 - Pages are per pipe: each pipe's waveform is adjusted independently, and pipes can have different waveforms.
 - Waveform changes shall apply to sounding notes immediately and without clicks.
 - Waveform settings shall be auto-saved to SD and loaded at boot like pipe levels (FR-0a); the page state itself is not saved and always starts on page 1.
 - While a pipe encoder is on page 2, its knob LED shall be blue (brightness tracking the morph position); on page 1 the knob LED is white as before.
-- While a page-2 encoder is being turned, the white-key value bar shall be blue (leftmost white key = sine, middle = square, rightmost = sawtooth), with the same ~0.5 s timeout as the volume bar.
+- While a page-2 encoder is being turned, the white-key value bar shall be blue (leftmost white key = sine, rightmost = square), with the same ~0.5 s timeout as the volume bar.
 
 ### FR-3 — Default pipe levels
 
@@ -109,6 +109,15 @@ The `ENC_6` encoder shall have two pages, toggled by pressing the `ENC_6` push-s
 - While page 2 is active, the `ENC_6` knob LED shall be red, with brightness tracking the overdrive amount (with a floor so the page stays visible at 0 %).
 - While the overdrive is being turned, the white-key value bar shall be uniformly red (no gradient), with the same ~0.5 s timeout as the volume bar.
 - SHIFT + `ENC_6` remains fine-tune (FR-5a) on both pages.
+
+### FR-4c — Rotary speaker (transport wheel)
+
+The transport wheel (`ENC_5`) shall control the amount of the rotary-speaker simulation (DSP-6):
+
+- Turning right increases the rotary amount from 0 % (step 0, exact bypass) to 100 % (step 32); 32 steps, one step per click, no acceleration.
+- The rotary amount defaults to 0 % at boot and is not saved.
+- The effect runs after the overdrive and before the master volume, turning the mono organ mix into a stereo signal.
+- While the wheel is being turned, the white-key value bar shall be uniformly purple, filling left to right, with the same ~0.5 s timeout as the volume bar.
 
 ### FR-5 — Keyboard input
 
@@ -186,7 +195,7 @@ The instrument shall support **six simultaneous notes**.
 
 ### DSP-1 — Oscillator generation
 
-Each pipe registration uses a per-pipe morphable waveform: sine at morph step 0, square at step 16, sawtooth at step 32, crossfading smoothly for in-between steps (smoothstep-eased per segment so the morph lingers near the pure waveforms). Square and sawtooth shall use anti-aliased (polyBLEP) oscillators so the high registrations do not alias. The implementation should remain structured so that other oscillator waveforms can be added later without redesigning the voice architecture.
+Each pipe registration uses a per-pipe morphable waveform: sine at morph step 0, square at step 64, crossfading smoothly for in-between steps (smoothstep-eased so the morph lingers near the pure waveforms). Square shall use an anti-aliased (polyBLEP) oscillator so the high registrations do not alias. The implementation should remain structured so that other oscillator waveforms can be added later without redesigning the voice architecture.
 
 For a played fundamental frequency `f`, the nominal registration frequencies shall be:
 
@@ -228,14 +237,24 @@ The overdrive is an overdrive-pedal-style saturation stage on the final organ mi
 - Step 0 (0 %) is an exact bypass.
 - The drive amount shall be smoothed so changes do not produce clicks.
 
+### DSP-6 — Rotary speaker
+
+The rotary speaker is a 60s Hammond/Leslie-style mono-to-stereo stage, placed after the overdrive and before the master-volume gain:
+
+- An 800 Hz one-pole crossover splits the mix into a drum band (low) and a horn band (high = input minus low).
+- The horn band runs through a shared modulated delay line read by two virtual mics 180° apart: the delay wobble (±0.4 ms at 100 %) produces the Doppler pitch shift, and a sinusoidal gain locked to the same rotor phase produces the horn's amplitude modulation (depth 45 % at 100 %).
+- The drum band gets a deeper (70 %) soft amplitude throb — one squared-sine pulse per revolution — with no Doppler, and rotates ~13 % slower than the horn (mechanical slip), so the two rotors beat against each other.
+- The amount (0–1, in 32 steps, smoothed) scales all modulation depths and also ramps the rotor speed from a slow chorale-like swirl (2 Hz horn) to the classic fast tremolo (6.8 Hz horn), like a Leslie spinning up.
+- Step 0 (0 %) is an exact bypass (both channels carry the dry mix) and shall cost no CPU.
+
 ## 4. User interaction requirements
 
-- The five encoders shall retain the control assignments specified in FR-2 and FR-4 while the organ instrument is active.
+- The six encoders shall retain the control assignments specified in FR-2, FR-4, FR-4b and FR-4c while the organ instrument is active.
 - Encoder direction shall be consistent: left decreases the relevant level; right increases it.
 - Pipe volume changes shall take effect smoothly without audible clicks.
 - The main volume control shall change loudness without altering the balance between the four registrations.
 - LED feedback (CHOMPI has no display):
-  - While a pipe encoder or the main-volume encoder is being turned, the key LEDs shall show the value as a bar on the white keys only (leftmost white key = 0 %, rightmost white key = 100 %). Volume bars (page-1 pipes and main volume) shall color the lit keys by position: green for the first 50 %, orange 50–75 %, red above 75 %. The page-2 waveform bar is uniformly blue; the overdrive bar is uniformly red. The bar disappears about 0.5 s after the last click.
+  - While a pipe encoder, the main-volume encoder or the transport wheel is being turned, the key LEDs shall show the value as a bar on the white keys only (leftmost white key = 0 %, rightmost white key = 100 %). Volume bars (page-1 pipes and main volume) shall color the lit keys by position: green for the first 50 %, orange 50–75 %, red above 75 %. The page-2 waveform bar is uniformly blue; the overdrive bar is uniformly red; the rotary bar (FR-4c) is uniformly purple. The bar disappears about 0.5 s after the last click.
   - Pipe knob LEDs shall show the pipe's value: white for page 1 (volume), blue for page 2 (waveform morph). The `ENC_6` knob LED follows the position-gradient colors on page 1 (volume) and is red on page 2 (overdrive, FR-4b).
   - Otherwise, key LEDs shall light up for currently held notes.
   - The LOOP key LED shall be solid red while the note latch is active (FR-5d); latched notes' key LEDs stay lit like held notes.
@@ -255,6 +274,7 @@ The overdrive is an overdrive-pedal-style saturation stage on the final organ mi
 | Pipe waveform | Sine (morph step 0) |
 | Encoder page | Page 1 (volume) for all pipes (not saved) |
 | Overdrive | 0 % (step 0, not saved) |
+| Rotary speaker | 0 % (step 0, not saved) |
 
 Saved levels from the SD card (FR-0a) override these defaults at boot.
 
@@ -281,7 +301,6 @@ The following features are potential future extensions, not requirements for the
 - Reverb.
 - Multiple presets/registrations (saving the current levels is in scope, see FR-0a).
 - Independent per-pipe tuning, modulation, or effects.
-- Rotary-speaker simulation.
 
 The initial architecture should avoid unnecessarily preventing these extensions.
 

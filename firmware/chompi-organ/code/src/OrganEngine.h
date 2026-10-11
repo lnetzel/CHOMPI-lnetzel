@@ -3,11 +3,11 @@
  *
  *  Implements FR-1/FR-6 and DSP-1..DSP-3 of chompi-organ- specification.md:
  *  - Pipe ratios 1x / 2x / 2^(19/12)x / 4x with 20 kHz octave foldback
- *  - Per-pipe waveform morph: sine -> square -> sawtooth, 32 steps,
- *    triangle-weight crossfade of three oscillators per pipe (polyBLEP
- *    square/saw keep the high registrations alias-free); a smoothstep
- *    easing on each morph segment keeps the blend lingering near the
- *    pure waveforms, so the first clicks stay in sine territory
+ *  - Per-pipe waveform morph: sine -> square, 64 steps, smoothstep-eased
+ *    crossfade of two oscillators per pipe (polyBLEP square keeps the
+ *    high registrations alias-free); the easing keeps the blend
+ *    lingering near the pure waveforms, so the first clicks stay in
+ *    sine territory
  *  - Free-running oscillators (phase never reset at note-on)
  *  - Fixed 5 ms linear attack/release gate envelope; 5 ms steal fade
  *  - Oldest-first voice stealing; same-note retrigger reuses its voice
@@ -17,10 +17,14 @@
  *    tanh soft clip with level-anchored post gain), placed before the
  *    master gain so the drive character is level-independent; 0% is an
  *    exact bypass (DSP-5)
+ *  - Rotary speaker: 60s Leslie-style mono->stereo stage after the
+ *    overdrive (800 Hz crossover, Doppler horn + AM drum, two virtual
+ *    mics 180 deg apart); 0% is an exact bypass (DSP-6)
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
 #include "daisysp.h"
+#include "RotarySpeaker.h"
 
 namespace chompi
 {
@@ -31,14 +35,14 @@ class OrganEngine
     static constexpr int kNumVoices    = 6;
     static constexpr int kNumPipes     = 4;
     static constexpr int kMaxSteps     = 32;
-    static constexpr int kNumWaveforms = 3;
+    static constexpr int kMaxWaveSteps = 64;
+    static constexpr int kNumWaveforms = 2;
 
     /** Oscillator slot order within each pipe's morph chain. */
     enum Waveform : uint8_t
     {
         kWaveSin = 0,
-        kWaveSqr,
-        kWaveSaw
+        kWaveSqr
     };
 
     /** Pipe frequency ratios: 8', 4', 2 2/3' (equal-tempered), 2' */
@@ -54,9 +58,10 @@ class OrganEngine
     }
     static constexpr float kFoldbackHz     = 20000.f;
     static constexpr float kMixScale       = 1.f / 24.f;
-    static constexpr int   kDefaultStep     = 24;
-    static constexpr int   kDefaultWaveStep = 0; /* sine */
-    static constexpr int   kDefaultDriveStep = 0; /* overdrive off */
+    static constexpr int   kDefaultStep       = 16; /* 50% volume */
+    static constexpr int   kDefaultWaveStep   = 0; /* sine */
+    static constexpr int   kDefaultDriveStep  = 0; /* overdrive off */
+    static constexpr int   kDefaultRotaryStep = 0; /* rotary off */
 
     void Init(float sample_rate)
     {
@@ -86,7 +91,6 @@ class OrganEngine
                 }
                 voice.osc[p][kWaveSin].SetWaveform(daisysp::Oscillator::WAVE_SIN);
                 voice.osc[p][kWaveSqr].SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SQUARE);
-                voice.osc[p][kWaveSaw].SetWaveform(daisysp::Oscillator::WAVE_POLYBLEP_SAW);
             }
         }
 
@@ -105,6 +109,9 @@ class OrganEngine
         drive_ = drive_target_
             = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
 
+        rotary_.Init(sample_rate);
+        rotary_step_ = kDefaultRotaryStep;
+
         for(int n = 0; n < 128; n++)
             note_held_[n] = false;
     }
@@ -122,13 +129,13 @@ class OrganEngine
     int GetPipeStep(int pipe) const { return pipe_steps[pipe]; }
 
     /** Apply one encoder click (or MIDI CC step) to a pipe's waveform morph.
- *      Step 0 = sine, 16 = square, 32 = sawtooth; in-between steps crossfade.
+ *      Step 0 = sine, 64 = square; in-between steps crossfade.
  */
     void SetPipeWaveStep(int pipe, int step)
     {
         if(pipe < 0 || pipe >= kNumPipes)
             return;
-        step = step < 0 ? 0 : (step > kMaxSteps ? kMaxSteps : step);
+        step = step < 0 ? 0 : (step > kMaxWaveSteps ? kMaxWaveSteps : step);
         pipe_wave_steps[pipe]    = static_cast<uint8_t>(step);
         pipe_wave_target_[pipe]  = StepToMorph(step);
     }
@@ -145,6 +152,18 @@ class OrganEngine
     }
 
     int GetDriveStep() const { return drive_step_; }
+
+    /** Apply one encoder click to the rotary-speaker amount (0..kMaxSteps).
+ *      Step 0 is an exact bypass; higher steps deepen the modulation and
+ *      spin the virtual rotors faster (DSP-6). */
+    void SetRotaryStep(int step)
+    {
+        step = step < 0 ? 0 : (step > kMaxSteps ? kMaxSteps : step);
+        rotary_step_ = static_cast<uint8_t>(step);
+        rotary_.SetAmount(static_cast<float>(step) * (1.f / kMaxSteps));
+    }
+
+    int GetRotaryStep() const { return rotary_step_; }
 
     void SetMasterGain(float g)
     {
@@ -254,20 +273,15 @@ class OrganEngine
                 daisysp::fonepole(pipe_gain_[p], pipe_gain_target_[p], .001f);
                 daisysp::fonepole(pipe_wave_[p], pipe_wave_target_[p], .001f);
 
-                /* Triangle morph weights over morph x in 0..2:
-                 * sine fades out 0->1, saw fades in 1->2, square peaks at 1.
-                 * Each segment's coordinate runs through MorphEase
+                /* Morph weights over morph x in 0..1: sine fades out as
+                 * square fades in. The coordinate runs through MorphEase
                  * (smoothstep) first, so the blend lingers near the pure
                  * waveforms: the first clicks stay in sine territory and
                  * each pipe keeps more playable sweet spots. The weights
-                 * still sum to 1, so loudness stays flat across the sweep. */
-                const float x    = pipe_wave_[p] * 2.f;
-                const float seg  = x < 1.f ? x : x - 1.f;
-                const float ease = MorphEase(seg);
-                const float xe   = x < 1.f ? ease : 1.f + ease;
-                wv[p][kWaveSin] = xe < 1.f ? 1.f - xe : 0.f;
-                wv[p][kWaveSaw] = xe > 1.f ? xe - 1.f : 0.f;
-                wv[p][kWaveSqr] = 1.f - wv[p][kWaveSin] - wv[p][kWaveSaw];
+                 * sum to 1, so loudness stays flat across the sweep. */
+                const float ease = MorphEase(pipe_wave_[p]);
+                wv[p][kWaveSin] = 1.f - ease;
+                wv[p][kWaveSqr] = ease;
             }
             daisysp::fonepole(master_gain_, master_gain_target_, .001f);
             daisysp::fonepole(drive_, drive_target_, .001f);
@@ -343,11 +357,19 @@ class OrganEngine
                 const float post = 0.33f / tanhf(0.33f * g);
                 out_sig          = tanhf(g * out_sig) * post;
             }
-            out_sig *= master_gain_;
-            out[0][i] = out_sig; /* headphone L */
-            out[1][i] = out_sig; /* headphone R */
-            out[2][i] = out_sig; /* master L */
-            out[3][i] = out_sig; /* master R */
+            /* Rotary speaker (DSP-6): mono mix -> stereo Leslie, placed
+             * after the overdrive (the drive is the preamp, the Leslie is
+             * the speaker cabinet) and before the master gain so the
+             * volume knob keeps scaling both channels equally. Step 0 is
+             * an exact bypass (both channels = out_sig). */
+            float out_l, out_r;
+            rotary_.Process(out_sig, out_l, out_r);
+            out_l *= master_gain_;
+            out_r *= master_gain_;
+            out[0][i] = out_l; /* headphone L */
+            out[1][i] = out_r; /* headphone R */
+            out[2][i] = out_l; /* master L */
+            out[3][i] = out_r; /* master R */
         }
     }
 
@@ -381,13 +403,13 @@ class OrganEngine
 
     static float StepToMorph(int step)
     {
-        return static_cast<float>(step) / kMaxSteps; /* 0..1 */
+        return static_cast<float>(step) / kMaxWaveSteps; /* 0..1 */
     }
 
-    /** Easing applied within each half of the morph (sine->square and
-     *  square->saw). Smoothstep: flat ends make the blend linger near the
-     *  pure waveforms. For an even longer sine-land use t*t; for less
-     *  easing, blend toward linear: .5f*(t + t*t*(3.f - 2.f*t)). */
+    /** Easing applied across the sine->square morph. Smoothstep: flat
+     *  ends make the blend linger near the pure waveforms. For an even
+     *  longer sine-land use t*t; for less easing, blend toward linear:
+     *  .5f*(t + t*t*(3.f - 2.f*t)). */
     static float MorphEase(float t)
     {
         return t * t * (3.f - 2.f * t);
@@ -441,6 +463,8 @@ class OrganEngine
     float    drive_;
     float    drive_target_;
     uint8_t  drive_step_;
+    RotarySpeaker rotary_;
+    uint8_t  rotary_step_;
     bool     note_held_[128];
 
   public:

@@ -113,7 +113,8 @@ static const uint8_t led_map[40] = {
 /** Pipe registration -> hardware encoder index.
  *  Physical knobs left-to-right are enc[3], enc[0], enc[1], enc[2]
  *  (PCB net names ENC_4, ENC_1, ENC_2, ENC_3); enc[4] is the transport
- *  wheel (ENC_5, unused) and enc[5] (ENC_6) is master volume. */
+ *  wheel (ENC_5, rotary-speaker amount) and enc[5] (ENC_6) is master
+ *  volume. */
 static const int pipe_encoder[OrganEngine::kNumPipes] = {3, 0, 1, 2};
 static const int kVolEnc = 5; /* ENC_6 */
 
@@ -128,13 +129,15 @@ enum BarKind
 {
     kBarVolume, /**< green/orange/red position gradient */
     kBarWave,   /**< uniformly blue: waveform morph bar */
-    kBarDrive   /**< uniformly red: overdrive bar */
+    kBarDrive,  /**< uniformly red: overdrive bar */
+    kBarRotary  /**< uniformly purple: rotary-speaker bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
  *  (page-1 pipes + master volume) run green for the first 50% of keys,
  *  orange 50-75%, red above 75%. The page-2 waveform bar (kBarWave)
- *  is uniformly blue; the overdrive bar (kBarDrive) is uniformly red. */
+ *  is uniformly blue; the overdrive bar (kBarDrive) is uniformly red;
+ *  the rotary bar (kBarRotary) is uniformly purple. */
 static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 {
     if(kind == kBarWave)
@@ -149,6 +152,13 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
         r = 1.f;
         g = 0.f;
         b = 0.f; /* red: the whole overdrive bar, no gradient */
+        return;
+    }
+    if(kind == kBarRotary)
+    {
+        r = .55f;
+        g = 0.f;
+        b = 1.f; /* purple: the whole rotary bar */
         return;
     }
     r = 0.f;
@@ -171,6 +181,8 @@ static volatile int      bar_pipe_  = -1;     /* pipe/volume bar showing */
 static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = waveform/drive */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
+static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: rotary */
+static const int         kWheelEnc  = 4; /* enc[4]: transport wheel (ENC_5) */
 static volatile bool wave_page_[OrganEngine::kNumPipes]; /* per-pipe encoder page */
 static volatile bool vol_drive_page_ = false; /* ENC_6 page: 0 = volume, 1 = overdrive */
 
@@ -367,7 +379,15 @@ static void PollControls()
                 bar_until_ = System::GetNow() + 500;
             }
         }
-        else if(i != 4) /* enc[4] (transport wheel, ENC_5) has no function */
+        else if(i == kWheelEnc)
+        {
+            /* transport wheel (ENC_5): rotary-speaker amount, 32 steps */
+            engine.SetRotaryStep(engine.GetRotaryStep() + delta);
+            bar_pipe_  = kRotaryBar;
+            bar_page_  = 0;
+            bar_until_ = System::GetNow() + 500;
+        }
+        else
         {
             for(int p = 0; p < OrganEngine::kNumPipes; p++)
             {
@@ -421,7 +441,8 @@ static void UpdateLeds()
         /* value bar spans the 15 white keys only: leftmost white = 0%,
          * rightmost white = 100%. Volume bars (page-1 pipes + master) use
          * the green/orange/red position gradient; the page-2 waveform bar
-         * is uniformly blue and the overdrive bar is uniformly red. */
+         * is uniformly blue, the overdrive bar is uniformly red and the
+         * rotary bar is uniformly purple. */
         int    lit;
         BarKind kind = kBarVolume;
         if(p == kVolBar)
@@ -439,10 +460,17 @@ static void UpdateLeds()
                                        + .5f);
             }
         }
+        else if(p == kRotaryBar)
+        {
+            /* transport wheel: rotary-speaker amount */
+            lit  = (engine.GetRotaryStep() * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxSteps;
+            kind = kBarRotary;
+        }
         else if(bar_page_ == 1)
         {
-            lit  = (engine.GetPipeWaveStep(p) * kNumWhiteKeys + 16)
-                   / OrganEngine::kMaxSteps;
+            lit  = (engine.GetPipeWaveStep(p) * kNumWhiteKeys + 32)
+                   / OrganEngine::kMaxWaveSteps;
             kind = kBarWave;
         }
         else
@@ -492,7 +520,7 @@ static void UpdateLeds()
         {
             const float s = .2f
                             + .8f * engine.GetPipeWaveStep(p)
-                                  * (1.f / OrganEngine::kMaxSteps);
+                                  * (1.f / OrganEngine::kMaxWaveSteps);
             SetPthLedFloat(p + 1, 0.f, 0.f, s);
         }
         else

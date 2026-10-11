@@ -69,13 +69,13 @@ class OrganMidi
                 {
                     const uint8_t cc  = event.data[0];
                     const uint8_t val = event.data[1];
-                    /* 0-127 -> 0-32, rounded */
-                    const int step = (static_cast<int>(val)
-                                          * chompi::OrganEngine::kMaxSteps
-                                      + 63)
-                                     / 127;
                     if(cc >= kPipeCcBase && cc < kPipeCcBase + chompi::OrganEngine::kNumPipes)
                     {
+                        /* 0-127 -> 0-32, rounded */
+                        const int step = (static_cast<int>(val)
+                                              * chompi::OrganEngine::kMaxSteps
+                                          + 63)
+                                         / 127;
                         engine_->SetPipeStep(cc - kPipeCcBase, step);
                         if(cc_level_callback_)
                             cc_level_callback_(cc - kPipeCcBase, 0);
@@ -83,6 +83,11 @@ class OrganMidi
                     else if(cc >= kWaveCcBase
                             && cc < kWaveCcBase + chompi::OrganEngine::kNumPipes)
                     {
+                        /* 0-127 -> 0-64, rounded */
+                        const int step = (static_cast<int>(val)
+                                              * chompi::OrganEngine::kMaxWaveSteps
+                                          + 63)
+                                         / 127;
                         engine_->SetPipeWaveStep(cc - kWaveCcBase, step);
                         if(cc_level_callback_)
                             cc_level_callback_(cc - kWaveCcBase, 1);
@@ -125,12 +130,12 @@ class OrganMidi
 
     void SendPipeCC(int pipe, int step)
     {
-        SendStepCC(kPipeCcBase + pipe, step);
+        SendStepCC(kPipeCcBase + pipe, step, chompi::OrganEngine::kMaxSteps);
     }
 
     void SendWaveCC(int pipe, int step)
     {
-        SendStepCC(kWaveCcBase + pipe, step);
+        SendStepCC(kWaveCcBase + pipe, step, chompi::OrganEngine::kMaxWaveSteps);
     }
 
     /** Optional hook so the UI can show the level bar on CC changes.
@@ -141,11 +146,10 @@ class OrganMidi
     }
 
   private:
-    void SendStepCC(int cc, int step)
+    void SendStepCC(int cc, int step, int max_steps)
     {
         const uint8_t val = static_cast<uint8_t>(
-            (step * 127 + chompi::OrganEngine::kMaxSteps / 2)
-            / chompi::OrganEngine::kMaxSteps);
+            (step * 127 + max_steps / 2) / max_steps);
         uint8_t buf[3] = {static_cast<uint8_t>(0xB0 | kChannel),
                           static_cast<uint8_t>(cc),
                           val};
