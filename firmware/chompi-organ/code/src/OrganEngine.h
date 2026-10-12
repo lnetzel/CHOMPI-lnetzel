@@ -14,12 +14,15 @@
  *  - Oldest-first voice stealing; same-note retrigger reuses its voice
  *  - Fixed 1/24 output scale so 6 voices x 4 pipes cannot clip
  *  - Pipe levels in 32 steps, gain = (step/32)^2, smoothed per sample
- *  - Overdrive: 32-step overdrive-pedal stage on the mix (pre-gain into a
- *    tanh soft clip with level-anchored post gain), placed before the
- *    master gain so the drive character is level-independent; 0% is an
- *    exact bypass (DSP-5)
+ *  - Distortion: 32-step selectable-character saturation stage on the
+ *    mix (Distortion.h), placed before the master gain so the drive
+ *    character is level-independent; 0% is an exact bypass (DSP-5).
+ *    Three types - Existing (the original tanh overdrive), Warm and
+ *    Fuzz - selected by SHIFT + volume-encoder turn on page 2 with a
+ *    ~10 ms click-free crossfade; the type boots to Existing and is
+ *    not saved (FR-4b)
  *  - Rotary speaker: 60s Leslie-style mono->stereo stage after the
- *    overdrive (800 Hz crossover, Doppler horn + AM drum, two virtual
+ *    distortion (800 Hz crossover, Doppler horn + AM drum, two virtual
  *    mics 180 deg apart); 0% is an exact bypass (DSP-6)
  *  - Plate reverb: compact vintage-1960s-inspired plate after the
  *    rotary (PlateReverb.h; Griesinger/Dattorro tank adapted from
@@ -32,6 +35,7 @@
  */
 #pragma once
 #include "daisysp.h"
+#include "Distortion.h"
 #include "RotarySpeaker.h"
 #include "TonewheelCharacter.h"
 #include "PlateReverb.h"
@@ -114,8 +118,8 @@ class OrganEngine
         drive_step_ = kDefaultDriveStep;
         drive_ = drive_target_
             = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
-        drive_g_    = 1.f;
-        drive_post_ = 0.33f / tanhf(0.33f);
+        distortion_.Init(sample_rate);
+        distortion_.SetType(Distortion::kExisting); /* boot default (FR-4b) */
 
         rotary_.Init(sample_rate);
         SetRotaryStep(kDefaultRotaryStep);
@@ -164,6 +168,13 @@ class OrganEngine
     }
 
     int GetDriveStep() const { return drive_step_; }
+
+    /** Select the distortion type (Distortion::kExisting/kWarm/kFuzz,
+ *      clamped, no wrap). Never changes the amount, tuning or note
+ *      state; the ~10 ms crossfade is click-free. Boots as Existing. */
+    void SetDriveType(int type) { distortion_.SetType(type); }
+
+    int GetDriveType() const { return distortion_.GetType(); }
 
     /** Apply one encoder click to the rotary-speaker amount (0..kMaxSteps).
  *      Step 0 is an exact bypass; higher steps deepen the modulation and
@@ -315,11 +326,11 @@ class OrganEngine
     /** Called once per audio block, before Process(). */
     void Prepare()
     {
-        /* B4: overdrive pre/post gain only depend on the drive target, so
-         * compute them once per block instead of a tanhf + divide per
-         * sample. drive_ still slews per sample for a click-free bypass. */
-        drive_g_    = 1.f + drive_target_ * drive_target_ * 63.f;
-        drive_post_ = 0.33f / tanhf(0.33f * drive_g_);
+        /* B4: the distortion gains/normalization only depend on the
+         * drive target, so compute them once per block instead of a
+         * tanhf + divide per sample. drive_ still slews per sample for
+         * a click-free bypass. */
+        distortion_.PrepareBlock(drive_target_);
 
         if(freqs_dirty_)
         {
@@ -404,23 +415,17 @@ class OrganEngine
                 mix += sig * voice.env * voice.velocity;
             }
 
-            /* Overdrive (DSP-5): overdrive-pedal style — quadratic-mapped
-             * pre-gain (1..64x) into a tanh soft clipper, fully wet (no dry
-             * blend, so harmonics are always audible above 0%). Post gain
-             * anchors a 1/3-full-scale input to the same output level, so
-             * turning the knob up adds crunch/compression instead of just
-             * loudness; step 0 is an exact bypass. Runs before the master
-             * gain so the drive character does not depend on the listening
-             * level. */
-            float out_sig = mix * kMixScale;
-            if(drive_ > 0.f)
-            {
-                /* B4: drive_g_/drive_post_ come from Prepare() (per block) */
-                out_sig = tanhf(drive_g_ * out_sig) * drive_post_;
-            }
+            /* Distortion (DSP-5): selectable-character saturation stage
+             * (Existing/Warm/Fuzz) on the mix. Runs before the master
+             * gain so the drive character does not depend on the
+             * listening level; step 0 is an exact bypass for every type.
+             * The Existing branch keeps the original arithmetic: fully
+             * wet quadratic pre-gain into a tanh soft clip with
+             * level-anchored post gain whenever drive_ > 0. */
+            float out_sig = distortion_.Process(mix * kMixScale, drive_);
             /* Rotary speaker (DSP-6): mono mix -> stereo Leslie, placed
-             * after the overdrive (the drive is the preamp, the Leslie is
-             * the speaker cabinet) and before the master gain so the
+             * after the distortion (the drive is the preamp, the Leslie
+             * is the speaker cabinet) and before the master gain so the
              * volume knob keeps scaling both channels equally. Step 0 is
              * an exact bypass (both channels = out_sig). */
             float out_l, out_r;
@@ -518,7 +523,7 @@ class OrganEngine
     float    master_gain_target_;
     float    drive_;
     float    drive_target_;
-    float    drive_g_, drive_post_; /* per-block overdrive gains (B4) */
+    Distortion distortion_;
     uint8_t  drive_step_;
     RotarySpeaker rotary_;
     uint8_t  rotary_step_;

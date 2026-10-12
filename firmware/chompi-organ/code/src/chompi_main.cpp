@@ -220,6 +220,13 @@ static volatile int vol_page_ = kVolPageMaster; /* ENC_6 page */
  *  SHIFT+turn edits the decay, and the bar shows it instead of the mix. */
 static const int kVolBarDecay = 3;
 
+/** Distortion-type selector overlay (FR-4b): active while SHIFT is held
+ *  on the volume-encoder drive page. Written by PollControls (audio ISR),
+ *  read by UpdateLeds (main loop) - same volatile cross-context
+ *  convention as the bar state above. */
+static volatile bool dist_sel_active_ = false;
+static bool          prev_dist_sel_   = false; /* ISR-only edge tracking */
+
 /* ---- key/encoder edge tracking (audio ISR only) ---- */
 static volatile bool prev_key_[40];
 static uint8_t       active_note_[40];      /* note used at note-on, +1 (0 = none) */
@@ -413,11 +420,20 @@ static void PollControls()
         {
             if(shift_held_)
             {
-                if(vol_page_ == kVolPageReverb)
+                if(vol_page_ == kVolPageDrive)
+                {
+                    /* SHIFT+turn on page 2: select the distortion type
+                     * (Existing -> Warm -> Fuzz), clamped at the ends
+                     * without wrapping (FR-4b). No value bar: the
+                     * selector overlay shows the type while SHIFT is
+                     * held. The amount is not touched. */
+                    engine.SetDriveType(engine.GetDriveType() + delta);
+                }
+                else if(vol_page_ == kVolPageReverb)
                 {
                     /* SHIFT+turn on page 3: plate-reverb decay, 100
-                     * log-spaced steps from 0.5 s to 20 s (fine tune
-                     * stays on pages 1-2) */
+                     * log-spaced steps from 0.2 s to 20 s (fine tune
+                     * stays on page 1) */
                     engine.SetReverbDecayStep(engine.GetReverbDecayStep()
                                               + delta);
                     bar_pipe_  = kVolBar;
@@ -426,7 +442,8 @@ static void PollControls()
                 }
                 else
                 {
-                    engine.AddFineTuneCents(delta); /* SHIFT+ENC_6: fine tune */
+                    /* SHIFT+ENC_6 on page 1: fine tune */
+                    engine.AddFineTuneCents(delta);
                 }
             }
             else if(vol_page_ == kVolPageDrive)
@@ -491,6 +508,20 @@ static void PollControls()
             }
         }
     }
+
+    /* Distortion-type selector overlay state (FR-4b), published after
+     * SHIFT sampling and any page toggles above. On selector exit, re-arm
+     * the drive amount bar for 500 ms - but only when still on the drive
+     * page: a page change already showed the new page's bar, and showing
+     * a stale drive bar on page 1 would be wrong. */
+    dist_sel_active_ = shift_held_ && vol_page_ == kVolPageDrive;
+    if(prev_dist_sel_ && !dist_sel_active_ && vol_page_ == kVolPageDrive)
+    {
+        bar_pipe_  = kVolBar;
+        bar_page_  = kVolPageDrive;
+        bar_until_ = System::GetNow() + 500;
+    }
+    prev_dist_sel_ = dist_sel_active_;
 }
 
 void AudioCallback(AudioHandle::InputBuffer in,
@@ -516,7 +547,25 @@ static void UpdateLeds()
 {
     const uint32_t now = System::GetNow();
 
-    if(bar_pipe_ >= 0 && now < bar_until_)
+    if(dist_sel_active_)
+    {
+        /* Distortion-type selector overlay (FR-4b): highest-priority
+         * keyboard display while SHIFT is held on the drive page,
+         * independent of bar timeouts and other encoder/MIDI bars.
+         * Exactly five red white-keys mark the selected type (Existing
+         * KEY_1-5, Warm KEY_6-10, Fuzz KEY_11-15); every other keyboard
+         * LED is off, including the octave hints. The dedicated
+         * SHIFT/latch and knob LEDs below are unaffected; notes and
+         * octave keys keep working underneath the overlay. */
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        const int t = engine.GetDriveType();
+        const int w0
+            = (t < 0 ? 0 : (t > 2 ? 2 : t)) * 5;
+        for(int w = w0; w < w0 + 5; w++)
+            SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
+    }
+    else if(bar_pipe_ >= 0 && now < bar_until_)
     {
         const int p = bar_pipe_;
         /* value bar spans the 15 white keys only: leftmost white = 0%,

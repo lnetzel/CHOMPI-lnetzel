@@ -2,8 +2,9 @@
 
 Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
-tonewheel-style Character, overdrive, a rotary-speaker stage, and a
-compact vintage-1960s-inspired plate reverb.
+tonewheel-style Character, selectable distortion (Existing/Warm/Fuzz),
+a rotary-speaker stage, and a compact vintage-1960s-inspired plate
+reverb.
 
 ## Controls
 
@@ -40,10 +41,19 @@ bar while turning.
 ### Volume encoder (ENC_6)
 
 Push cycles three pages: master volume (page 1, gradient LED) ->
-overdrive amount (page 2, red LED with brightness floor; 0 is an exact
+distortion amount (page 2, red LED with brightness floor; 0 is an exact
 bypass) -> plate-reverb mix (page 3, blue LED with brightness floor).
 Turning or pressing the encoder shows the current page's white-key value
 bar for 500 ms.
+
+Page 2's distortion has three selectable characters: Existing (the
+original tanh overdrive), Warm (softer asymmetric clipping) and Fuzz
+(aggressive symmetric saturation). SHIFT + turn on page 2 moves Existing
+-> Warm -> Fuzz (clamped at the ends, no wrap); the amount is not
+changed. While SHIFT is held on page 2, exactly five red white-keys show
+the selection (KEY_1-5 Existing, KEY_6-10 Warm, KEY_11-15 Fuzz) and all
+other key LEDs are off; releasing SHIFT restores the amount bar for
+500 ms. The type boots to Existing and is not saved.
 
 Page 3 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
 exact dry and 100% is wet only (a linear complementary crossfade with a
@@ -67,8 +77,8 @@ the master gain).
 The mix and decay boot at 0% / 0.5 s and are kept for the session only
 (no SD-card persistence, no MIDI CC).
 
-SHIFT + turn = fine tune (+/-50 cents) on pages 1-2. Boot default volume
-is 25%.
+SHIFT + turn = fine tune (+/-50 cents) on page 1 only (page 2 selects
+the distortion type, page 3 adjusts decay). Boot default volume is 25%.
 
 ### Keys
 
@@ -94,10 +104,11 @@ Character 0 is unchanged.
 ## Signal flow
 
 sine -> Character shaping (per pipe) -> pipe gain -> voice envelope/
-velocity -> voice mix -> overdrive -> rotary speaker -> plate reverb ->
-master gain -> headphone + master stereo output pairs. Character 0
-exactly bypasses shaping; the clean-sine engine is bit-identical to the
-previous firmware's sine-only sound. Reverb 0% is bit-exact dry.
+velocity -> voice mix -> distortion (Existing/Warm/Fuzz) -> rotary
+speaker -> plate reverb -> master gain -> headphone + master stereo
+output pairs. Character 0 exactly bypasses shaping; the clean-sine
+engine is bit-identical to the previous firmware's sine-only sound.
+Reverb 0% is bit-exact dry.
 
 ## Building
 

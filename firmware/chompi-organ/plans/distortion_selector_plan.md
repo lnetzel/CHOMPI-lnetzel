@@ -1,6 +1,13 @@
 # Selectable ORGAN Distortion Plan
 
-Status: planned, not implemented.
+Status: implemented 2026-10-12. `Distortion.h` (Existing/Warm/Fuzz, 10 ms
+sum-preserving weight crossfade, wet->dry bypass ramps, primed filter
+histories) is integrated in `OrganEngine`; SHIFT + Volume page 2 selects
+the type with the five-red-key overlay in `chompi_main.cpp`; native test
+`code/tests/distortion_test.cpp` syntax-checked with arm-none-eabi-g++
+(no host g++ on this machine — runtime checks not yet run); clean ARM
+build EXIT=0, bin 116,776 B, SRAM_EXEC 49.15%. Spec FR-4b/FR-5a/DSP-5/
+UI-1/defaults and README updated. Hardware verification PENDING.
 
 Add three selectable distortion characters to CHOMPI ORGAN's existing Volume page 2. Keep the normal 32-step amount control and existing tanh sound. SHIFT + Volume rotation selects Existing / Warm / Fuzz; holding SHIFT shows only the selected five white keys red.
 
