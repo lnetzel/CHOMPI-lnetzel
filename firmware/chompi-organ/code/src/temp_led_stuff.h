@@ -227,11 +227,16 @@ namespace chompi
     }
 
     /** Self-healing for the SMT<->PTH DMA chain: if no handoff has happened
-     *  for ~100 ms the chain is dead (LEDs frozen) -> restart it. Call from
-     *  the main loop. */
+     *  for ~200 ms the chain is dead (LEDs frozen) -> restart it. Call from
+     *  the main loop. A3: two consecutive stale checks before acting, and
+     *  the restart runs with only the LED DMA IRQ (DMA2_Stream5) masked -
+     *  never global IRQs - so it can't race EndOfLeds() on libDaisy's
+     *  shared static timhdma/globaltim (which used to let the ISR spin in
+     *  HAL_DMA_Init with a frozen tick and take the audio down with it). */
     void LedChainWatchdog()
     {
         static uint32_t last_count = 0, last_check = 0;
+        static int      stale      = 0;
         const uint32_t now = daisy::System::GetNow();
         if(now - last_check < 100)
             return;
@@ -239,11 +244,18 @@ namespace chompi
         if(led_frame_count != last_count)
         {
             last_count = led_frame_count; /* chain alive */
+            stale      = 0;
             return;
         }
+        if(++stale < 2)
+            return; /* ~200 ms of stall before restarting (A3) */
+        stale = 0;
+        HAL_NVIC_DisableIRQ(DMA2_Stream5_IRQn);
         ledSmtPwm.Start();
         ledSmtPwm.StartDma(output_smt_data, kOutSmtDataSize, EndOfLeds,
                            (void *)&ledSmtPwm);
+        HAL_NVIC_ClearPendingIRQ(DMA2_Stream5_IRQn);
+        HAL_NVIC_EnableIRQ(DMA2_Stream5_IRQn);
     }
 
     // ======== helper functions for color crossfading ========

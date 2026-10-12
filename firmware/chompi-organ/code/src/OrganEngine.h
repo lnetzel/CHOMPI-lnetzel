@@ -108,6 +108,8 @@ class OrganEngine
         drive_step_ = kDefaultDriveStep;
         drive_ = drive_target_
             = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
+        drive_g_    = 1.f;
+        drive_post_ = 0.33f / tanhf(0.33f);
 
         rotary_.Init(sample_rate);
         rotary_step_ = kDefaultRotaryStep;
@@ -189,7 +191,10 @@ class OrganEngine
     {
         note_held_[note & 0x7f] = true;
 
-        /* Retrigger: reuse a voice already playing/releasing this note */
+        /* Retrigger: reuse a voice already playing/releasing this note.
+         * C1: a voice mid-STEAL whose pending note matches is also a
+         * retrigger (it starts this note when its fade ends) - without
+         * this, two voices could end up on the same note. */
         for(int v = 0; v < kNumVoices; v++)
         {
             Voice &voice = voices_[v];
@@ -198,6 +203,11 @@ class OrganEngine
                && voice.note == note)
             {
                 StartVoice(voice, note, velocity);
+                return;
+            }
+            if(voice.state == STEAL && voice.pending_note == note)
+            {
+                voice.pending_vel = velocity;
                 return;
             }
         }
@@ -212,12 +222,24 @@ class OrganEngine
             }
         }
 
-        /* Steal the oldest voice (5 ms fade, then the new note starts) */
-        int oldest = 0;
-        for(int v = 1; v < kNumVoices; v++)
+        /* Steal the oldest voice (5 ms fade, then the new note starts).
+         * C1: prefer voices not already mid-STEAL - stealing one would
+         * silently drop its pending note (that key stays held but
+         * sounds nothing). */
+        int oldest = -1;
+        for(int v = 0; v < kNumVoices; v++)
         {
-            if(voices_[v].age < voices_[oldest].age)
+            if(voices_[v].state != STEAL
+               && (oldest < 0 || voices_[v].age < voices_[oldest].age))
                 oldest = v;
+        }
+        if(oldest < 0) /* all six mid-steal: fall back to oldest overall */
+        {
+            for(int v = 0; v < kNumVoices; v++)
+            {
+                if(oldest < 0 || voices_[v].age < voices_[oldest].age)
+                    oldest = v;
+            }
         }
         Voice &voice      = voices_[oldest];
         voice.pending_note = note;
@@ -251,6 +273,12 @@ class OrganEngine
     /** Called once per audio block, before Process(). */
     void Prepare()
     {
+        /* B4: overdrive pre/post gain only depend on the drive target, so
+         * compute them once per block instead of a tanhf + divide per
+         * sample. drive_ still slews per sample for a click-free bypass. */
+        drive_g_    = 1.f + drive_target_ * drive_target_ * 63.f;
+        drive_post_ = 0.33f / tanhf(0.33f * drive_g_);
+
         if(freqs_dirty_)
         {
             freqs_dirty_ = false;
@@ -353,9 +381,8 @@ class OrganEngine
             float out_sig = mix * kMixScale;
             if(drive_ > 0.f)
             {
-                const float g    = 1.f + drive_ * drive_ * 63.f;
-                const float post = 0.33f / tanhf(0.33f * g);
-                out_sig          = tanhf(g * out_sig) * post;
+                /* B4: drive_g_/drive_post_ come from Prepare() (per block) */
+                out_sig = tanhf(drive_g_ * out_sig) * drive_post_;
             }
             /* Rotary speaker (DSP-6): mono mix -> stereo Leslie, placed
              * after the overdrive (the drive is the preamp, the Leslie is
@@ -462,6 +489,7 @@ class OrganEngine
     float    master_gain_target_;
     float    drive_;
     float    drive_target_;
+    float    drive_g_, drive_post_; /* per-block overdrive gains (B4) */
     uint8_t  drive_step_;
     RotarySpeaker rotary_;
     uint8_t  rotary_step_;

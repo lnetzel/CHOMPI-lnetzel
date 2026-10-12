@@ -12,6 +12,9 @@
 #include "daisysp.h"
 #include "OrganEngine.h"
 #include "MidiHandler.h"
+#ifdef ORGAN_CPU_METER
+#include "util/CpuLoadMeter.h"
+#endif
 
 using namespace daisy;
 using namespace chompi;
@@ -19,6 +22,12 @@ using namespace chompi;
 Hardware    hw;
 OrganEngine engine;
 OrganMidi   midi;
+
+/* B4: debug-build CPU meter (build with ORGAN_CPU_METER=1); peak load
+ * shows on PTH LED 0 (green < 70%, amber 70-85%, red > 85%). */
+#ifdef ORGAN_CPU_METER
+static daisy::CpuLoadMeter cpu_meter;
+#endif
 
 /** SwId index -> MIDI note, copied from chompi-wave's NormalPage.h.
  *  The 25 playable keys are SwId 7..31 (KEY_16, KEY_2..KEY_5, KEY_17..KEY_19,
@@ -198,15 +207,26 @@ static bool     latch_on_   = false;        /* KEY_28 (LOOP) toggles key latch *
 static bool     latched_[40];               /* key released while latch on: note
                                              * keeps sounding until unlatch */
 
-/** MIDI out goes through this queue so DMA transmits only happen in the
- *  main loop, never inside the audio ISR. */
+/** MIDI note on/off goes through this queue so DMA transmits only happen
+ *  in the main loop, never inside the audio ISR. B2: notes only - a
+ *  dropped note-off leaves external gear hanging, so the queue is deep
+ *  and CCs never enter it (they coalesce through the dirty flags below:
+ *  only the latest step per pipe is sent). */
 struct OutMsg
 {
-    uint8_t kind; /* 0 = note on, 1 = note off, 2 = pipe CC, 3 = wave CC */
-    uint8_t a;    /* note or pipe index */
-    uint8_t b;    /* step (CC only) */
+    uint8_t kind; /* 0 = note on, 1 = note off */
+    uint8_t a;    /* note */
+    uint8_t b;    /* unused */
 };
-static FIFO<OutMsg, 64> out_q;
+static FIFO<OutMsg, 256> out_q;
+static volatile uint8_t cc_pipe_step_[OrganEngine::kNumPipes];
+static volatile uint8_t cc_wave_step_[OrganEngine::kNumPipes];
+static volatile bool    cc_pipe_dirty_[OrganEngine::kNumPipes];
+static volatile bool    cc_wave_dirty_[OrganEngine::kNumPipes];
+
+/** A4: incremented by the audio ISR; the IWDG is only refreshed while this
+ *  keeps changing (see MainLoop), so any lockup resets the device. */
+volatile uint32_t audio_ticks = 0;
 
 static void CcLevelCallback(int pipe, int wave_page)
 {
@@ -311,6 +331,15 @@ static void PollControls()
             int n = key_map[swid] + 12 * octave_;
             n              = n < 0 ? 0 : (n > 127 ? 127 : n);
             const uint8_t note = static_cast<uint8_t>(n);
+            /* B3: re-pressing a latched key after an octave change used to
+             * overwrite active_note_ and leak the old note (no NoteOff, no
+             * MIDI note-off): release the old note first. */
+            if(active_note_[swid] != 0 && active_note_[swid] - 1 != note)
+            {
+                const uint8_t old = active_note_[swid] - 1;
+                engine.NoteOff(old);
+                out_q.PushBack({1, old, 0});
+            }
             active_note_[swid] = note + 1;
             latched_[swid]     = false; /* re-press of a latched key retriggers */
             engine.NoteOn(note, 1.f);
@@ -397,19 +426,15 @@ static void PollControls()
                 {
                     engine.SetPipeWaveStep(p,
                                            engine.GetPipeWaveStep(p) + delta);
-                    out_q.PushBack(
-                        {3,
-                         static_cast<uint8_t>(p),
-                         static_cast<uint8_t>(engine.GetPipeWaveStep(p))});
+                    cc_wave_step_[p]  = engine.GetPipeWaveStep(p);
+                    cc_wave_dirty_[p] = true; /* coalesced, sent in MainLoop */
                     bar_page_ = 1;
                 }
                 else
                 {
                     engine.SetPipeStep(p, engine.GetPipeStep(p) + delta);
-                    out_q.PushBack(
-                        {2,
-                         static_cast<uint8_t>(p),
-                         static_cast<uint8_t>(engine.GetPipeStep(p))});
+                    cc_pipe_step_[p]  = engine.GetPipeStep(p);
+                    cc_pipe_dirty_[p] = true; /* coalesced, sent in MainLoop */
                     bar_page_ = 0;
                 }
                 bar_pipe_  = p;
@@ -423,11 +448,18 @@ void AudioCallback(AudioHandle::InputBuffer in,
                    AudioHandle::OutputBuffer out,
                    size_t size)
 {
+    audio_ticks++; /* A4: IWDG liveness proof */
+#ifdef ORGAN_CPU_METER
+    cpu_meter.OnBlockStart();
+#endif
     midi.ProcessMidiIn();
     hw.ProcessAllControls();
     PollControls();
     engine.Prepare();
     engine.Process(out, size); /* audio input ignored */
+#ifdef ORGAN_CPU_METER
+    cpu_meter.OnBlockEnd();
+#endif
 }
 
 /** Key LEDs: level bar while a pipe knob turns, else held notes. */
@@ -492,8 +524,13 @@ static void UpdateLeds()
         bar_pipe_ = -1;
         for(int swid = 7; swid < 32; swid++)
         {
-            /* physical key held (octave-shifted note) or MIDI-held note */
-            const bool on = prev_key_[swid] || engine.IsNoteHeld(key_map[swid]);
+            /* physical key held (octave-shifted note) or MIDI-held note
+             * (C3: compare against the octave-shifted note) */
+            int held_note = key_map[swid] + 12 * octave_;
+            held_note = held_note < 0 ? 0 : (held_note > 127 ? 127 : held_note);
+            const bool on
+                = prev_key_[swid]
+                  || engine.IsNoteHeld(static_cast<uint8_t>(held_note));
             SetSmtLedFloat(led_map[swid], on ? 1.f : 0.f, on ? 1.f : 0.f,
                            on ? 1.f : 0.f);
         }
@@ -562,28 +599,63 @@ static void UpdateLeds()
     /* latch indicator on the LOOP key LED (PTH 8): solid red while latched */
     SetPthLedFloat(8, latch_on_ ? 1.f : 0.f, 0.f, 0.f);
 
+#ifdef ORGAN_CPU_METER
+    /* B4: peak audio CPU load on PTH LED 0 (overrides shift indicator) */
+    const float peak = cpu_meter.GetMaxCpuLoad();
+    if(peak > .85f)
+        SetPthLedFloat(0, 1.f, 0.f, 0.f);
+    else if(peak > .70f)
+        SetPthLedFloat(0, 1.f, .6f, 0.f);
+    else
+        SetPthLedFloat(0, 0.f, 1.f, 0.f);
+#endif
+
     fill_led_data();
 }
 
 uint32_t ledt = 0, batt = 0;
+static uint32_t midi_svc = 0;
 
 void MainLoop(void *data)
 {
-    midi.ProcessMidiOut();
+    /* A4: refresh the IWDG only while the audio ISR keeps running - a
+     * stuck ISR, a stuck main loop, or IRQs left disabled all reset the
+     * device within ~2 s instead of hanging until a power cycle. */
+    static uint32_t wd_audio_ticks = 0;
+    if(audio_ticks != wd_audio_ticks)
+    {
+        wd_audio_ticks = audio_ticks;
+        IWDG1->KR      = 0x0000AAAA;
+    }
 
-    /* drain queued MIDI out messages */
+    /* drain queued MIDI note on/off messages (B2: notes only; CCs below) */
     while(!out_q.IsEmpty())
     {
         const OutMsg msg = out_q.PopFront();
         if(msg.kind == 0)
             midi.SendNoteOn(msg.a);
-        else if(msg.kind == 1)
-            midi.SendNoteOff(msg.a);
-        else if(msg.kind == 2)
-            midi.SendPipeCC(msg.a, msg.b);
         else
-            midi.SendWaveCC(msg.a, msg.b);
+            midi.SendNoteOff(msg.a);
     }
+
+    /* B2: coalesced CCs - only the latest step per pipe goes out */
+    for(int p = 0; p < OrganEngine::kNumPipes; p++)
+    {
+        if(cc_pipe_dirty_[p])
+        {
+            cc_pipe_dirty_[p] = false;
+            midi.SendPipeCC(p, cc_pipe_step_[p]);
+        }
+        if(cc_wave_dirty_[p])
+        {
+            cc_wave_dirty_[p] = false;
+            midi.SendWaveCC(p, cc_wave_step_[p]);
+        }
+    }
+
+    /* A2: kick the DMA queue after draining so a message queued above
+     * leaves in this same loop pass */
+    midi.ProcessMidiOut();
 
     const uint32_t now = System::GetNow();
     if(now - ledt > 16)
@@ -593,8 +665,17 @@ void MainLoop(void *data)
     }
     LedChainWatchdog();
 
+    /* B1: service the MIDI-in listener (UART error recovery) */
+    if(now - midi_svc > 50)
+    {
+        midi_svc = now;
+        midi.ServiceMidiIn();
+    }
+
 #if !NO_BATT
-    if(now - batt > 20)
+    /* B6: 250 ms is plenty for a battery gauge; the I2C calls in here can
+     * block the main loop, so don't run them at 50 Hz */
+    if(now - batt > 250)
     {
         batt = now;
         hw.LowBatteryLockoutCheck();
@@ -661,6 +742,22 @@ int main(void)
     vol_drive_page_ = false;
 
     hw.StartAudio(AudioCallback);
+
+#ifdef ORGAN_CPU_METER
+    cpu_meter.Init(hw.seed.AudioSampleRate(), 24); /* block size, hardware.h */
+#endif
+
+    /* A4: start the independent watchdog (~2 s): LSI ~32 kHz, /64 -> 500 Hz,
+     * 1000 ticks ~ 2 s. Refreshed from MainLoop only while AudioCallback
+     * keeps incrementing audio_ticks, so a stuck ISR, a stuck main loop or
+     * IRQs-left-disabled all reset the device instead of hanging until a
+     * power cycle. The bootloader is unaffected (IWDG is off until here). */
+    IWDG1->KR  = 0x0000CCCC; /* start */
+    IWDG1->KR  = 0x00005555; /* unlock PR/RLR */
+    IWDG1->PR  = 4;          /* prescaler /64 */
+    IWDG1->RLR = 1000;
+    while(IWDG1->SR != 0) {} /* wait for PR/RLR to latch */
+    IWDG1->KR  = 0x0000AAAA; /* first refresh */
 
     /* give USB control, enable AutoDPDM, take USB control (as chompi-wave) */
     hw.usb_sw.Write(false);

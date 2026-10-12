@@ -21,6 +21,8 @@ void ChompiEncoder::Init(dsy_gpio_pin a,
     dsy_gpio_init(&hw_b_);
     // Default Initialization for Switch
     sw_.Init(click);
+    /* C4: enc[5] (volume) has no click pin; Debounce() must not read it */
+    has_click_ = (click.pin != 255);
     // Set initial states, etc.
     inc_ = 0;
     a_ = b_ = 0xff;
@@ -56,8 +58,11 @@ void ChompiEncoder::Debounce()
         }
     }
 
-    // Debounce built-in switch
-    sw_.Debounce();
+    /* C4: skip the switch when the click pin is invalid (enc[5]):
+     * Debounce would read a bogus GPIO and a spurious RisingEdge would
+     * zero the encoder's tracker. */
+    if(has_click_)
+        sw_.Debounce();
 }
 
 void ChompiEncoder::Debounce(bool a_state, bool b_state)

@@ -60,6 +60,7 @@ class ChompiEncoder
   private:
     uint32_t last_update_;
     bool     updated_;
+    bool     has_click_; /* C4: false when Init got an empty click Pin() */
     daisy::Switch   sw_;
     dsy_gpio hw_a_, hw_b_;
     uint8_t  a_, b_;

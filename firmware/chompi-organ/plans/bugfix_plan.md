@@ -1,6 +1,8 @@
 # CHOMPI-Organ Bugfix Plan
 
-Status: **investigation done, nothing fixed yet**. Pick up from "Implementation order" at the bottom.
+Status: **implemented 2026-10-12** — A1-A4, B1-B7, C1/C3/C4/C5/C8 all landed (C2, C6, C7 skipped:
+LED-cosmetic or not worth the churn). Build OK, no new warnings, SRAM_EXEC 46.23% (109,824 B).
+Hardware verification pending — see section 4.
 
 Scope: everything under `firmware/chompi-organ/code/src/` (`chompi_main.cpp`, `OrganEngine.h`,
 `RotarySpeaker.h`, `MidiHandler.h`, `hardware.h`, `temp_led_stuff.h`, `encoder.h/.cpp`), plus the

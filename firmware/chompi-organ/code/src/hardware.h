@@ -6,8 +6,6 @@
 #include "encoder.h"
 #include "temp_led_stuff.h"
 
-#define ENC_5_SW 4 // this one weird switch isn't on the SR
-
 #define NO_BATT false
 
 using namespace daisy;
@@ -279,6 +277,9 @@ namespace chompi
 
                 while(System::GetNow() - shutdown_time_ < 15000)
                 {
+                    /* A4: the main loop is blocked for up to 15 s here;
+                     * keep the watchdog fed (audio keeps running). */
+                    IWDG1->KR = 0x0000AAAA;
                     uint32_t now = System::GetNow();
                     if(now - last_update >= 250)
                     {
@@ -309,8 +310,28 @@ namespace chompi
             while(batt_low_bounce == 0xff && (legacy_cable_bounce == 0xff || iindpm_stat_bounce == 0xff))
             {
                 LedsOff();
-                System::Delay(100);
+                /* B5: IINDPM flickers under load (many voices + bright LEDs
+                 * on a weak USB port), which used to drop the device into
+                 * STOP within 160 ms with no exit but a power cycle.
+                 * Require the condition to hold for 2 s of continuous
+                 * re-reads before sleeping, and keep watching so a
+                 * recovery exits on its own. */
+                const uint32_t cond_start = System::GetNow();
+                while(System::GetNow() - cond_start < 2000)
+                {
+                    IWDG1->KR = 0x0000AAAA; /* A4: main loop blocked here */
+                    System::Delay(100);
+                    BMCPerformCheck();
+                    if(!(batt_low_bounce == 0xff
+                         && (legacy_cable_bounce == 0xff
+                             || iindpm_stat_bounce == 0xff)))
+                        return; // charger recovered: back to normal
+                }
                 HAL_PWR_EnterSTOPMode(PWR_LOWPOWERREGULATOR_ON , PWR_STOPENTRY_WFI);
+                /* A4 note: the IWDG keeps running in STOP and resets the
+                 * device once; the reboot re-enters this loop before the
+                 * IWDG is started, so the device ends up asleep anyway
+                 * (accepted; see bugfix plan A4). */
             }
 
             // check for medium state every 30 seconds (gate lives inside BMCMediumBattCheck now)
@@ -333,7 +354,13 @@ namespace chompi
         {
             #if NO_BATT
                 return;
-            #endif 
+            #endif
+
+            /* B6: never overlap a read that is still in flight - the
+             * TransmitBlocking below spins with no timeout while the I2C
+             * peripheral is busy, which would freeze the main loop. */
+            if(!read_ready)
+                return;
 
             uint16_t address = 0x3F;
 
@@ -342,13 +369,16 @@ namespace chompi
 
             read_ready = false;
             size_t buff_size = 0x06;
-            i2c.ReceiveDma(address | 0B10000000, mp_buff_, buff_size, batteryCallback, this);
+            /* B6: the OR'ed bit was meaningless (libDaisy shifts the
+             * address and HAL masks it); pass the plain address. */
+            i2c.ReceiveDma(address, mp_buff_, buff_size, batteryCallback, this);
         }
 
         // DMA-complete callback for the MP2722 status
         static void batteryCallback(void *context, daisy::I2CHandle::Result result)
         {
             Hardware *self = static_cast<Hardware*>(context);
+            self->read_ready = true; /* B6: release even on error */
             if(result != daisy::I2CHandle::Result::OK)
                 return; // handle error or retry later
 
@@ -383,7 +413,9 @@ namespace chompi
         }
 
         uint8_t mp_buff_[6];
-        bool read_ready = false;
+        /* B6: false while a DMA read is in flight; starts true so the first
+         * MpReadAll() can launch. */
+        bool read_ready = true;
 
         bool GetToggleState()
         {

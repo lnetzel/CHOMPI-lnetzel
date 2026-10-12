@@ -77,10 +77,28 @@ class RotarySpeaker
         const float ham = kHornAmDepth * amount_;
         const float dam = kDrumAmDepth * amount_;
 
-        /* two mics on opposite sides of the cabinet (180 deg apart) */
-        out_l = HornMic(horn_ph_, dop, ham) + low * DrumGain(drum_ph_, dam);
-        out_r = HornMic(horn_ph_ + .5f, dop, ham)
-                + low * DrumGain(drum_ph_ + .5f, dam);
+        /* two mics on opposite sides of the cabinet (180 deg apart):
+         * sin(x + pi) = -sin(x), so one sinf per rotor serves both mics
+         * (B4: 4 sinf/sample -> 2). Phases are kept wrapped in [0,1)
+         * above, so no floorf() is needed here either. */
+        const float hs = sinf(horn_ph_ * kTwoPi);
+        const float ds = sinf(drum_ph_ * kTwoPi);
+
+        /* horn: Doppler delay depth and loudness both follow the phase;
+         * the right mic sees the negated sine */
+        const float hl     = .5f + .5f * hs;
+        const float hr     = 1.f - hl;
+        const float horn_l = HornTap(dop * hl) * (1.f - ham + ham * hl);
+        const float horn_r = HornTap(dop * hr) * (1.f - ham + ham * hr);
+
+        /* drum: squared-sine throb, one soft pulse per revolution */
+        const float pl     = .5f + .5f * ds;
+        const float pr     = 1.f - pl;
+        const float drum_l = low * (1.f - dam + dam * pl * pl);
+        const float drum_r = low * (1.f - dam + dam * pr * pr);
+
+        out_l = horn_l + drum_l;
+        out_r = horn_r + drum_r;
 
         wr_ = (wr_ + 1) & (kDlyLen - 1);
     }
@@ -97,31 +115,18 @@ class RotarySpeaker
     static constexpr float kBaseDlyMs   = 1.f;  /* horn-to-mic distance */
     static constexpr int   kDlyLen      = 256;  /* 5.3 ms @ 48 kHz, pow2 */
 
-    /** One virtual horn mic: Doppler delay tap + AM sharing the phase. */
-    inline float HornMic(float phase, float dop, float am) const
+    /** Horn delay tap: the read position swings +/-dop around the base
+     *  delay with the rotor phase (Doppler pitch shift). dop_offset is
+     *  the per-mic scaled depth (dop * mic sine). */
+    inline float HornTap(float dop_offset) const
     {
-        phase -= floorf(phase);
-        const float s  = sinf(phase * kTwoPi);
-        /* delay swings +/-dop around the base delay (Doppler pitch shift) */
         float rd = static_cast<float>(wr_)
-                   - (kBaseDlyMs * .001f * sample_rate_
-                      + dop * (.5f + .5f * s));
+                   - (kBaseDlyMs * .001f * sample_rate_ + dop_offset);
         while(rd < 0.f)
             rd += static_cast<float>(kDlyLen);
         const int   i0   = static_cast<int>(rd) & (kDlyLen - 1);
         const float frac = rd - floorf(rd);
-        const float tap
-            = dly_[i0] + frac * (dly_[(i0 + 1) & (kDlyLen - 1)] - dly_[i0]);
-        /* loudest when the horn points at the mic */
-        return tap * (1.f - am + am * (.5f + .5f * s));
-    }
-
-    /** Drum rotor: AM throb only, one soft (squared) pulse per revolution. */
-    inline float DrumGain(float phase, float am) const
-    {
-        phase -= floorf(phase);
-        const float p = .5f + .5f * sinf(phase * kTwoPi);
-        return 1.f - am + am * p * p;
+        return dly_[i0] + frac * (dly_[(i0 + 1) & (kDlyLen - 1)] - dly_[i0]);
     }
 
     float sample_rate_;
