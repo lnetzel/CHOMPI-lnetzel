@@ -1,4 +1,4 @@
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 1
 
 
    1              		.cpu cortex-m7
@@ -58,7 +58,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
   44 0004 0446     		mov	r4, r0
   11:encoder.cpp   ****     updated_     = false;
   45              		.loc 1 11 18 view .LVU4
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 2
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 2
 
 
   46 0006 0025     		movs	r5, #0
@@ -118,7 +118,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
   17:encoder.cpp   ****     hw_b_.mode = DSY_GPIO_MODE_INPUT;
   78              		.loc 1 17 5 view .LVU21
   18:encoder.cpp   ****     hw_b_.pull = DSY_GPIO_PULLUP;
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 3
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 3
 
 
   79              		.loc 1 18 5 view .LVU22
@@ -178,7 +178,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  119              	.LVL5:
  120              	.L5:
  121              		.loc 1 29 1 view .LVU40
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 4
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 4
 
 
  122 0066 00BF     		.align	2
@@ -238,7 +238,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  164              	.LVL8:
   38:encoder.cpp   ****     updated_     = false;
  165              		.loc 1 38 5 is_stmt 1 view .LVU49
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 5
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 5
 
 
  166              		.loc 1 40 5 view .LVU50
@@ -298,7 +298,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  188              	.LVL11:
   46:encoder.cpp   ****         b_ = (b_ << 1) | dsy_gpio_read(&hw_b_);
  189              		.loc 1 46 18 view .LVU59
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 6
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 6
 
 
  190 0024 BD40     		lsls	r5, r5, r7
@@ -358,7 +358,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  227 0058 0FD0     		beq	.L21
   55:encoder.cpp   ****         {
  228              		.loc 1 55 14 view .LVU77
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 7
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 7
 
 
  229 005a 00F00300 		and	r0, r0, #3
@@ -418,7 +418,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  275              		.thumb
  276              		.thumb_func
  278              	_ZN6chompi13ChompiEncoder8DebounceEbb:
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 8
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 8
 
 
  279              	.LVL16:
@@ -478,7 +478,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  313              		.loc 1 81 15 is_stmt 0 view .LVU100
  314 0016 94F82010 		ldrb	r1, [r4, #32]	@ zero_extendqisi2
   82:encoder.cpp   ****         b_ = (b_ << 1) | b_state;
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 9
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 9
 
 
  315              		.loc 1 82 15 view .LVU101
@@ -538,7 +538,7 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  349              		.loc 1 90 14 view .LVU119
  350 0042 02F00702 		and	r2, r2, #7
  351 0046 042A     		cmp	r2, #4
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 10
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 10
 
 
  352 0048 04D0     		beq	.L30
@@ -598,25 +598,25 @@ ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 1
  394              		.file 15 "../../../chompi-wave/code/libs/libDaisy/src/daisy_core.h"
  395              		.file 16 "../../../chompi-wave/code/libs/libDaisy/src/per/tim.h"
  396              		.file 17 "../../../chompi-wave/code/libs/libDaisy/src/sys/system.h"
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 11
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 11
 
 
  397              		.file 18 "../../../chompi-wave/code/libs/libDaisy/src/hid/switch.h"
  398              		.file 19 "../../../chompi-wave/code/libs/libDaisy/src/per/gpio.h"
  399              		.file 20 "encoder.h"
  400              		.file 21 "<built-in>"
-ARM GAS  C:\msys64\tmp\ccPu5Snw.s 			page 12
+ARM GAS  C:\msys64\tmp\ccqxJUEK.s 			page 12
 
 
 DEFINED SYMBOLS
                             *ABS*:00000000 encoder.cpp
-C:\msys64\tmp\ccPu5Snw.s:19     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 $t
-C:\msys64\tmp\ccPu5Snw.s:26     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 _ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f
-C:\msys64\tmp\ccPu5Snw.s:124    .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000068 $d
-C:\msys64\tmp\ccPu5Snw.s:129    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 $t
-C:\msys64\tmp\ccPu5Snw.s:136    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 _ZN6chompi13ChompiEncoder8DebounceEv
-C:\msys64\tmp\ccPu5Snw.s:271    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 $t
-C:\msys64\tmp\ccPu5Snw.s:278    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 _ZN6chompi13ChompiEncoder8DebounceEbb
+C:\msys64\tmp\ccqxJUEK.s:19     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 $t
+C:\msys64\tmp\ccqxJUEK.s:26     .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000000 _ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f
+C:\msys64\tmp\ccqxJUEK.s:124    .text._ZN6chompi13ChompiEncoder4InitE12dsy_gpio_pinS1_S1_f:00000068 $d
+C:\msys64\tmp\ccqxJUEK.s:129    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 $t
+C:\msys64\tmp\ccqxJUEK.s:136    .text._ZN6chompi13ChompiEncoder8DebounceEv:00000000 _ZN6chompi13ChompiEncoder8DebounceEv
+C:\msys64\tmp\ccqxJUEK.s:271    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 $t
+C:\msys64\tmp\ccqxJUEK.s:278    .text._ZN6chompi13ChompiEncoder8DebounceEbb:00000000 _ZN6chompi13ChompiEncoder8DebounceEbb
 
 UNDEFINED SYMBOLS
 _ZN5daisy6System6GetNowEv

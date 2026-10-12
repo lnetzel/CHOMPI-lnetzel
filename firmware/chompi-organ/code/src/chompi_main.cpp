@@ -136,24 +136,24 @@ static const uint8_t white_key_led[kNumWhiteKeys] = {
 /** Key-bar color modes. */
 enum BarKind
 {
-    kBarVolume, /**< green/orange/red position gradient */
-    kBarWave,   /**< uniformly blue: waveform morph bar */
-    kBarDrive,  /**< uniformly red: overdrive bar */
-    kBarRotary  /**< uniformly purple: rotary-speaker bar */
+    kBarVolume,   /**< green/orange/red position gradient */
+    kBarCharacter, /**< uniformly blue: pipe Character bar */
+    kBarDrive,    /**< uniformly red: overdrive bar */
+    kBarRotary    /**< uniformly purple: rotary-speaker bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
  *  (page-1 pipes + master volume) run green for the first 50% of keys,
- *  orange 50-75%, red above 75%. The page-2 waveform bar (kBarWave)
- *  is uniformly blue; the overdrive bar (kBarDrive) is uniformly red;
- *  the rotary bar (kBarRotary) is uniformly purple. */
+ *  orange 50-75%, red above 75%. The page-2 pipe Character bar
+ *  (kBarCharacter) is uniformly blue; the overdrive bar (kBarDrive) is
+ *  uniformly red; the rotary bar (kBarRotary) is uniformly purple. */
 static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 {
-    if(kind == kBarWave)
+    if(kind == kBarCharacter)
     {
         r = 0.f;
         g = 0.f;
-        b = 1.f; /* blue: the whole waveform bar */
+        b = 1.f; /* blue: the whole Character bar */
         return;
     }
     if(kind == kBarDrive)
@@ -187,12 +187,12 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 
 /* ---- cross-context (ISR <-> main loop) UI state ---- */
 static volatile int      bar_pipe_  = -1;     /* pipe/volume bar showing */
-static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = waveform/drive */
+static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = Character/drive */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
 static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: rotary */
 static const int         kWheelEnc  = 4; /* enc[4]: transport wheel (ENC_5) */
-static volatile bool wave_page_[OrganEngine::kNumPipes]; /* per-pipe encoder page */
+static volatile bool character_page_[OrganEngine::kNumPipes]; /* per-pipe encoder page */
 static volatile bool vol_drive_page_ = false; /* ENC_6 page: 0 = volume, 1 = overdrive */
 
 /* ---- key/encoder edge tracking (audio ISR only) ---- */
@@ -220,18 +220,18 @@ struct OutMsg
 };
 static FIFO<OutMsg, 256> out_q;
 static volatile uint8_t cc_pipe_step_[OrganEngine::kNumPipes];
-static volatile uint8_t cc_wave_step_[OrganEngine::kNumPipes];
+static volatile uint8_t cc_character_step_[OrganEngine::kNumPipes];
 static volatile bool    cc_pipe_dirty_[OrganEngine::kNumPipes];
-static volatile bool    cc_wave_dirty_[OrganEngine::kNumPipes];
+static volatile bool    cc_character_dirty_[OrganEngine::kNumPipes];
 
 /** A4: incremented by the audio ISR; the IWDG is only refreshed while this
  *  keeps changing (see MainLoop), so any lockup resets the device. */
 volatile uint32_t audio_ticks = 0;
 
-static void CcLevelCallback(int pipe, int wave_page)
+static void CcLevelCallback(int pipe, int page)
 {
     bar_pipe_  = pipe;
-    bar_page_  = wave_page;
+    bar_page_  = page;
     bar_until_ = System::GetNow() + 500;
 }
 
@@ -242,7 +242,7 @@ static void PollControls()
     shift_held_ = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_26));
 
     /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3): press toggles
-     * that pipe's encoder between page 1 (volume) and page 2 (waveform);
+     * that pipe's encoder between page 1 (volume) and page 2 (Character);
      * show the newly active page's value bar as confirmation */
     for(int i = 0; i < 4; i++)
     {
@@ -253,10 +253,10 @@ static void PollControls()
             {
                 if(pipe_encoder[p] == i)
                 {
-                    wave_page_[p] = !wave_page_[p];
-                    bar_pipe_     = p;
-                    bar_page_     = wave_page_[p] ? 1 : 0;
-                    bar_until_    = System::GetNow() + 500;
+                    character_page_[p] = !character_page_[p];
+                    bar_pipe_          = p;
+                    bar_page_          = character_page_[p] ? 1 : 0;
+                    bar_until_         = System::GetNow() + 500;
                 }
             }
         }
@@ -422,12 +422,12 @@ static void PollControls()
             {
                 if(pipe_encoder[p] != i)
                     continue;
-                if(wave_page_[p])
+                if(character_page_[p])
                 {
-                    engine.SetPipeWaveStep(p,
-                                           engine.GetPipeWaveStep(p) + delta);
-                    cc_wave_step_[p]  = engine.GetPipeWaveStep(p);
-                    cc_wave_dirty_[p] = true; /* coalesced, sent in MainLoop */
+                    engine.SetPipeCharacterStep(
+                        p, engine.GetPipeCharacterStep(p) + delta);
+                    cc_character_step_[p]  = engine.GetPipeCharacterStep(p);
+                    cc_character_dirty_[p] = true; /* coalesced, sent in MainLoop */
                     bar_page_ = 1;
                 }
                 else
@@ -472,9 +472,9 @@ static void UpdateLeds()
         const int p = bar_pipe_;
         /* value bar spans the 15 white keys only: leftmost white = 0%,
          * rightmost white = 100%. Volume bars (page-1 pipes + master) use
-         * the green/orange/red position gradient; the page-2 waveform bar
-         * is uniformly blue, the overdrive bar is uniformly red and the
-         * rotary bar is uniformly purple. */
+         * the green/orange/red position gradient; the page-2 pipe
+         * Character bar is uniformly blue, the overdrive bar is uniformly
+         * red and the rotary bar is uniformly purple. */
         int    lit;
         BarKind kind = kBarVolume;
         if(p == kVolBar)
@@ -501,9 +501,9 @@ static void UpdateLeds()
         }
         else if(bar_page_ == 1)
         {
-            lit  = (engine.GetPipeWaveStep(p) * kNumWhiteKeys + 32)
-                   / OrganEngine::kMaxWaveSteps;
-            kind = kBarWave;
+            lit  = (engine.GetPipeCharacterStep(p) * kNumWhiteKeys + 32)
+                   / OrganEngine::kMaxCharacterSteps;
+            kind = kBarCharacter;
         }
         else
         {
@@ -549,15 +549,15 @@ static void UpdateLeds()
     }
 
     /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
-     * Page 2 pipes glow blue (brightness tracks the morph position with a
-     * floor so the page stays visible at pure sine); page 1 is white. */
+     * Page 2 pipes glow blue (brightness tracks the Character amount with
+     * a floor so the page stays visible at clean sine); page 1 is white. */
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
-        if(wave_page_[p])
+        if(character_page_[p])
         {
             const float s = .2f
-                            + .8f * engine.GetPipeWaveStep(p)
-                                  * (1.f / OrganEngine::kMaxWaveSteps);
+                            + .8f * engine.GetPipeCharacterStep(p)
+                                  * (1.f / OrganEngine::kMaxCharacterSteps);
             SetPthLedFloat(p + 1, 0.f, 0.f, s);
         }
         else
@@ -646,10 +646,10 @@ void MainLoop(void *data)
             cc_pipe_dirty_[p] = false;
             midi.SendPipeCC(p, cc_pipe_step_[p]);
         }
-        if(cc_wave_dirty_[p])
+        if(cc_character_dirty_[p])
         {
-            cc_wave_dirty_[p] = false;
-            midi.SendWaveCC(p, cc_wave_step_[p]);
+            cc_character_dirty_[p] = false;
+            midi.SendCharacterCC(p, cc_character_step_[p]);
         }
     }
 
@@ -736,8 +736,8 @@ int main(void)
     }
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
-        wave_page_[p]   = false;
-        prev_enc_sw_[p] = hw.button_sr.State(p);
+        character_page_[p] = false;
+        prev_enc_sw_[p]    = hw.button_sr.State(p);
     }
     vol_drive_page_ = false;
 
