@@ -25,7 +25,7 @@
  *    rotary (PlateReverb.h; Griesinger/Dattorro tank adapted from
  *    chompi-wave's reverb). Linear complementary dry/wet crossfade with
  *    a ~10 ms ramp: 0% mix is bit-exact dry, 100% is wet only. Decay is
- *    adjustable 0.5-20 s in 100 log-spaced steps (boots at 0.5 s). The
+ *    adjustable 0.2-20 s in 100 log-spaced steps (boots at 0.2 s). The
  *    tank runs continuously (live tails, no stale state); the 64 KiB
  *    delay buffer is caller-owned SDRAM passed to Init().
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
@@ -61,13 +61,13 @@ class OrganEngine
     static constexpr float kFoldbackHz     = 20000.f;
     static constexpr float kMixScale       = 1.f / 24.f;
     static constexpr int   kDefaultStep          = 16; /* 50% volume */
-    static constexpr int   kDefaultCharacterStep = 0;  /* clean sine */
+    static constexpr int   kDefaultCharacterStep = 32; /* 50% character */
     static constexpr int   kDefaultDriveStep     = 0;  /* overdrive off */
-    static constexpr int   kDefaultRotaryStep    = 0;  /* rotary off */
+    static constexpr int   kDefaultRotaryStep    = 10; /* ~30% rotary */
     static constexpr int   kDefaultReverbMixPercent = 0; /* reverb dry */
-    static constexpr int   kDefaultReverbDecayStep  = 0; /* 0.5 s decay */
+    static constexpr int   kDefaultReverbDecayStep  = 0; /* 0.2 s decay */
     static constexpr int   kMaxReverbDecaySteps     = 100;
-    static constexpr float kMinReverbDecaySeconds   = .5f;
+    static constexpr float kMinReverbDecaySeconds   = .2f;
     static constexpr float kMaxReverbDecaySeconds   = 20.f;
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
@@ -81,6 +81,8 @@ class OrganEngine
         fine_cents_  = 0;
         freqs_dirty_ = false;
         character_.Init(sample_rate);
+        for(int p = 0; p < kNumPipes; p++)
+            character_.SetStep(p, kDefaultCharacterStep);
 
         for(int v = 0; v < kNumVoices; v++)
         {
@@ -116,12 +118,12 @@ class OrganEngine
         drive_post_ = 0.33f / tanhf(0.33f);
 
         rotary_.Init(sample_rate);
-        rotary_step_ = kDefaultRotaryStep;
+        SetRotaryStep(kDefaultRotaryStep);
 
         plate_.Init(sample_rate, reverb_delay);
         reverb_mix_percent_ = kDefaultReverbMixPercent;
         reverb_decay_step_  = kDefaultReverbDecayStep; /* plate_.Init()
-                                                        * already set 0.5 s */
+                                                        * already set 0.2 s */
 
         for(int n = 0; n < 128; n++)
             note_held_[n] = false;
@@ -188,8 +190,8 @@ class OrganEngine
     int GetReverbMixPercent() const { return reverb_mix_percent_; }
 
     /** Apply one encoder click to the plate-reverb decay (0..100 steps,
- *      clamped), mapped exponentially from 0.5 s (step 0, boot default)
- *      to 20 s (step 100): seconds = 0.5 * 40^(step/100). Log spacing
+ *      clamped), mapped exponentially from 0.2 s (step 0, boot default)
+ *      to 20 s (step 100): seconds = 0.2 * 100^(step/100). Log spacing
  *      keeps the short end usable - a linear seconds-per-click mapping
  *      would make the first clicks huge relative jumps. */
     void SetReverbDecayStep(int step)

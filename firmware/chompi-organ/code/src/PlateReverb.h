@@ -32,7 +32,7 @@
  *  described in the Dattorro paper - 4 allpass diffusers on the input,
  *  then a cross-feedback tank of 2x (2 allpasses + 1 long delay), with
  *  slow LFO modulation of the two long-delay taps. Plate-inspired; the
- *  decay time is user-adjustable (0.5-20 s), the rest of the voicing is
+ *  decay time is user-adjustable (0.2-20 s), the rest of the voicing is
  *  fixed. Not a claim of accurate physical EMT emulation.
  *
  *  Differences from the WAVE original:
@@ -106,7 +106,7 @@ class PlateReverb
     static constexpr float kLfo2Hz    = .3f;
 
     /** Decay (T60) range in seconds; boots at the minimum. */
-    static constexpr float kMinDecaySeconds     = .5f;
+    static constexpr float kMinDecaySeconds     = .2f;
     static constexpr float kMaxDecaySeconds     = 20.f;
     static constexpr float kDefaultDecaySeconds = kMinDecaySeconds;
 
@@ -149,7 +149,7 @@ class PlateReverb
 
     float GetMix() const { return mix_target_; }
 
-    /** Set the tank decay time (T60), clamped to 0.5..20 s. One full
+    /** Set the tank decay time (T60), clamped to 0.2..20 s. One full
      *  round trip of the cross-feedback tank applies feedback^2 over
      *  kLoopSamples samples, so feedback = 10^(-1.5 * T_roundtrip / T60).
      *  The input gain scales with (1 - feedback): the tank's worst-case

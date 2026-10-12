@@ -282,7 +282,7 @@ static void test_decay_clamping_and_default()
     /* boots at the minimum decay */
     assert(r.GetDecaySeconds() == PlateReverb::kMinDecaySeconds);
     r.SetDecaySeconds(0.01f);
-    assert(r.GetDecaySeconds() == .5f);
+    assert(r.GetDecaySeconds() == .2f);
     r.SetDecaySeconds(100.f);
     assert(r.GetDecaySeconds() == 20.f);
     r.SetDecaySeconds(3.2f);
