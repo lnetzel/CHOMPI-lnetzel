@@ -2,7 +2,8 @@
 
 Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
-tonewheel-style Character, overdrive, and a rotary-speaker stage.
+tonewheel-style Character, overdrive, a rotary-speaker stage, and a
+compact vintage-1960s-inspired plate reverb.
 
 ## Controls
 
@@ -38,9 +39,36 @@ bar while turning.
 
 ### Volume encoder (ENC_6)
 
-Push toggles between master volume (page 1, gradient LED) and overdrive
-amount (page 2, red LED with brightness floor; 0 is an exact bypass).
-SHIFT + turn = fine tune (+/-50 cents). Boot default volume is 25%.
+Push cycles three pages: master volume (page 1, gradient LED) ->
+overdrive amount (page 2, red LED with brightness floor; 0 is an exact
+bypass) -> plate-reverb mix (page 3, blue LED with brightness floor).
+Turning or pressing the encoder shows the current page's white-key value
+bar for 500 ms.
+
+Page 3 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
+exact dry and 100% is wet only (a linear complementary crossfade with a
+~10 ms click-free ramp). The white-key bar is uniformly blue: no keys at
+0%, half (8 keys) at 50%, all 15 at 100%.
+
+SHIFT + turn on page 3 adjusts the plate decay: 100 log-spaced steps
+from 0.5 s (boot default) to 20 s, shown on the same blue white-key bar
+while turning. The wet level and tank headroom are normalized across the
+range, so the decay changes the tail duration, not the loudness.
+
+The plate is a fixed voicing apart from the decay (no tone/predelay
+controls): a compact Griesinger/Dattorro tank adapted from chompi-wave's
+reverb, voiced dark (~4.5 kHz damping) with subtle slow modulation and a
+~120 Hz low-cut on the tank send. Plate-inspired; not an accurate
+physical EMT emulation. The tank runs continuously, so tails ring out
+naturally after note release and survive page changes; turning the
+master volume to zero silences dry and wet alike (the reverb sits before
+the master gain).
+
+The mix and decay boot at 0% / 0.5 s and are kept for the session only
+(no SD-card persistence, no MIDI CC).
+
+SHIFT + turn = fine tune (+/-50 cents) on pages 1-2. Boot default volume
+is 25%.
 
 ### Keys
 
@@ -66,9 +94,10 @@ Character 0 is unchanged.
 ## Signal flow
 
 sine -> Character shaping (per pipe) -> pipe gain -> voice envelope/
-velocity -> voice mix -> overdrive -> rotary speaker -> master gain ->
-outputs. Character 0 exactly bypasses shaping; the clean-sine engine is
-bit-identical to the previous firmware's sine-only sound.
+velocity -> voice mix -> overdrive -> rotary speaker -> plate reverb ->
+master gain -> headphone + master stereo output pairs. Character 0
+exactly bypasses shaping; the clean-sine engine is bit-identical to the
+previous firmware's sine-only sound. Reverb 0% is bit-exact dry.
 
 ## Building
 
@@ -83,14 +112,19 @@ install; do not flash the bootloader).
 
 ## Tests
 
-Native DSP tests for the Character shaper live in `code/tests/`:
+Native DSP tests for the Character shaper and the plate reverb live in
+`code/tests/`:
 
 ```sh
 make -C firmware/chompi-organ/code/tests test
 ```
 
-They need only a host C++ compiler (no MCU/Daisy dependencies) and cover
-step clamping/guards, exact clean endpoints, ramp convergence and
-retargeting, voice-slot-independent voicing, cycle-mean DC, 2nd/3rd
-harmonic content, amplitude bounds, and high-frequency anti-alias
-suppression.
+They need only a host C++ compiler (no MCU/Daisy dependencies). The
+Character tests cover step clamping/guards, exact clean endpoints, ramp
+convergence and retargeting, voice-slot-independent voicing, cycle-mean
+DC, 2nd/3rd harmonic content, amplitude bounds, and high-frequency
+anti-alias suppression. The reverb tests cover deterministic
+initialization (garbage-prefilled delay buffer), bounded decaying
+impulse response, mix clamping, ramp convergence/retargeting, bit-exact
+dry at 0%, wet-only 100% against a reference instance, and long-silence
+stability.

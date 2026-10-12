@@ -21,12 +21,20 @@
  *  - Rotary speaker: 60s Leslie-style mono->stereo stage after the
  *    overdrive (800 Hz crossover, Doppler horn + AM drum, two virtual
  *    mics 180 deg apart); 0% is an exact bypass (DSP-6)
+ *  - Plate reverb: compact vintage-1960s-inspired plate after the
+ *    rotary (PlateReverb.h; Griesinger/Dattorro tank adapted from
+ *    chompi-wave's reverb). Linear complementary dry/wet crossfade with
+ *    a ~10 ms ramp: 0% mix is bit-exact dry, 100% is wet only. Decay is
+ *    adjustable 0.5-20 s in 100 log-spaced steps (boots at 0.5 s). The
+ *    tank runs continuously (live tails, no stale state); the 64 KiB
+ *    delay buffer is caller-owned SDRAM passed to Init().
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
 #include "daisysp.h"
 #include "RotarySpeaker.h"
 #include "TonewheelCharacter.h"
+#include "PlateReverb.h"
 
 namespace chompi
 {
@@ -56,8 +64,16 @@ class OrganEngine
     static constexpr int   kDefaultCharacterStep = 0;  /* clean sine */
     static constexpr int   kDefaultDriveStep     = 0;  /* overdrive off */
     static constexpr int   kDefaultRotaryStep    = 0;  /* rotary off */
+    static constexpr int   kDefaultReverbMixPercent = 0; /* reverb dry */
+    static constexpr int   kDefaultReverbDecayStep  = 0; /* 0.5 s decay */
+    static constexpr int   kMaxReverbDecaySteps     = 100;
+    static constexpr float kMinReverbDecaySeconds   = .5f;
+    static constexpr float kMaxReverbDecaySeconds   = 20.f;
 
-    void Init(float sample_rate)
+    /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
+     *  uint16_t elements in writable memory (ORGAN uses SDRAM); pass it
+     *  only after hw.Init() has configured the SDRAM controller. */
+    void Init(float sample_rate, uint16_t *reverb_delay)
     {
         sample_rate_ = sample_rate;
         env_inc_     = 1.f / (0.005f * sample_rate); /* 5 ms attack/release/steal */
@@ -101,6 +117,11 @@ class OrganEngine
 
         rotary_.Init(sample_rate);
         rotary_step_ = kDefaultRotaryStep;
+
+        plate_.Init(sample_rate, reverb_delay);
+        reverb_mix_percent_ = kDefaultReverbMixPercent;
+        reverb_decay_step_  = kDefaultReverbDecayStep; /* plate_.Init()
+                                                        * already set 0.5 s */
 
         for(int n = 0; n < 128; n++)
             note_held_[n] = false;
@@ -153,6 +174,38 @@ class OrganEngine
     }
 
     int GetRotaryStep() const { return rotary_step_; }
+
+    /** Apply one encoder click to the plate-reverb mix (0..100 percent,
+ *      clamped). 0% is bit-exact dry, 100% is wet only; the ~10 ms
+ *      crossfade ramp retargets from the current mix, click-free. */
+    void SetReverbMixPercent(int percent)
+    {
+        percent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+        reverb_mix_percent_ = static_cast<uint8_t>(percent);
+        plate_.SetMix(static_cast<float>(percent) * .01f);
+    }
+
+    int GetReverbMixPercent() const { return reverb_mix_percent_; }
+
+    /** Apply one encoder click to the plate-reverb decay (0..100 steps,
+ *      clamped), mapped exponentially from 0.5 s (step 0, boot default)
+ *      to 20 s (step 100): seconds = 0.5 * 40^(step/100). Log spacing
+ *      keeps the short end usable - a linear seconds-per-click mapping
+ *      would make the first clicks huge relative jumps. */
+    void SetReverbDecayStep(int step)
+    {
+        step = step < 0
+                   ? 0
+                   : (step > kMaxReverbDecaySteps ? kMaxReverbDecaySteps
+                                                  : step);
+        reverb_decay_step_ = static_cast<uint8_t>(step);
+        plate_.SetDecaySeconds(
+            kMinReverbDecaySeconds
+            * powf(kMaxReverbDecaySeconds / kMinReverbDecaySeconds,
+                   static_cast<float>(step) * (1.f / kMaxReverbDecaySteps)));
+    }
+
+    int GetReverbDecayStep() const { return reverb_decay_step_; }
 
     void SetMasterGain(float g)
     {
@@ -370,6 +423,11 @@ class OrganEngine
              * an exact bypass (both channels = out_sig). */
             float out_l, out_r;
             rotary_.Process(out_sig, out_l, out_r);
+            /* Plate reverb: stereo in/out between the rotary (speaker
+             * cabinet) and the master gain, so the volume knob scales
+             * dry and wet equally and 0% master mutes the tail. The tank
+             * runs even with idle voices; 0% mix is bit-exact dry. */
+            plate_.Process(out_l, out_r, out_l, out_r);
             out_l *= master_gain_;
             out_r *= master_gain_;
             out[0][i] = out_l; /* headphone L */
@@ -462,6 +520,9 @@ class OrganEngine
     uint8_t  drive_step_;
     RotarySpeaker rotary_;
     uint8_t  rotary_step_;
+    PlateReverb plate_;
+    uint8_t  reverb_mix_percent_;
+    uint8_t  reverb_decay_step_;
     bool     note_held_[128];
 
   public:

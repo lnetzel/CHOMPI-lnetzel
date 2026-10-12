@@ -23,6 +23,12 @@ Hardware    hw;
 OrganEngine engine;
 OrganMidi   midi;
 
+/* Plate-reverb delay memory: 64 KiB in external SDRAM, kept out of the
+ * tight SRAM regions. Never written from a global constructor: it is
+ * cleared by PlateReverb::Init via engine.Init(), after hw.Init() has
+ * configured the SDRAM controller. */
+static uint16_t DSY_SDRAM_BSS plate_delay_mem[PlateReverb::kDelayBufferSize];
+
 /* B4: debug-build CPU meter (build with ORGAN_CPU_METER=1); peak load
  * shows on PTH LED 0 (green < 70%, amber 70-85%, red > 85%). */
 #ifdef ORGAN_CPU_METER
@@ -139,14 +145,16 @@ enum BarKind
     kBarVolume,   /**< green/orange/red position gradient */
     kBarCharacter, /**< uniformly blue: pipe Character bar */
     kBarDrive,    /**< uniformly red: overdrive bar */
-    kBarRotary    /**< uniformly purple: rotary-speaker bar */
+    kBarRotary,   /**< uniformly purple: rotary-speaker bar */
+    kBarReverb    /**< uniformly blue: plate-reverb mix bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
  *  (page-1 pipes + master volume) run green for the first 50% of keys,
  *  orange 50-75%, red above 75%. The page-2 pipe Character bar
  *  (kBarCharacter) is uniformly blue; the overdrive bar (kBarDrive) is
- *  uniformly red; the rotary bar (kBarRotary) is uniformly purple. */
+ *  uniformly red; the rotary bar (kBarRotary) is uniformly purple; the
+ *  plate-reverb mix bar (kBarReverb) is uniformly blue. */
 static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 {
     if(kind == kBarCharacter)
@@ -154,6 +162,13 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
         r = 0.f;
         g = 0.f;
         b = 1.f; /* blue: the whole Character bar */
+        return;
+    }
+    if(kind == kBarReverb)
+    {
+        r = 0.f;
+        g = 0.f;
+        b = 1.f; /* blue: the whole plate-reverb mix bar */
         return;
     }
     if(kind == kBarDrive)
@@ -187,13 +202,23 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 
 /* ---- cross-context (ISR <-> main loop) UI state ---- */
 static volatile int      bar_pipe_  = -1;     /* pipe/volume bar showing */
-static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = Character/drive */
+static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = Character/drive,
+                                               * 2 = reverb mix */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
 static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: rotary */
 static const int         kWheelEnc  = 4; /* enc[4]: transport wheel (ENC_5) */
 static volatile bool character_page_[OrganEngine::kNumPipes]; /* per-pipe encoder page */
-static volatile bool vol_drive_page_ = false; /* ENC_6 page: 0 = volume, 1 = overdrive */
+
+/** ENC_6 (volume encoder) pages: master volume -> overdrive -> plate
+ *  reverb mix, cycled by the encoder push-switch. */
+static const int kVolPageMaster = 0;
+static const int kVolPageDrive  = 1;
+static const int kVolPageReverb = 2;
+static volatile int vol_page_ = kVolPageMaster; /* ENC_6 page */
+/** bar_page_ sub-state (not a vol_page_ value): on the reverb page a
+ *  SHIFT+turn edits the decay, and the bar shows it instead of the mix. */
+static const int kVolBarDecay = 3;
 
 /* ---- key/encoder edge tracking (audio ISR only) ---- */
 static volatile bool prev_key_[40];
@@ -263,18 +288,18 @@ static void PollControls()
         prev_enc_sw_[i] = down;
     }
 
-    /* ENC_6_SW (volume-knob push, SwId 32): press toggles the volume
-     * encoder between page 1 (master volume) and page 2 (overdrive);
+    /* ENC_6_SW (volume-knob push, SwId 32): press cycles the volume
+     * encoder through master volume -> overdrive -> plate-reverb mix;
      * show the newly active page's value bar as confirmation */
     {
         const int  vsw  = static_cast<int>(Hardware::SwId::ENC_6_SW);
         const bool down = hw.button_sr.State(vsw);
         if(down && !prev_key_[vsw])
         {
-            vol_drive_page_ = !vol_drive_page_;
-            bar_pipe_       = kVolBar;
-            bar_page_       = vol_drive_page_ ? 1 : 0;
-            bar_until_      = System::GetNow() + 500;
+            vol_page_  = (vol_page_ + 1) % 3;
+            bar_pipe_  = kVolBar;
+            bar_page_  = vol_page_;
+            bar_until_ = System::GetNow() + 500;
         }
         prev_key_[vsw] = down;
     }
@@ -388,14 +413,38 @@ static void PollControls()
         {
             if(shift_held_)
             {
-                engine.AddFineTuneCents(delta); /* SHIFT+ENC_6: fine tune */
+                if(vol_page_ == kVolPageReverb)
+                {
+                    /* SHIFT+turn on page 3: plate-reverb decay, 100
+                     * log-spaced steps from 0.5 s to 20 s (fine tune
+                     * stays on pages 1-2) */
+                    engine.SetReverbDecayStep(engine.GetReverbDecayStep()
+                                              + delta);
+                    bar_pipe_  = kVolBar;
+                    bar_page_  = kVolBarDecay;
+                    bar_until_ = System::GetNow() + 500;
+                }
+                else
+                {
+                    engine.AddFineTuneCents(delta); /* SHIFT+ENC_6: fine tune */
+                }
             }
-            else if(vol_drive_page_)
+            else if(vol_page_ == kVolPageDrive)
             {
                 /* volume-encoder page 2: overdrive amount, 32 steps */
                 engine.SetDriveStep(engine.GetDriveStep() + delta);
                 bar_pipe_  = kVolBar;
-                bar_page_  = 1;
+                bar_page_  = kVolPageDrive;
+                bar_until_ = System::GetNow() + 500;
+            }
+            else if(vol_page_ == kVolPageReverb)
+            {
+                /* volume-encoder page 3: plate-reverb mix, 1% per click,
+                 * clamped 0..100 */
+                engine.SetReverbMixPercent(engine.GetReverbMixPercent()
+                                           + delta);
+                bar_pipe_  = kVolBar;
+                bar_page_  = kVolPageReverb;
                 bar_until_ = System::GetNow() + 500;
             }
             else
@@ -404,7 +453,7 @@ static void PollControls()
                 float g = engine.GetMasterGain() + delta * .01f;
                 engine.SetMasterGain(g);
                 bar_pipe_  = kVolBar;
-                bar_page_  = 0;
+                bar_page_  = kVolPageMaster;
                 bar_until_ = System::GetNow() + 500;
             }
         }
@@ -479,7 +528,22 @@ static void UpdateLeds()
         BarKind kind = kBarVolume;
         if(p == kVolBar)
         {
-            if(bar_page_ == 1)
+            if(bar_page_ == kVolBarDecay)
+            {
+                /* volume-knob page 3, SHIFT+turn: reverb decay step
+                 * (log-spaced 0.5..20 s) */
+                lit  = (engine.GetReverbDecayStep() * kNumWhiteKeys + 50)
+                       / 100;
+                kind = kBarReverb;
+            }
+            else if(bar_page_ == kVolPageReverb)
+            {
+                /* volume-knob page 3: plate-reverb mix percent */
+                lit  = (engine.GetReverbMixPercent() * kNumWhiteKeys + 50)
+                       / 100;
+                kind = kBarReverb;
+            }
+            else if(bar_page_ == kVolPageDrive)
             {
                 /* volume-knob page 2: overdrive amount */
                 lit  = (engine.GetDriveStep() * kNumWhiteKeys + 16)
@@ -567,12 +631,19 @@ static void UpdateLeds()
             SetPthLedFloat(p + 1, s, s, s);
         }
     }
-    /* master-volume knob LED (PTH 9): on volume-encoder page 2 it tracks
-     * the overdrive amount in red (with a brightness floor so the page
-     * stays visible at 0%). On page 1 brightness tracks the level and the
-     * color follows the same position gradient as the white-key volume bar
-     * (green up to 50%, orange 50-75%, red above 75%) */
-    if(vol_drive_page_)
+    /* master-volume knob LED (PTH 9): volume-encoder page 3 tracks the
+     * plate-reverb mix in blue and page 2 the overdrive amount in red
+     * (both with a brightness floor so the page stays visible at 0%). On
+     * page 1 brightness tracks the level and the color follows the same
+     * position gradient as the white-key volume bar (green up to 50%,
+     * orange 50-75%, red above 75%) */
+    if(vol_page_ == kVolPageReverb)
+    {
+        const float s = .2f
+                        + .8f * engine.GetReverbMixPercent() * .01f;
+        SetPthLedFloat(9, 0.f, 0.f, s);
+    }
+    else if(vol_page_ == kVolPageDrive)
     {
         const float s = .2f
                         + .8f * engine.GetDriveStep()
@@ -699,7 +770,7 @@ int main(void)
         System::Delay(10);
     }
 
-    engine.Init(hw.seed.AudioSampleRate());
+    engine.Init(hw.seed.AudioSampleRate(), plate_delay_mem);
 
     LedSetup();
 
@@ -739,7 +810,7 @@ int main(void)
         character_page_[p] = false;
         prev_enc_sw_[p]    = hw.button_sr.State(p);
     }
-    vol_drive_page_ = false;
+    vol_page_ = kVolPageMaster;
 
     hw.StartAudio(AudioCallback);
 
