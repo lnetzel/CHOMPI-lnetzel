@@ -124,8 +124,8 @@ the distortion type, page 3 adjusts decay). Boot default volume is 25%.
 ### Keys
 
 25 playable keys (C3-C5). SHIFT + C#3/D#3 = octave down/up (+/-2).
-KEY_28 (LOOP) toggles the key latch. KEY_26+27+28 held at power-on enters
-shipping mode.
+KEY_28 (LOOP) toggles the key latch; while latched, re-pressing a key
+releases its note. KEY_26+27+28 held at power-on enters shipping mode.
 
 ## MIDI (channel 1, DIN and USB)
 

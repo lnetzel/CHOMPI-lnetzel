@@ -362,9 +362,11 @@ static void PollControls()
     }
 
     /* KEY_28 (LOOP) toggles the key latch. While latched, releasing a key
-     * keeps its note sounding; unlatching releases every latched note whose
-     * key is not physically held down again (those keep sounding and release
-     * normally on key release). Applies to physical keys only, never MIDI. */
+     * keeps its note sounding; re-pressing a key whose note is latched
+     * releases that note (toggle-off) instead of retriggering it;
+     * unlatching releases every latched note whose key is not physically
+     * held down again (those keep sounding and release normally on key
+     * release). Applies to physical keys only, never MIDI. */
     {
         const int  loop_sw = static_cast<int>(Hardware::SwId::KEY_28);
         const bool down    = hw.button_sr.State(loop_sw);
@@ -410,12 +412,28 @@ static void PollControls()
                 octave_ = oct < -2 ? -2 : (oct > 2 ? 2 : oct);
                 continue;
             }
+            /* Re-pressing a key whose note is currently latched releases
+             * that note from the latch (toggle-off) instead of retriggering
+             * it. latched_ is only set while active_note_ != 0, so the old
+             * note is always valid; the later key-up edge finds
+             * active_note_ == 0 and does nothing. */
+            if(latch_on_ && latched_[swid])
+            {
+                const uint8_t old  = active_note_[swid] - 1;
+                active_note_[swid] = 0;
+                latched_[swid]     = false;
+                engine.NoteOff(old);
+                out_q.PushBack({1, old, 0});
+                continue;
+            }
             int n = key_map[swid] + 12 * octave_;
             n              = n < 0 ? 0 : (n > 127 ? 127 : n);
             const uint8_t note = static_cast<uint8_t>(n);
             /* B3: re-pressing a latched key after an octave change used to
              * overwrite active_note_ and leak the old note (no NoteOff, no
-             * MIDI note-off): release the old note first. */
+             * MIDI note-off): release the old note first. With the
+             * toggle-off branch above this only covers non-latch edge
+             * cases, kept as a safety net. */
             if(active_note_[swid] != 0 && active_note_[swid] - 1 != note)
             {
                 const uint8_t old = active_note_[swid] - 1;
@@ -423,7 +441,7 @@ static void PollControls()
                 out_q.PushBack({1, old, 0});
             }
             active_note_[swid] = note + 1;
-            latched_[swid]     = false; /* re-press of a latched key retriggers */
+            latched_[swid]     = false;
             engine.NoteOn(note, 1.f);
             out_q.PushBack({0, note, 0});
         }

@@ -197,10 +197,11 @@ KEY_28 (the LOOP/Overdub key) shall toggle a key latch:
 
 - Pressing LOOP toggles the latch on and off. The LOOP key LED (PTH 8) shall be solid red while the latch is active and off otherwise.
 - While the latch is active, releasing a key shall not stop its note; the note keeps sounding. Notes started while the latch is active also latch.
+- Pressing a key whose note is currently latched shall release that note from the latch (toggle-off): the note stops and the press shall not retrigger it. The subsequent key release shall have no effect.
 - Pressing LOOP while no keys are held shall arm the latch: subsequently played notes latch.
 - Pressing LOOP again shall unlatch: each latched note whose key is not physically held shall be released (5 ms release per DSP-3). A latched note whose key is physically held down again at unlatch time keeps sounding and releases normally when the key is released.
 - The latch applies only to physical keyboard keys; incoming MIDI Note Off messages shall always release their notes.
-- MIDI note-out Note Off for a latched key shall be sent when the note actually stops (at unlatch), not at physical key release.
+- MIDI note-out Note Off for a latched key shall be sent when the note actually stops (at toggle-off or unlatch), not at physical key release.
 - Latched notes count toward the six-voice polyphony limit and follow the FR-6 voice-stealing policy.
 - The latch state is not saved and is off at boot.
 
