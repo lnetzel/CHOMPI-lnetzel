@@ -1,5 +1,7 @@
 ## Plan: ORGAN Distortion Character Update
 
+**Status:** superseded 2026-10-13 by distortion_update_2_plan.md — the Warm type introduced here was subsequently replaced by an exact port of the CHOMPI-TAPE tape saturation (slot 0 unchanged), and BrokenSpeaker gained a 200 Hz high-pass plus the stereo Dropout stage (DSP-8).
+
 Replace the original overdrive with three selectable characters in `firmware/chompi-organ`: position 1 Warm vintage soft clipping, position 2 Fuzz, position 3 a heavily destroyed speaker sound. Keep the existing drive amount, selector controls, LED groups, routing, and transition behavior. The broken-speaker recommendation is the user-selected narrow speaker-like bandpass with harsh breakup clipping and resonant coloration.
 
 **Steps**

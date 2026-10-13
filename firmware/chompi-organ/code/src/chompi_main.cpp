@@ -147,18 +147,36 @@ enum BarKind
     kBarDrive,    /**< uniformly red: overdrive bar */
     kBarRotary,   /**< uniformly purple: rotary-speaker bar */
     kBarReverb,   /**< uniformly blue: plate-reverb mix bar */
-    kBarVibrato   /**< uniformly pink: vibrato-depth bar */
+    kBarVibrato,  /**< uniformly pink: vibrato-depth bar */
+    kBarAttack,   /**< uniformly purple: pipe attack-time bar */
+    kBarRelease   /**< uniformly yellow: pipe release-time bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
  *  (page-1 pipes + master volume) run green for the first 50% of keys,
  *  orange 50-75%, red above 75%. The page-2 pipe Character bar
- *  (kBarCharacter) is uniformly blue; the overdrive bar (kBarDrive) is
+ *  (kBarCharacter) is uniformly blue; the page-3 pipe attack bar
+ *  (kBarAttack) is uniformly purple and the page-4 pipe release bar
+ *  (kBarRelease) is uniformly yellow; the overdrive bar (kBarDrive) is
  *  uniformly red; the rotary bar (kBarRotary) is uniformly purple; the
  *  plate-reverb mix bar (kBarReverb) is uniformly blue; the vibrato bar
  *  (kBarVibrato) is uniformly pink. */
 static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 {
+    if(kind == kBarAttack)
+    {
+        r = .55f;
+        g = 0.f;
+        b = 1.f; /* purple: the whole attack-time bar */
+        return;
+    }
+    if(kind == kBarRelease)
+    {
+        r = 1.f;
+        g = 1.f;
+        b = 0.f; /* yellow: the whole release-time bar */
+        return;
+    }
     if(kind == kBarVibrato)
     {
         r = 1.f;
@@ -211,8 +229,11 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 
 /* ---- cross-context (ISR <-> main loop) UI state ---- */
 static volatile int      bar_pipe_  = -1;     /* pipe/volume bar showing */
-static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = Character/drive,
-                                               * 2 = reverb mix */
+static volatile int      bar_page_  = 0;      /* pipes: 0 = level,
+                                               * 1 = Character, 2 = attack,
+                                               * 3 = release; volume bar:
+                                               * 0 = master, 1 = drive,
+                                               * 2 = reverb mix, 3 = decay */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
 static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: wheel (rotary/vibrato) */
@@ -223,7 +244,9 @@ static const int         kWheelBarVibrato = 1;
  *  vibrato. Toggled by the debounced wheel-press edge. Volatile: written
  *  by PollControls (audio ISR), read by UpdateLeds (main loop). */
 static volatile bool wheel_vibrato_mode_ = false;
-static volatile bool character_page_[OrganEngine::kNumPipes]; /* per-pipe encoder page */
+/** Per-pipe encoder pages: 0 = level, 1 = Character, 2 = attack time,
+ *  3 = release time; cycled per pipe by that pipe's encoder push-switch. */
+static volatile int pipe_page_[OrganEngine::kNumPipes];
 
 /** ENC_6 (volume encoder) pages: master volume -> overdrive -> plate
  *  reverb mix, cycled by the encoder push-switch. */
@@ -288,9 +311,11 @@ static void PollControls()
     /* shift key (CHOMPI key) */
     shift_held_ = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_26));
 
-    /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3): press toggles
-     * that pipe's encoder between page 1 (volume) and page 2 (Character);
-     * show the newly active page's value bar as confirmation */
+    /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3): press cycles
+     * that pipe's encoder through page 1 (level) -> 2 (Character) -> 3
+     * (attack) -> 4 (release); show the newly active page's value bar as
+     * confirmation. SHIFT+press instead toggles that pipe's mute (the
+     * press is fully consumed: no page cycle). */
     for(int i = 0; i < 4; i++)
     {
         const bool down = hw.button_sr.State(i);
@@ -300,10 +325,20 @@ static void PollControls()
             {
                 if(pipe_encoder[p] == i)
                 {
-                    character_page_[p] = !character_page_[p];
-                    bar_pipe_          = p;
-                    bar_page_          = character_page_[p] ? 1 : 0;
-                    bar_until_         = System::GetNow() + 500;
+                    if(shift_held_)
+                    {
+                        /* mute is a state, not a value: the persistent
+                         * red knob LED is the feedback, so no value bar
+                         * is re-armed here */
+                        engine.TogglePipeMuted(p);
+                    }
+                    else
+                    {
+                        pipe_page_[p] = (pipe_page_[p] + 1) % 4;
+                        bar_pipe_     = p;
+                        bar_page_     = pipe_page_[p];
+                        bar_until_    = System::GetNow() + 500;
+                    }
                 }
             }
         }
@@ -451,10 +486,10 @@ static void PollControls()
                 if(vol_page_ == kVolPageDrive)
                 {
                     /* SHIFT+turn on page 2: select the distortion type
-                     * (Existing -> Warm -> Fuzz), clamped at the ends
-                     * without wrapping (FR-4b). No value bar: the
-                     * selector overlay shows the type while SHIFT is
-                     * held. The amount is not touched. */
+                     * (Tape Saturation -> Fuzz -> BrokenSpeaker),
+                     * clamped at the ends without wrapping (FR-4b). No
+                     * value bar: the selector overlay shows the type
+                     * while SHIFT is held. The amount is not touched. */
                     engine.SetDriveType(engine.GetDriveType() + delta);
                 }
                 else if(vol_page_ == kVolPageReverb)
@@ -527,22 +562,92 @@ static void PollControls()
             {
                 if(pipe_encoder[p] != i)
                     continue;
-                if(character_page_[p])
+                if(shift_held_)
                 {
-                    engine.SetPipeCharacterStep(
-                        p, engine.GetPipeCharacterStep(p) + delta);
-                    cc_character_step_[p]  = engine.GetPipeCharacterStep(p);
-                    cc_character_dirty_[p] = true; /* coalesced, sent in MainLoop */
-                    bar_page_ = 1;
+                    /* SHIFT+turn: apply the delta to the turned pipe,
+                     * read back its clamped value, then write that same
+                     * value to ALL 4 pipes (absolute broadcast, per the
+                     * turned pipe's current page). The bar shows the
+                     * value all four pipes now share. */
+                    switch(pipe_page_[p])
+                    {
+                        case 1: /* Character */
+                        {
+                            engine.SetPipeCharacterStep(
+                                p, engine.GetPipeCharacterStep(p) + delta);
+                            const int v = engine.GetPipeCharacterStep(p);
+                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
+                            {
+                                engine.SetPipeCharacterStep(q, v);
+                                cc_character_step_[q]  = v;
+                                cc_character_dirty_[q]
+                                    = true; /* coalesced, sent in MainLoop */
+                            }
+                            break;
+                        }
+                        case 2: /* attack time (no MIDI CC) */
+                        {
+                            engine.SetPipeAttackStep(
+                                p, engine.GetPipeAttackStep(p) + delta);
+                            const int v = engine.GetPipeAttackStep(p);
+                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
+                                engine.SetPipeAttackStep(q, v);
+                            break;
+                        }
+                        case 3: /* release time (no MIDI CC) */
+                        {
+                            engine.SetPipeReleaseStep(
+                                p, engine.GetPipeReleaseStep(p) + delta);
+                            const int v = engine.GetPipeReleaseStep(p);
+                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
+                                engine.SetPipeReleaseStep(q, v);
+                            break;
+                        }
+                        default: /* level */
+                        {
+                            engine.SetPipeStep(
+                                p, engine.GetPipeStep(p) + delta);
+                            const int v = engine.GetPipeStep(p);
+                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
+                            {
+                                engine.SetPipeStep(q, v);
+                                cc_pipe_step_[q]  = v;
+                                cc_pipe_dirty_[q]
+                                    = true; /* coalesced, sent in MainLoop */
+                            }
+                            break;
+                        }
+                    }
                 }
                 else
                 {
-                    engine.SetPipeStep(p, engine.GetPipeStep(p) + delta);
-                    cc_pipe_step_[p]  = engine.GetPipeStep(p);
-                    cc_pipe_dirty_[p] = true; /* coalesced, sent in MainLoop */
-                    bar_page_ = 0;
+                    switch(pipe_page_[p])
+                    {
+                        case 1: /* Character */
+                            engine.SetPipeCharacterStep(
+                                p, engine.GetPipeCharacterStep(p) + delta);
+                            cc_character_step_[p]
+                                = engine.GetPipeCharacterStep(p);
+                            cc_character_dirty_[p]
+                                = true; /* coalesced, sent in MainLoop */
+                            break;
+                        case 2: /* attack time (no MIDI CC) */
+                            engine.SetPipeAttackStep(
+                                p, engine.GetPipeAttackStep(p) + delta);
+                            break;
+                        case 3: /* release time (no MIDI CC) */
+                            engine.SetPipeReleaseStep(
+                                p, engine.GetPipeReleaseStep(p) + delta);
+                            break;
+                        default: /* level */
+                            engine.SetPipeStep(p, engine.GetPipeStep(p) + delta);
+                            cc_pipe_step_[p]  = engine.GetPipeStep(p);
+                            cc_pipe_dirty_[p] = true; /* coalesced, sent in MainLoop */
+                            break;
+                    }
                 }
                 bar_pipe_  = p;
+                bar_page_  = pipe_page_[p];
                 bar_until_ = System::GetNow() + 500;
             }
         }
@@ -591,9 +696,9 @@ static void UpdateLeds()
         /* Distortion-type selector overlay (FR-4b): highest-priority
          * keyboard display while SHIFT is held on the drive page,
          * independent of bar timeouts and other encoder/MIDI bars.
-         * Exactly five red white-keys mark the selected type (Warm
-         * KEY_1-5, Fuzz KEY_6-10, BrokenSpeaker KEY_11-15); every other
-         * keyboard LED is off, including the octave hints. The dedicated
+         * Exactly five red white-keys mark the selected type (Tape
+         * Saturation KEY_1-5, Fuzz KEY_6-10, BrokenSpeaker KEY_11-15);
+         * every other keyboard LED is off, including the octave hints. The dedicated
          * SHIFT/latch and knob LEDs below are unaffected; notes and
          * octave keys keep working underneath the overlay. */
         for(int i = 0; i < 25; i++)
@@ -610,8 +715,9 @@ static void UpdateLeds()
         /* value bar spans the 15 white keys only: leftmost white = 0%,
          * rightmost white = 100%. Volume bars (page-1 pipes + master) use
          * the green/orange/red position gradient; the page-2 pipe
-         * Character bar is uniformly blue, the overdrive bar is uniformly
-         * red and the rotary bar is uniformly purple. */
+         * Character bar is uniformly blue, the page-3 attack bar purple,
+         * the page-4 release bar yellow, the overdrive bar uniformly
+         * red and the rotary bar uniformly purple. */
         int    lit;
         BarKind kind = kBarVolume;
         if(p == kVolBar)
@@ -668,6 +774,20 @@ static void UpdateLeds()
                    / OrganEngine::kMaxCharacterSteps;
             kind = kBarCharacter;
         }
+        else if(bar_page_ == 2)
+        {
+            /* pipe page 3: attack time, 32 log-spaced steps 5 ms..10 s */
+            lit  = (engine.GetPipeAttackStep(p) * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxEnvSteps;
+            kind = kBarAttack;
+        }
+        else if(bar_page_ == 3)
+        {
+            /* pipe page 4: release time, 32 log-spaced steps 5 ms..10 s */
+            lit  = (engine.GetPipeReleaseStep(p) * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxEnvSteps;
+            kind = kBarRelease;
+        }
         else
         {
             lit = (engine.GetPipeStep(p) * kNumWhiteKeys + 16)
@@ -712,22 +832,50 @@ static void UpdateLeds()
     }
 
     /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
-     * Page 2 pipes glow blue (brightness tracks the Character amount with
-     * a floor so the page stays visible at clean sine); page 1 is white. */
+     * Page 2 pipes glow blue, page 3 (attack) purple and page 4
+     * (release) yellow - each with a brightness floor so the page stays
+     * visible at step 0; page 1 is white. A muted pipe's knob LED is
+     * solid red, overriding the page color. */
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
-        if(character_page_[p])
+        if(engine.GetPipeMuted(p))
         {
-            const float s = .2f
-                            + .8f * engine.GetPipeCharacterStep(p)
-                                  * (1.f / OrganEngine::kMaxCharacterSteps);
-            SetPthLedFloat(p + 1, 0.f, 0.f, s);
+            SetPthLedFloat(p + 1, 1.f, 0.f, 0.f); /* solid red: muted */
+            continue;
         }
-        else
+        switch(pipe_page_[p])
         {
-            const float s = engine.GetPipeStep(p)
-                            * (1.f / OrganEngine::kMaxSteps);
-            SetPthLedFloat(p + 1, s, s, s);
+            case 1:
+            {
+                const float s = .2f
+                                + .8f * engine.GetPipeCharacterStep(p)
+                                      * (1.f / OrganEngine::kMaxCharacterSteps);
+                SetPthLedFloat(p + 1, 0.f, 0.f, s); /* blue: Character */
+                break;
+            }
+            case 2:
+            {
+                const float s = .2f
+                                + .8f * engine.GetPipeAttackStep(p)
+                                      * (1.f / OrganEngine::kMaxEnvSteps);
+                SetPthLedFloat(p + 1, .55f * s, 0.f, s); /* purple: attack */
+                break;
+            }
+            case 3:
+            {
+                const float s = .2f
+                                + .8f * engine.GetPipeReleaseStep(p)
+                                      * (1.f / OrganEngine::kMaxEnvSteps);
+                SetPthLedFloat(p + 1, s, s, 0.f); /* yellow: release */
+                break;
+            }
+            default:
+            {
+                const float s = engine.GetPipeStep(p)
+                                * (1.f / OrganEngine::kMaxSteps);
+                SetPthLedFloat(p + 1, s, s, s); /* white: level */
+                break;
+            }
         }
     }
     /* master-volume knob LED (PTH 9): volume-encoder page 3 tracks the
@@ -923,8 +1071,8 @@ int main(void)
     }
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
-        character_page_[p] = false;
-        prev_enc_sw_[p]    = hw.button_sr.State(p);
+        pipe_page_[p]     = 0;
+        prev_enc_sw_[p]   = hw.button_sr.State(p);
     }
     vol_page_            = kVolPageMaster;
     wheel_vibrato_mode_  = false; /* boot with the wheel on rotary */

@@ -10,21 +10,33 @@
  *    the 2nd/3rd harmonics are derived algebraically from the sine
  *    sample, smoothly eased in and anti-alias-masked per folded note.
  *  - Free-running oscillators (phase never reset at note-on)
- *  - Fixed 5 ms linear attack/release gate envelope; 5 ms steal fade
+ *  - Per-pipe attack/release gate envelopes: 32 log-spaced steps each,
+ *    5 ms (step 0, boot default = the original fixed timing) to 10 s
+ *    (EnvelopeMap.h). Each pipe fades in/out at its own rate, so pipes
+ *    can stagger their fade-in; a voice frees only when every pipe's
+ *    release finishes. 5 ms steal fade
  *  - Oldest-first voice stealing; same-note retrigger reuses its voice
  *  - Fixed 1/24 output scale so 6 voices x 4 pipes cannot clip
  *  - Pipe levels in 32 steps, gain = (step/32)^2, smoothed per sample
  *  - Distortion: 32-step selectable-character saturation stage on the
  *    mix (Distortion.h), placed before the master gain so the drive
  *    character is level-independent; 0% is an exact bypass (DSP-5).
- *    Three types - Warm (vintage soft clipping), Fuzz (aggressive
+ *    Three types - Tape Saturation (exact port of the CHOMPI-TAPE
+ *    page-2 saturation: log-mapped 1-13.9x pre-gain into the stmlib
+ *    SoftClip curve with output compensation gain), Fuzz (aggressive
  *    saturation), and BrokenSpeaker (harsh speaker-like breakup with
  *    narrow presence) - selected by SHIFT + volume-encoder turn on
- *    page 2 with a ~10 ms click-free crossfade; the type boots to Warm
- *    and is not saved (FR-4b)
+ *    page 2 with a ~10 ms click-free crossfade; the type boots to Tape
+ *    Saturation and is not saved (FR-4b)
  *  - Rotary speaker: 60s Leslie-style mono->stereo stage after the
  *    distortion (800 Hz crossover, Doppler horn + AM drum, two virtual
  *    mics 180 deg apart); 0% is an exact bypass (DSP-6)
+ *  - Stereo dropout: BrokenSpeaker-only lo-fi stage between the rotary
+ *    and the plate reverb (Dropout.h, DSP-8): random one-channel
+ *    tape-style dropouts (rate/depth scale with drive), torn-cone
+ *    crackle and per-channel filter skew (4 kHz L / 3.2 kHz R). Gated
+ *    per sample by the live BrokenSpeaker weight x wet amount, so it
+ *    is an exact bypass for the other types and at zero drive.
  *  - Plate reverb: compact vintage-1960s-inspired plate after the
  *    rotary (PlateReverb.h; Griesinger/Dattorro tank adapted from
  *    chompi-wave's reverb). Linear complementary dry/wet crossfade with
@@ -42,10 +54,12 @@
 #pragma once
 #include "daisysp.h"
 #include "Distortion.h"
+#include "Dropout.h"
 #include "RotarySpeaker.h"
 #include "TonewheelCharacter.h"
 #include "PlateReverb.h"
 #include "Vibrato.h"
+#include "EnvelopeMap.h"
 
 namespace chompi
 {
@@ -82,6 +96,8 @@ class OrganEngine
     static constexpr float kMaxReverbDecaySeconds   = 20.f;
     static constexpr int   kMaxVibratoDepthCents    = Vibrato::kMaxDepthCents;
     static constexpr int   kDefaultVibratoDepth     = 0; /* vibrato off */
+    static constexpr int   kMaxEnvSteps     = EnvelopeMap::kMaxSteps;
+    static constexpr int   kDefaultEnvStep  = 0; /* 5 ms: the original timing */
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
      *  uint16_t elements in writable memory (ORGAN uses SDRAM); pass it
@@ -89,7 +105,7 @@ class OrganEngine
     void Init(float sample_rate, uint16_t *reverb_delay)
     {
         sample_rate_ = sample_rate;
-        env_inc_     = 1.f / (0.005f * sample_rate); /* 5 ms attack/release/steal */
+        steal_inc_   = 1.f / (0.005f * sample_rate); /* 5 ms steal fade */
         age_counter_ = 0;
         fine_cents_  = 0;
         freqs_dirty_ = false;
@@ -105,10 +121,10 @@ class OrganEngine
             voice.pending_note = 0;
             voice.pending_vel  = 0.f;
             voice.velocity     = 0.f;
-            voice.env          = 0.f;
             voice.age          = 0;
             for(int p = 0; p < kNumPipes; p++)
             {
+                voice.pipe_env[p] = 0.f;
                 voice.osc[p].Init(sample_rate);
                 voice.osc[p].SetAmp(1.f);
                 voice.osc[p].SetFreq(100.f);
@@ -119,8 +135,14 @@ class OrganEngine
 
         for(int p = 0; p < kNumPipes; p++)
         {
-            pipe_steps[p] = kDefaultStep;
+            pipe_steps[p]  = kDefaultStep;
+            pipe_muted_[p] = false; /* mute is session-only, boots clear */
             pipe_gain_[p] = pipe_gain_target_[p] = StepToGain(kDefaultStep);
+            pipe_attack_step_[p]  = kDefaultEnvStep;
+            pipe_release_step_[p] = kDefaultEnvStep;
+            attack_inc_[p]  = EnvelopeMap::StepToInc(kDefaultEnvStep,
+                                                     sample_rate);
+            release_inc_[p] = attack_inc_[p];
         }
 
         master_gain_ = master_gain_target_ = kDefaultMasterGain;
@@ -129,7 +151,8 @@ class OrganEngine
         drive_ = drive_target_
             = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
         distortion_.Init(sample_rate);
-        distortion_.SetType(Distortion::kWarm); /* boot default (FR-4b) */
+        distortion_.SetType(Distortion::kTapeSat); /* boot default (FR-4b) */
+        dropout_.Init(sample_rate);
 
         rotary_.Init(sample_rate);
         SetRotaryStep(kDefaultRotaryStep);
@@ -146,17 +169,46 @@ class OrganEngine
             note_held_[n] = false;
     }
 
-    /** Apply one encoder click (or MIDI CC step) to a pipe level. */
+    /** Apply one encoder click (or MIDI CC step) to a pipe level. The
+ *      level stays editable while the pipe is muted; the mute keeps the
+ *      gain target at 0 until the pipe is unmuted. */
     void SetPipeStep(int pipe, int step)
     {
         if(pipe < 0 || pipe >= kNumPipes)
             return;
         step = step < 0 ? 0 : (step > kMaxSteps ? kMaxSteps : step);
-        pipe_steps[pipe]            = static_cast<uint8_t>(step);
-        pipe_gain_target_[pipe]     = StepToGain(step);
+        pipe_steps[pipe]        = static_cast<uint8_t>(step);
+        pipe_gain_target_[pipe] = pipe_muted_[pipe] ? 0.f
+                                                    : StepToGain(step);
     }
 
     int GetPipeStep(int pipe) const { return pipe_steps[pipe]; }
+
+    /** Mute/unmute a pipe (SHIFT + pipe-encoder press). The mute is
+ *      folded into pipe_gain_target_, so the existing ~1 ms gain slew
+ *      in Process() makes it click-free, and the level step is
+ *      preserved while muted and restored on unmute. Session-only:
+ *      boots unmuted, not saved, no MIDI CC. */
+    void SetPipeMuted(int pipe, bool muted)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        pipe_muted_[pipe]       = muted;
+        pipe_gain_target_[pipe] = muted ? 0.f : StepToGain(pipe_steps[pipe]);
+    }
+
+    bool GetPipeMuted(int pipe) const
+    {
+        return (pipe < 0 || pipe >= kNumPipes) ? false
+                                               : pipe_muted_[pipe];
+    }
+
+    void TogglePipeMuted(int pipe)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        SetPipeMuted(pipe, !pipe_muted_[pipe]);
+    }
 
     /** Apply one encoder click (or MIDI CC step) to a pipe's Character
  *      amount. Step 0 = exact clean sine, 64 = fully aged (tonewheel-
@@ -171,6 +223,41 @@ class OrganEngine
         return character_.GetStep(pipe);
     }
 
+    /** Apply one encoder click to a pipe's attack time (0..kMaxEnvSteps,
+ *      log-spaced 5 ms..10 s, EnvelopeMap.h). Step 0 is the original
+ *      fixed 5 ms gate - boot default, no behavior change. The new rate
+ *      applies to currently sounding voices on the next sample. */
+    void SetPipeAttackStep(int pipe, int step)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        step = step < 0 ? 0 : (step > kMaxEnvSteps ? kMaxEnvSteps : step);
+        pipe_attack_step_[pipe] = static_cast<uint8_t>(step);
+        attack_inc_[pipe]       = EnvelopeMap::StepToInc(step, sample_rate_);
+    }
+
+    int GetPipeAttackStep(int pipe) const
+    {
+        return pipe_attack_step_[pipe];
+    }
+
+    /** Apply one encoder click to a pipe's release time (0..kMaxEnvSteps,
+ *      same log-spaced 5 ms..10 s mapping as the attack). The 5 ms floor
+ *      keeps key release click-free (a true 0 ms cut would pop). */
+    void SetPipeReleaseStep(int pipe, int step)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        step = step < 0 ? 0 : (step > kMaxEnvSteps ? kMaxEnvSteps : step);
+        pipe_release_step_[pipe] = static_cast<uint8_t>(step);
+        release_inc_[pipe]       = EnvelopeMap::StepToInc(step, sample_rate_);
+    }
+
+    int GetPipeReleaseStep(int pipe) const
+    {
+        return pipe_release_step_[pipe];
+    }
+
     /** Apply one encoder click to the overdrive amount (0..kMaxSteps).
  *      Step 0 is an exact bypass; higher steps increase the pre-gain. */
     void SetDriveStep(int step)
@@ -182,9 +269,10 @@ class OrganEngine
 
     int GetDriveStep() const { return drive_step_; }
 
-    /** Select the distortion type (Distortion::kExisting/kWarm/kFuzz,
- *      clamped, no wrap). Never changes the amount, tuning or note
- *      state; the ~10 ms crossfade is click-free. Boots as Existing. */
+    /** Select the distortion type (Distortion::kTapeSat/kFuzz/
+ *      kBrokenSpeaker, clamped, no wrap). Never changes the amount,
+ *      tuning or note state; the ~10 ms crossfade is click-free.
+ *      Boots as Tape Saturation. */
     void SetDriveType(int type) { distortion_.SetType(type); }
 
     int GetDriveType() const { return distortion_.GetType(); }
@@ -368,6 +456,7 @@ class OrganEngine
          * tanhf + divide per sample. drive_ still slews per sample for
          * a click-free bypass. */
         distortion_.PrepareBlock(drive_target_);
+        dropout_.PrepareBlock(drive_target_);
 
         if(freqs_dirty_)
         {
@@ -434,49 +523,76 @@ class OrganEngine
                     if(ca[p] > 0.f)
                         psig = TonewheelCharacter::ShapeSample(
                             psig, character_.Coeffs(v, p), ca[p]);
-                    sig += psig * pipe_gain_[p];
+                    /* per-pipe gate envelope: each pipe fades in/out at
+                     * its own attack/release rate */
+                    sig += psig * pipe_gain_[p] * voice.pipe_env[p];
                 }
 
                 switch(voice.state)
                 {
                     case ATTACK:
-                        voice.env += env_inc_;
-                        if(voice.env >= 1.f)
+                    {
+                        /* the voice sustains once ALL pipes are fully up
+                         * (the slowest attack sets the transition) */
+                        bool all_up = true;
+                        for(int p = 0; p < kNumPipes; p++)
                         {
-                            voice.env   = 1.f;
-                            voice.state = SUSTAIN;
+                            voice.pipe_env[p] += attack_inc_[p];
+                            if(voice.pipe_env[p] >= 1.f)
+                                voice.pipe_env[p] = 1.f;
+                            else
+                                all_up = false;
                         }
+                        if(all_up)
+                            voice.state = SUSTAIN;
                         break;
+                    }
                     case SUSTAIN: break;
                     case RELEASE:
-                        voice.env -= env_inc_;
-                        if(voice.env <= 0.f)
+                    {
+                        /* the voice frees once ALL pipes are fully out
+                         * (the slowest release holds the voice) */
+                        bool all_down = true;
+                        for(int p = 0; p < kNumPipes; p++)
                         {
-                            voice.env   = 0.f;
+                            voice.pipe_env[p] -= release_inc_[p];
+                            if(voice.pipe_env[p] <= 0.f)
+                                voice.pipe_env[p] = 0.f;
+                            else
+                                all_down = false;
+                        }
+                        if(all_down)
                             voice.state = IDLE;
-                        }
                         break;
+                    }
                     case STEAL:
-                        voice.env -= env_inc_;
-                        if(voice.env <= 0.f)
+                    {
+                        /* fixed 5 ms fade on all pipes, then the new note */
+                        bool all_down = true;
+                        for(int p = 0; p < kNumPipes; p++)
                         {
-                            voice.env = 0.f;
-                            StartVoice(v, voice.pending_note, voice.pending_vel);
+                            voice.pipe_env[p] -= steal_inc_;
+                            if(voice.pipe_env[p] <= 0.f)
+                                voice.pipe_env[p] = 0.f;
+                            else
+                                all_down = false;
                         }
+                        if(all_down)
+                            StartVoice(v, voice.pending_note,
+                                       voice.pending_vel);
                         break;
+                    }
                     default: break;
                 }
 
-                mix += sig * voice.env * voice.velocity;
+                mix += sig * voice.velocity;
             }
 
             /* Distortion (DSP-5): selectable-character saturation stage
-             * (Existing/Warm/Fuzz) on the mix. Runs before the master
-             * gain so the drive character does not depend on the
-             * listening level; step 0 is an exact bypass for every type.
-             * The Existing branch keeps the original arithmetic: fully
-             * wet quadratic pre-gain into a tanh soft clip with
-             * level-anchored post gain whenever drive_ > 0. */
+             * (Tape Saturation/Fuzz/BrokenSpeaker) on the mix. Runs
+             * before the master gain so the drive character does not
+             * depend on the listening level; step 0 is an exact bypass
+             * for every type. */
             float out_sig = distortion_.Process(mix * kMixScale, drive_);
             /* Rotary speaker (DSP-6): mono mix -> stereo Leslie, placed
              * after the distortion (the drive is the preamp, the Leslie
@@ -485,6 +601,14 @@ class OrganEngine
              * an exact bypass (both channels = out_sig). */
             float out_l, out_r;
             rotary_.Process(out_sig, out_l, out_r);
+            /* Stereo dropout (DSP-8): BrokenSpeaker-only lo-fi stage
+             * (one-channel tape dropouts, torn-cone crackle, per-channel
+             * filter skew) between the rotary and the plate. Gated per
+             * sample by the live BrokenSpeaker weight x wet amount, so
+             * it is an exact bypass for the other types and at zero
+             * drive, and the ~10 ms crossfades can't click. */
+            dropout_.Process(out_l, out_r,
+                             distortion_.GetBrokenWetAmount());
             /* Plate reverb: stereo in/out between the rotary (speaker
              * cabinet) and the master gain, so the volume knob scales
              * dry and wet equally and 0% master mutes the tail. The tank
@@ -517,7 +641,7 @@ class OrganEngine
         uint8_t             pending_note;
         float               pending_vel;
         float               velocity;
-        float               env;
+        float               pipe_env[kNumPipes]; /* per-pipe gate envelope */
         uint32_t            age;
     };
 
@@ -556,6 +680,10 @@ class OrganEngine
 
     void StartVoice(int v, uint8_t note, float velocity)
     {
+        /* pipe_env is deliberately NOT reset: IDLE voices and completed
+         * STEAL fades are already at 0 on every pipe, and a same-note
+         * retrigger should attack from its current level so a long
+         * release tail is not cut. */
         Voice &voice   = voices_[v];
         voice.note     = note;
         voice.velocity = velocity;
@@ -567,13 +695,14 @@ class OrganEngine
     static constexpr float kDefaultMasterGain = .25f; /* 25% at boot */
 
     float    sample_rate_;
-    float    env_inc_;
+    float    steal_inc_;
     Voice    voices_[kNumVoices];
     uint32_t age_counter_;
     int      fine_cents_;
     bool     freqs_dirty_;
     float    pipe_gain_[kNumPipes];
     float    pipe_gain_target_[kNumPipes];
+    bool     pipe_muted_[kNumPipes]; /* session-only, boots unmuted */
     TonewheelCharacter character_;
     float    master_gain_;
     float    master_gain_target_;
@@ -581,8 +710,13 @@ class OrganEngine
     float    drive_target_;
     Distortion distortion_;
     uint8_t  drive_step_;
+    Dropout  dropout_;
     RotarySpeaker rotary_;
     uint8_t  rotary_step_;
+    uint8_t  pipe_attack_step_[kNumPipes];
+    uint8_t  pipe_release_step_[kNumPipes];
+    float    attack_inc_[kNumPipes];
+    float    release_inc_[kNumPipes];
     PlateReverb plate_;
     uint8_t  reverb_mix_percent_;
     uint8_t  reverb_decay_step_;

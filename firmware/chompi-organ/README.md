@@ -2,7 +2,7 @@
 
 Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
-tonewheel-style Character, selectable distortion (Warm/Fuzz/BrokenSpeaker),
+tonewheel-style Character, selectable distortion (Tape Saturation/Fuzz/BrokenSpeaker),
 a rotary-speaker stage, a compact vintage-1960s-inspired plate
 reverb, and global 6 Hz pitch vibrato.
 
@@ -10,8 +10,9 @@ reverb, and global 6 Hz pitch vibrato.
 
 ### Pipe encoders (physical knobs 1-4, left to right)
 
-Each pipe encoder has two independent pages; press the encoder's push
-switch to toggle that pipe between them (pages are per-pipe, not global):
+Each pipe encoder has four independent pages; press the encoder's push
+switch to cycle that pipe through them 1 -> 2 -> 3 -> 4 -> 1 (pages are
+per-pipe, not global):
 
 - **Page 1 - pipe level** (white knob LED): 32 steps, gain = (step/32)^2.
   Boot default is step 16 (50%). The white-key bar shows the level with a
@@ -20,6 +21,20 @@ switch to toggle that pipe between them (pages are per-pipe, not global):
   a floor so the page stays visible at 0): 64 steps of tonewheel-inspired
   harmonic coloration. Step 0 is the exact clean sine; step 64 is clearly
   aged but still organ-like. The white-key bar is uniformly blue.
+- **Page 3 - attack time** (purple knob LED with brightness floor): 32
+  log-spaced steps from 5 ms (step 0, boot default - the original fixed
+  timing) to 10 s (step 32). The white-key bar is uniformly purple.
+- **Page 4 - release time** (yellow knob LED with brightness floor): the
+  same 32-step 5 ms..10 s log mapping, applied to the fade-out after the
+  key is released. The 5 ms floor keeps the release click-free. The
+  white-key bar is uniformly yellow.
+
+Each pipe has its own gate envelope, so pipes fade in and out at
+different rates - e.g. let the 2' pipe swell up seconds after the 8'
+fundamental speaks. A voice stays allocated until every pipe's release
+has finished; voice stealing keeps the fixed 5 ms steal fade. Attack and
+release boot at step 0 (5 ms) and are kept for the session (no SD-card
+persistence, no MIDI CC).
 
 Each pipe has its own Character amount, applied to that pipe across all
 six voices; adjusting one pipe never changes the others' amounts or
@@ -32,6 +47,20 @@ and finished envelopes stay silent; there is no idle background tone.
 
 Character amounts boot at zero and are kept for the session (no SD-card
 persistence).
+
+SHIFT adds two pipe-control gestures on the pipe encoders:
+
+- **SHIFT + press** toggles that pipe's mute (the page does not cycle).
+  A muted pipe is silenced click-free (its level step is preserved and
+  restored on unmute), and its knob LED goes solid red, overriding the
+  page color. Mute is session-only, boots unmuted and has no MIDI CC;
+  level CC 70-73 still edits a muted pipe's step, which stays silent
+  until unmuted.
+- **SHIFT + turn** sets the value for all four pipes at once, per the
+  turned pipe's current page: page 1 sets all four levels to the same
+  value, page 2 all four Character amounts, page 3 all four attack
+  times, page 4 all four release times. The white-key bar shows the
+  value all four pipes now share.
 
 ### Transport wheel (ENC_5)
 
@@ -55,14 +84,17 @@ bypass) -> plate-reverb mix (page 3, blue LED with brightness floor).
 Turning or pressing the encoder shows the current page's white-key value
 bar for 500 ms.
 
-Page 2's distortion has three selectable characters: Warm (vintage soft
-clipping), Fuzz (aggressive symmetric saturation), and BrokenSpeaker
-(harsh speaker-like breakup with narrow presence). SHIFT + turn on page 2
-moves Warm -> Fuzz -> BrokenSpeaker (clamped at the ends, no wrap); the
-amount is not changed. While SHIFT is held on page 2, exactly five red
-white-keys show the selection (KEY_1-5 Warm, KEY_6-10 Fuzz, KEY_11-15
-BrokenSpeaker) and all other key LEDs are off; releasing SHIFT restores
-the amount bar for 500 ms. The type boots to Warm and is not saved.
+Page 2's distortion has three selectable characters: Tape Saturation (an
+exact port of the CHOMPI-TAPE page-2 tape saturation), Fuzz (aggressive
+symmetric saturation), and BrokenSpeaker (harsh speaker-like breakup
+with narrow presence, plus stereo one-channel tape dropouts, torn-cone
+crackle and per-channel filter skew after the rotary). SHIFT + turn on
+page 2 moves Tape Saturation -> Fuzz -> BrokenSpeaker (clamped at the
+ends, no wrap); the amount is not changed. While SHIFT is held on page
+2, exactly five red white-keys show the selection (KEY_1-5 Tape
+Saturation, KEY_6-10 Fuzz, KEY_11-15 BrokenSpeaker) and all other key
+LEDs are off; releasing SHIFT restores the amount bar for 500 ms. The
+type boots to Tape Saturation and is not saved.
 
 Page 3 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
 exact dry and 100% is wet only (a linear complementary crossfade with a
