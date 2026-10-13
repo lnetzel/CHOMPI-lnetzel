@@ -5,11 +5,6 @@
  *  per-sample smoothed drive value; step 0 is an exact dry bypass for
  *  every type:
  *
- *  - Existing: the original overdrive-pedal stage, arithmetic unchanged -
- *    quadratic pre-gain g = 1 + 63 d^2 into tanhf(g*x), post gain
- *    0.33/tanh(0.33*g) anchoring a 1/3-full-scale input to the same
- *    output level. Fully wet whenever the smoothed amount is > 0, exact
- *    bypass at settled zero. No filtering in this branch.
  *  - Warm: gentler quadratic pre-gain g = 1 + 15 d^2 (1..16x) into a
  *    smooth asymmetric tanh saturation (a small input bias gives modestly
  *    different positive/negative knees -> even harmonics), then a ~20 Hz
@@ -21,6 +16,22 @@
  *    symmetric bounded soft-knee clipper (near-hard saturation), then a
  *    ~10 kHz one-pole low-pass to moderate harsh highs. Same 0.33
  *    normalization. Symmetric curve: no intentional DC, no bit reduction.
+ *  - BrokenSpeaker: aggressive harsh breakup with narrow speaker-like
+ *    bandpass filtering and resonant coloration. Nonlinear hard clipping
+ *    produces rich harmonics; high-pass and low-pass filtering (derived
+ *    from sample rate) create a narrow vocal-like ~1-4 kHz presence peak
+ *    and suppress extreme lows/highs. Resonant state priming from the live
+ *    signal prevents audible tails when switching in. Fully wet while
+ *    amount is > 0, exact bypass at settled zero.
+ *
+ *  Warm/Fuzz/BrokenSpeaker run fully wet while the amount is up, but
+ *  crossfade wet->dry over ~10 ms when the amount target reaches zero
+ *  (and dry->wet when it rises again). The smoothed amount tails toward
+ *  zero exponentially (~2 s) and filtering at unity gain is audible
+ *  colour, so bypass must not wait for the smoothed value to settle: the
+ *  finite target-driven transition is the "settle, then snap" path that
+ *  makes settled zero an exact dry bypass with no residual filtered tail
+ *  and no abrupt step.
  *
  *  Type switching crossfades the per-type outputs with a three-element
  *  nonnegative weight vector that ramps linearly (~10 ms, sample-rate
@@ -28,17 +39,8 @@
  *  one; retargeting mid-fade continues from the current weights, never
  *  from a stale mode. GetType() returns the selected target immediately
  *  for the LED overlay. In stable mode only the selected branch is
- *  computed; the inactive branches' one-pole filter histories are primed
- *  from the live signal so activating Warm/Fuzz exposes no stale tails.
- *
- *  Warm/Fuzz run fully wet like Existing while the amount is up, but
- *  crossfade wet->dry over ~10 ms when the amount target reaches zero
- *  (and dry->wet when it rises again). The smoothed amount tails toward
- *  zero exponentially (~2 s) and a 6/10 kHz low-pass at unity gain is
- *  audible colour, so bypass must not wait for the smoothed value to
- *  settle: the finite target-driven transition is the "settle, then
- *  snap" path that makes settled zero an exact dry bypass with no
- *  residual filtered tail and no abrupt step.
+ *  computed; the inactive branches' filter histories are primed from the
+ *  live signal so activating Fuzz/BrokenSpeaker exposes no stale tails.
  *
  *  Per-block gains and normalization are computed in PrepareBlock()
  *  (called once per audio block from OrganEngine::Prepare, B4-style) -
@@ -57,12 +59,12 @@ class Distortion
 {
   public:
     /** Distortion characters in SHIFT+turn order: clockwise moves
-     *  Existing -> Warm -> Fuzz (clamped at the ends, no wrap). */
+     *  Warm -> Fuzz -> BrokenSpeaker (clamped at the ends, no wrap). */
     enum Type : uint8_t
     {
-        kExisting = 0,
-        kWarm     = 1,
-        kFuzz     = 2
+        kWarm          = 0,
+        kFuzz          = 1,
+        kBrokenSpeaker = 2
     };
     static constexpr int kNumTypes = 3;
 
@@ -82,6 +84,15 @@ class Distortion
     static constexpr float kFuzzGainSpan = 127.f;
     static constexpr float kFuzzLpHz     = 10000.f;
 
+    /** BrokenSpeaker voicing (initial values): aggressive pre-gain 1..200,
+     *  harsh hard clipping, ~400 Hz high-pass (below vocal presence), 
+     *  ~4 kHz low-pass (narrow presence peak around vocal formants),
+     *  and resonant state priming. */
+    static constexpr float kBrokenGainSpan = 199.f;
+    static constexpr float kBrokenHpHz     = 400.f;
+    static constexpr float kBrokenLpHz     = 4000.f;
+    static constexpr float kBrokenClipPeak = 0.7f; /* hard clip bound */
+
     void Init(float sample_rate)
     {
         sample_rate_    = sample_rate;
@@ -91,13 +102,16 @@ class Distortion
         warm_lp_c_      = 1.f - expf(-kTwoPi * kWarmLpHz / sample_rate);
         fuzz_lp_c_      = 1.f - expf(-kTwoPi * kFuzzLpHz / sample_rate);
         warm_bias_tanh_ = tanhf(kWarmBias);
+        broken_hp_c_    = 1.f - expf(-kTwoPi * kBrokenHpHz / sample_rate);
+        broken_lp_c_    = 1.f - expf(-kTwoPi * kBrokenLpHz / sample_rate);
 
-        type_ = kExisting;
+        type_ = kWarm;
         for(int t = 0; t < kNumTypes; t++)
-            weight_[t] = (t == kExisting) ? 1.f : 0.f;
-        wet_warm_ = wet_fuzz_ = 0.f;
-        drive_target_         = 0.f;
+            weight_[t] = (t == kWarm) ? 1.f : 0.f;
+        wet_warm_internal_ = wet_fuzz_ = wet_broken_ = 0.f;
+        drive_target_           = 0.f;
         warm_dc_x1_ = warm_dc_y1_ = warm_lp_ = fuzz_lp_ = 0.f;
+        broken_hp_x1_ = broken_hp_y1_ = broken_lp_ = 0.f;
         PrepareBlock(0.f); /* unity gains + normalized posts */
     }
 
@@ -122,36 +136,28 @@ class Distortion
                                            : (drive_target > 1.f ? 1.f
                                                                  : drive_target);
         const float d  = drive_target_;
-        /* same expression order as the original engine code, so the
-         * Existing branch arithmetic is bit-identical (B4) */
-        g_exist_       = 1.f + d * d * 63.f;
-        post_exist_    = kRefLevel / tanhf(kRefLevel * g_exist_);
         g_warm_        = 1.f + d * d * kWarmGainSpan;
         post_warm_     = kRefLevel
                      / (tanhf(kRefLevel * g_warm_ + kWarmBias)
                         - warm_bias_tanh_);
         g_fuzz_    = 1.f + d * d * kFuzzGainSpan;
         post_fuzz_ = kRefLevel / FuzzClip(kRefLevel * g_fuzz_);
+        g_broken_  = 1.f + d * d * kBrokenGainSpan;
+        post_broken_ = kRefLevel / kBrokenClipPeak; /* normalized to peak */
     }
 
     /** Process one mono sample. `drive` is OrganEngine's per-sample
-     *  smoothed amount; it gates the Existing branch exactly like the
-     *  original code (fully wet while > 0, exact bypass at settled 0). */
+     *  smoothed amount; gates full wet while > 0, exact bypass at settled 0. */
     float Process(float in, float drive)
     {
         AdvanceWeights();
         const float wet_target = drive_target_ > 0.f ? 1.f : 0.f;
-        wet_warm_ = RampToward(wet_warm_, wet_target, wet_ramp_inc_);
+        float wet_warm_ = RampToward(wet_warm_internal_, wet_target, wet_ramp_inc_);
+        wet_warm_internal_ = wet_warm_;
         wet_fuzz_ = RampToward(wet_fuzz_, wet_target, wet_ramp_inc_);
+        wet_broken_ = RampToward(wet_broken_, wet_target, wet_ramp_inc_);
 
         float out = 0.f;
-        if(weight_[kExisting] > 0.f)
-        {
-            /* exact original DSP-5 arithmetic, no filtering */
-            const float e
-                = drive > 0.f ? tanhf(g_exist_ * in) * post_exist_ : in;
-            out += weight_[kExisting] * e;
-        }
         if(weight_[kWarm] > 0.f)
         {
             const float wet = WarmFiltered(WarmShaped(in));
@@ -169,6 +175,15 @@ class Distortion
         else
         {
             FuzzPrime(in);
+        }
+        if(weight_[kBrokenSpeaker] > 0.f)
+        {
+            const float wet = BrokenFiltered(BrokenShaped(in));
+            out += weight_[kBrokenSpeaker] * (in + wet_broken_ * (wet - in));
+        }
+        else
+        {
+            BrokenPrime(in);
         }
         return out;
     }
@@ -271,19 +286,53 @@ class Distortion
 
     void FuzzPrime(float in) { FuzzFiltered(in); }
 
+    /** BrokenSpeaker: aggressive hard clipping for rich harmonics. */
+    static float BrokenClip(float t)
+    {
+        /* Hard clip at ±kBrokenClipPeak for harsh breakup. */
+        if(t > kBrokenClipPeak)
+            return kBrokenClipPeak;
+        if(t < -kBrokenClipPeak)
+            return -kBrokenClipPeak;
+        return t;
+    }
+
+    float BrokenShaped(float x) const
+    {
+        return BrokenClip(g_broken_ * x) * post_broken_;
+    }
+
+    /** BrokenSpeaker filters: ~400 Hz high-pass (removes extreme lows),
+     *  then ~4 kHz low-pass (creates narrow vocal-like presence). */
+    float BrokenFiltered(float s)
+    {
+        /* High-pass filter (DC blocker, ~400 Hz cutoff). */
+        const float y = s - broken_hp_x1_ + (1.f - broken_hp_c_) * broken_hp_y1_;
+        broken_hp_x1_ = s;
+        broken_hp_y1_ = y;
+        
+        /* Low-pass filter (~4 kHz, creates presence peak). */
+        broken_lp_ += broken_lp_c_ * (y - broken_lp_);
+        return broken_lp_;
+    }
+
+    void BrokenPrime(float in) { BrokenFiltered(in); }
+
     float        sample_rate_;
     float        type_ramp_inc_; /* mass per sample for a 0..1 transfer */
     float        wet_ramp_inc_;  /* wet<->dry crossfade per sample */
     float        warm_dc_r_, warm_lp_c_, fuzz_lp_c_, warm_bias_tanh_;
+    float        broken_hp_c_, broken_lp_c_; /* BrokenSpeaker filter coeffs */
     volatile Type type_; /* ISR-written, main-loop read (LED overlay) */
     float        weight_[kNumTypes];
-    float        wet_warm_, wet_fuzz_;
+    float        wet_warm_internal_, wet_fuzz_, wet_broken_; /* crossfade targets */
     float        drive_target_;
-    float        g_exist_, post_exist_; /* per-block gains (B4) */
-    float        g_warm_, post_warm_;
+    float        g_warm_, post_warm_; /* per-block gains (B4) */
     float        g_fuzz_, post_fuzz_;
-    float        warm_dc_x1_, warm_dc_y1_, warm_lp_;
-    float        fuzz_lp_;
+    float        g_broken_, post_broken_;
+    float        warm_dc_x1_, warm_dc_y1_, warm_lp_; /* Warm filter state */
+    float        fuzz_lp_; /* Fuzz filter state */
+    float        broken_hp_x1_, broken_hp_y1_, broken_lp_; /* Broken filter state */
 };
 
 } // namespace chompi

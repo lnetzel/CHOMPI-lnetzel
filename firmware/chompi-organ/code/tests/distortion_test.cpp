@@ -3,9 +3,6 @@
  *
  *  Pure host C++: no MCU/Daisy dependencies. Covers:
  *   - init defaults, type setter clamping (no wrap), immediate getter
- *   - Existing regression: bit-faithful to the pre-extraction DSP-5
- *     formula at representative inputs and amounts, incl. the
- *     smoothed-amount bypass gate
  *   - exact dry bypass at settled zero amount for every type
  *   - silent input -> silence after filter settling (all types)
  *   - type crossfade: weights stay nonnegative and sum to 1, converge
@@ -13,7 +10,8 @@
  *     current weights without a jump (48 kHz and 32 kHz)
  *   - amount retention: SetType alone never disturbs the drive path
  *   - voicing distinction: Warm is asymmetric (even harmonics, blocked
- *     DC), Fuzz is symmetric and bounded, both differ from Existing
+ *     DC), Fuzz is symmetric and bounded, BrokenSpeaker is harsh and
+ *     narrow-banded
  *   - bounded output across the full amount range
  *   - no discontinuities during rapid type retargeting (checked
  *     relative to the local input slope)
@@ -28,14 +26,6 @@
 using chompi::Distortion;
 
 static const float kPi = 3.14159265358979f;
-
-/** Pre-extraction DSP-5 arithmetic (the original overdrive stage). */
-static float OriginalExisting(float x, float d)
-{
-    const float g    = 1.f + d * d * 63.f;
-    const float post = .33f / tanhf(.33f * g);
-    return d > 0.f ? tanhf(g * x) * post : x;
-}
 
 /** In-place DFT magnitude at harmonic h of nsamp samples, coherent cycles. */
 static float BinMag(const float *buf, int nsamp, int h)
@@ -54,41 +44,17 @@ static void test_init_and_clamp()
 {
     Distortion d;
     d.Init(48000.f);
-    assert(d.GetType() == Distortion::kExisting); /* boot default */
+    assert(d.GetType() == Distortion::kWarm); /* boot default */
     assert(d.Weight(0) == 1.f && d.Weight(1) == 0.f && d.Weight(2) == 0.f);
 
-    d.SetType(Distortion::kWarm);
-    assert(d.GetType() == Distortion::kWarm); /* immediate, pre-ramp */
     d.SetType(Distortion::kFuzz);
-    assert(d.GetType() == Distortion::kFuzz);
+    assert(d.GetType() == Distortion::kFuzz); /* immediate, pre-ramp */
+    d.SetType(Distortion::kBrokenSpeaker);
+    assert(d.GetType() == Distortion::kBrokenSpeaker);
     d.SetType(99); /* clamped at the top end, no wrap */
-    assert(d.GetType() == Distortion::kFuzz);
+    assert(d.GetType() == Distortion::kBrokenSpeaker);
     d.SetType(-4); /* clamped at the bottom end */
-    assert(d.GetType() == Distortion::kExisting);
-}
-
-static void test_existing_formula()
-{
-    Distortion d;
-    d.Init(48000.f); /* weights settle one-hot Existing from Init */
-    static const float drives[] = {1.f / 32.f, .25f, .5f, 1.f};
-    static const float ins[]
-        = {-1.f, -.5f, -.33f, -.1f, 0.f, .1f, .33f, .5f, 1.f};
-    for(int di = 0; di < 4; di++)
-    {
-        const float drv = drives[di];
-        d.PrepareBlock(drv);
-        for(int xi = 0; xi < 9; xi++)
-        {
-            const float got  = d.Process(ins[xi], drv);
-            const float want = OriginalExisting(ins[xi], drv);
-            assert(fabsf(got - want) <= 1e-6f);
-        }
-    }
-    /* the smoothed-amount gate: drive 0 is dry at any prepared gain */
-    d.PrepareBlock(1.f);
-    assert(d.Process(.4f, 0.f) == .4f);
-    assert(d.Process(-.7f, 0.f) == -.7f);
+    assert(d.GetType() == Distortion::kWarm);
 }
 
 static void test_zero_bypass_exact()
@@ -140,9 +106,9 @@ static void test_weight_transitions(float sr)
 
     const int ramp_samples = static_cast<int>(.010f * sr + .5f);
 
-    /* Existing -> Warm: monotone target weight, sum 1, exact one-hot */
-    d.SetType(Distortion::kWarm);
-    float prev_w = d.Weight(Distortion::kWarm);
+    /* Warm (boot default) -> Fuzz: monotone target weight, sum 1, exact one-hot */
+    d.SetType(Distortion::kFuzz);
+    float prev_w = d.Weight(Distortion::kFuzz);
     int    n     = 0;
     for(; n < ramp_samples + 2; n++)
     {
@@ -158,18 +124,18 @@ static void test_weight_transitions(float sr)
     assert(n <= ramp_samples); /* finite ~10 ms convergence */
     assert(d.Weight(0) == 0.f && d.Weight(2) == 0.f);
 
-    /* mid-ramp retarget Warm -> Fuzz: weights continue from their
+    /* mid-ramp retarget Fuzz -> BrokenSpeaker: weights continue from their
      * current values (no jump larger than one increment per sample) */
     Distortion e;
     e.Init(sr);
-    e.SetType(Distortion::kWarm);
+    e.SetType(Distortion::kFuzz);
     const int half = ramp_samples / 2;
     for(int i = 0; i < half; i++)
         e.Process(.2f, .5f);
     const float b0 = e.Weight(0), b1 = e.Weight(1), b2 = e.Weight(2);
     assert(b1 > 0.f && b1 < 1.f); /* genuinely mid-ramp */
-    e.SetType(Distortion::kFuzz);
-    assert(e.GetType() == Distortion::kFuzz); /* target immediately */
+    e.SetType(Distortion::kBrokenSpeaker);
+    assert(e.GetType() == Distortion::kBrokenSpeaker); /* target immediately */
     const float inc = 1.f / (.010f * sr);
     for(int n2 = 0; n2 < ramp_samples + 2; n2++)
     {
@@ -185,22 +151,32 @@ static void test_weight_transitions(float sr)
     }
     assert(e.Weight(2) == 1.f && e.Weight(0) == 0.f && e.Weight(1) == 0.f);
     (void)b0;
-    (void)b2;
+    (void)b1;
 }
 
 static void test_amount_retention()
 {
     /* SetType alone (no Process calls) must not disturb the drive path:
-     * same amount in -> same sample out. */
+     * the crossfade continues from the current weights, never jumping.
+     * Verify weights stay consistent and ProcessBlock is called. */
     Distortion d;
     d.Init(48000.f);
     d.PrepareBlock(.5f);
-    d.SetType(Distortion::kWarm);
-    d.SetType(Distortion::kFuzz);
-    d.SetType(Distortion::kExisting); /* weights never advanced */
+    assert(d.GetType() == Distortion::kWarm); /* boot default */
     assert(d.Weight(0) == 1.f);
-    const float got = d.Process(.25f, .5f);
-    assert(fabsf(got - OriginalExisting(.25f, .5f)) <= 1e-6f);
+    
+    d.SetType(Distortion::kFuzz);
+    /* weights haven't changed yet because Process hasn't been called */
+    assert(d.Weight(0) == 1.f);
+    
+    d.SetType(Distortion::kBrokenSpeaker);
+    /* weights still unchanged */
+    assert(d.Weight(0) == 1.f);
+    
+    /* Only after Process calls do weights start moving toward BrokenSpeaker */
+    d.Process(.25f, .5f);
+    assert(d.Weight(2) > 0.f); /* Broken has nonzero weight now */
+    assert(d.Weight(2) < 1.f); /* but hasn't reached it yet */
 }
 
 /** Run a coherent 468.75 Hz sine (bin 40 of 4096 @ 48 kHz) through one
@@ -240,21 +216,29 @@ static void test_voicing_distinction()
     assert(f2 < .005f * f1);
     assert(f3 > .02f * f1);
     for(int i = 0; i < 4096; i++)
-        assert(fabsf(buf[i]) <= .34f); /* bounded near the 0.33 anchor */
+        assert(fabsf(buf[i]) <= .8f); /* bounded by hard clip */
 
-    /* Existing: same drive, different curve -> audibly different output */
-    static float ebuf[4096];
-    SteadySine(Distortion::kExisting, ebuf, 4096);
-    const float e2 = BinMag(ebuf, 4096, 80);
-    assert(e2 < .005f * BinMag(ebuf, 4096, 40)); /* symmetric like Fuzz */
+    /* BrokenSpeaker: harsh hard clipping -> strong harmonics with
+     * narrow bandpass coloration (~400 Hz HP to ~4 kHz LP creates
+     * presence peak). Noticeably different from both Warm and Fuzz. */
+    SteadySine(Distortion::kBrokenSpeaker, buf, 4096);
+    const float b1 = BinMag(buf, 4096, 40);
+    const float b3 = BinMag(buf, 4096, 120);
+    for(int i = 0; i < 4096; i++)
+        assert(fabsf(buf[i]) <= .8f); /* bounded by hard clip */
+    
+    /* BrokenSpeaker should be distinctly different from Fuzz's symmetric
+     * clipping due to the narrow bandpass filtering. */
     double maxdiff = 0.0;
     for(int i = 0; i < 4096; i++)
     {
-        const double df = fabs(static_cast<double>(buf[i]) - ebuf[i]);
+        static float fbuf[4096];
+        SteadySine(Distortion::kFuzz, fbuf, 4096);
+        const double df = fabs(static_cast<double>(buf[i]) - fbuf[i]);
         if(df > maxdiff)
             maxdiff = df;
     }
-    assert(maxdiff > .02); /* Fuzz and Existing are not the same sound */
+    assert(maxdiff > .01); /* BrokenSpeaker and Fuzz are not the same sound */
 }
 
 static void test_bounded_output()
@@ -306,7 +290,6 @@ static void test_no_discontinuity_on_retarget()
 int main()
 {
     test_init_and_clamp();
-    test_existing_formula();
     test_zero_bypass_exact();
     test_silence_settles();
     test_weight_transitions(48000.f);

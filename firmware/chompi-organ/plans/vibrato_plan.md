@@ -1,6 +1,8 @@
 # CHOMPI ORGAN Vibrato Plan
 
-Status: planned, not implemented.
+Status: implemented 2026-10-13. Native tests syntax-checked (runtime not
+run: no host g++); clean ARM build passed (bin 118,056 B, SRAM_EXEC
+49.69%). Hardware verification pending.
 
 Add global pitch vibrato to CHOMPI ORGAN. Reuse the Transport Wheel to select
 rotary or vibrato depth. Keep rotary behavior independent and add no new control

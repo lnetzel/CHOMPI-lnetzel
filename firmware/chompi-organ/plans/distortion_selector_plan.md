@@ -1,15 +1,21 @@
 # Selectable ORGAN Distortion Plan
 
-Status: implemented 2026-10-12. `Distortion.h` (Existing/Warm/Fuzz, 10 ms
-sum-preserving weight crossfade, wet->dry bypass ramps, primed filter
-histories) is integrated in `OrganEngine`; SHIFT + Volume page 2 selects
-the type with the five-red-key overlay in `chompi_main.cpp`; native test
-`code/tests/distortion_test.cpp` syntax-checked with arm-none-eabi-g++
-(no host g++ on this machine — runtime checks not yet run); clean ARM
-build EXIT=0, bin 116,776 B, SRAM_EXEC 49.15%. Spec FR-4b/FR-5a/DSP-5/
-UI-1/defaults and README updated. Hardware verification PENDING.
+Status: superseded by distortion_update_plan.md (2026-10-13). The original
+Existing/Warm/Fuzz implementation is replaced with Warm/Fuzz/BrokenSpeaker;
+boot default changed from Existing to Warm. Distortion.h, OrganEngine.h,
+chompi_main.cpp, distortion_test.cpp, README.md, and specification updated.
+ARM build and tests pending.
 
-Add three selectable distortion characters to CHOMPI ORGAN's existing Volume page 2. Keep the normal 32-step amount control and existing tanh sound. SHIFT + Volume rotation selects Existing / Warm / Fuzz; holding SHIFT shows only the selected five white keys red.
+Previous Status: implemented 2026-10-12. `Distortion.h` (Existing/Warm/Fuzz,
+10 ms sum-preserving weight crossfade, wet->dry bypass ramps, primed filter
+histories) was integrated; SHIFT + Volume page 2 selected the type with the
+five-red-key overlay; native test `code/tests/distortion_test.cpp` was
+checked; clean ARM build achieved. Spec FR-4b/FR-5a/DSP-5/UI-1 and README
+updated.
+
+Original Task: Add three selectable distortion characters to CHOMPI ORGAN's
+existing Volume page 2 using Existing / Warm / Fuzz. Held for revision to
+introduce BrokenSpeaker instead of Existing and update boot default.
 
 ## Confirmed Decisions
 

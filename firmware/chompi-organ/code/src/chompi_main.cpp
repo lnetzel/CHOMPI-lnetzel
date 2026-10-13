@@ -146,7 +146,8 @@ enum BarKind
     kBarCharacter, /**< uniformly blue: pipe Character bar */
     kBarDrive,    /**< uniformly red: overdrive bar */
     kBarRotary,   /**< uniformly purple: rotary-speaker bar */
-    kBarReverb    /**< uniformly blue: plate-reverb mix bar */
+    kBarReverb,   /**< uniformly blue: plate-reverb mix bar */
+    kBarVibrato   /**< uniformly pink: vibrato-depth bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
@@ -154,9 +155,17 @@ enum BarKind
  *  orange 50-75%, red above 75%. The page-2 pipe Character bar
  *  (kBarCharacter) is uniformly blue; the overdrive bar (kBarDrive) is
  *  uniformly red; the rotary bar (kBarRotary) is uniformly purple; the
- *  plate-reverb mix bar (kBarReverb) is uniformly blue. */
+ *  plate-reverb mix bar (kBarReverb) is uniformly blue; the vibrato bar
+ *  (kBarVibrato) is uniformly pink. */
 static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 {
+    if(kind == kBarVibrato)
+    {
+        r = 1.f;
+        g = 0.f;
+        b = .5f; /* pink: the whole vibrato-depth bar */
+        return;
+    }
     if(kind == kBarCharacter)
     {
         r = 0.f;
@@ -206,8 +215,14 @@ static volatile int      bar_page_  = 0;      /* 0 = volume, 1 = Character/drive
                                                * 2 = reverb mix */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
-static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: rotary */
+static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: wheel (rotary/vibrato) */
 static const int         kWheelEnc  = 4; /* enc[4]: transport wheel (ENC_5) */
+/** bar_page_ sub-state for kRotaryBar: 0 = rotary amount, 1 = vibrato depth */
+static const int         kWheelBarVibrato = 1;
+/** Transport-wheel selection: false = rotary (boot default), true =
+ *  vibrato. Toggled by the debounced wheel-press edge. Volatile: written
+ *  by PollControls (audio ISR), read by UpdateLeds (main loop). */
+static volatile bool wheel_vibrato_mode_ = false;
 static volatile bool character_page_[OrganEngine::kNumPipes]; /* per-pipe encoder page */
 
 /** ENC_6 (volume encoder) pages: master volume -> overdrive -> plate
@@ -396,6 +411,19 @@ static void PollControls()
         }
     }
 
+    /* wheel press (ENC_5 push-switch via the ChompiEncoder click pin D10):
+     * toggle the wheel between rotary-speaker and vibrato control and
+     * show the newly selected control's value bar as confirmation.
+     * RisingEdge is a const read of the debounced switch state, so this
+     * coexists with the tracker reset inside the encoder loop below. */
+    if(hw.enc[kWheelEnc].RisingEdge())
+    {
+        wheel_vibrato_mode_ = !wheel_vibrato_mode_;
+        bar_pipe_           = kRotaryBar;
+        bar_page_           = wheel_vibrato_mode_ ? kWheelBarVibrato : 0;
+        bar_until_          = System::GetNow() + 500;
+    }
+
     /* encoders: enc_trackers accumulate clicks and reset to 0 on press */
     for(int i = 0; i < 6; i++)
     {
@@ -476,11 +504,22 @@ static void PollControls()
         }
         else if(i == kWheelEnc)
         {
-            /* transport wheel (ENC_5): rotary-speaker amount, 32 steps */
-            engine.SetRotaryStep(engine.GetRotaryStep() + delta);
-            bar_pipe_  = kRotaryBar;
-            bar_page_  = 0;
-            bar_until_ = System::GetNow() + 500;
+            if(wheel_vibrato_mode_)
+            {
+                /* wheel in vibrato mode: depth 0..50 cents peak */
+                engine.SetVibratoDepth(engine.GetVibratoDepth() + delta);
+                bar_pipe_  = kRotaryBar;
+                bar_page_  = kWheelBarVibrato;
+                bar_until_ = System::GetNow() + 500;
+            }
+            else
+            {
+                /* transport wheel (ENC_5): rotary-speaker amount, 32 steps */
+                engine.SetRotaryStep(engine.GetRotaryStep() + delta);
+                bar_pipe_  = kRotaryBar;
+                bar_page_  = 0;
+                bar_until_ = System::GetNow() + 500;
+            }
         }
         else
         {
@@ -552,9 +591,9 @@ static void UpdateLeds()
         /* Distortion-type selector overlay (FR-4b): highest-priority
          * keyboard display while SHIFT is held on the drive page,
          * independent of bar timeouts and other encoder/MIDI bars.
-         * Exactly five red white-keys mark the selected type (Existing
-         * KEY_1-5, Warm KEY_6-10, Fuzz KEY_11-15); every other keyboard
-         * LED is off, including the octave hints. The dedicated
+         * Exactly five red white-keys mark the selected type (Warm
+         * KEY_1-5, Fuzz KEY_6-10, BrokenSpeaker KEY_11-15); every other
+         * keyboard LED is off, including the octave hints. The dedicated
          * SHIFT/latch and knob LEDs below are unaffected; notes and
          * octave keys keep working underneath the overlay. */
         for(int i = 0; i < 25; i++)
@@ -607,10 +646,21 @@ static void UpdateLeds()
         }
         else if(p == kRotaryBar)
         {
-            /* transport wheel: rotary-speaker amount */
-            lit  = (engine.GetRotaryStep() * kNumWhiteKeys + 16)
-                   / OrganEngine::kMaxSteps;
-            kind = kBarRotary;
+            if(bar_page_ == kWheelBarVibrato)
+            {
+                /* wheel in vibrato mode: depth 0..50 cents mapped across
+                 * the 15 white keys (not 50 display segments) */
+                lit  = (engine.GetVibratoDepth() * kNumWhiteKeys + 25)
+                       / OrganEngine::kMaxVibratoDepthCents;
+                kind = kBarVibrato;
+            }
+            else
+            {
+                /* transport wheel: rotary-speaker amount */
+                lit  = (engine.GetRotaryStep() * kNumWhiteKeys + 16)
+                       / OrganEngine::kMaxSteps;
+                kind = kBarRotary;
+            }
         }
         else if(bar_page_ == 1)
         {
@@ -708,6 +758,23 @@ static void UpdateLeds()
             SetPthLedFloat(9, v, .6f * v, 0.f); /* orange */
         else
             SetPthLedFloat(9, 0.f, v, 0.f); /* green */
+    }
+
+    /* wheel-mode indicators on the PTH pair at the wheel column (Rev4
+     * PCB: the PTH chain runs LED1..LED10 = indices 0..9; LED6 = PTH 5
+     * at x=200.1 mm and LED7 = PTH 6 at x=220.2 mm flank the wheel SW5
+     * at x=210.1 mm). Left LED purple = rotary selected, right LED pink
+     * = vibrato selected; the selected mode's LED stays lit until the
+     * next toggle, the other is off. Boots on rotary. */
+    if(wheel_vibrato_mode_)
+    {
+        SetPthLedFloat(5, 0.f, 0.f, 0.f);
+        SetPthLedFloat(6, 1.f, 0.f, .5f); /* pink */
+    }
+    else
+    {
+        SetPthLedFloat(5, .55f, 0.f, 1.f); /* purple */
+        SetPthLedFloat(6, 0.f, 0.f, 0.f);
     }
 
     /* shift indicator on the CHOMPI key LED */
@@ -859,7 +926,8 @@ int main(void)
         character_page_[p] = false;
         prev_enc_sw_[p]    = hw.button_sr.State(p);
     }
-    vol_page_ = kVolPageMaster;
+    vol_page_            = kVolPageMaster;
+    wheel_vibrato_mode_  = false; /* boot with the wheel on rotary */
 
     hw.StartAudio(AudioCallback);
 

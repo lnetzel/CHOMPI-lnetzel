@@ -17,10 +17,11 @@
  *  - Distortion: 32-step selectable-character saturation stage on the
  *    mix (Distortion.h), placed before the master gain so the drive
  *    character is level-independent; 0% is an exact bypass (DSP-5).
- *    Three types - Existing (the original tanh overdrive), Warm and
- *    Fuzz - selected by SHIFT + volume-encoder turn on page 2 with a
- *    ~10 ms click-free crossfade; the type boots to Existing and is
- *    not saved (FR-4b)
+ *    Three types - Warm (vintage soft clipping), Fuzz (aggressive
+ *    saturation), and BrokenSpeaker (harsh speaker-like breakup with
+ *    narrow presence) - selected by SHIFT + volume-encoder turn on
+ *    page 2 with a ~10 ms click-free crossfade; the type boots to Warm
+ *    and is not saved (FR-4b)
  *  - Rotary speaker: 60s Leslie-style mono->stereo stage after the
  *    distortion (800 Hz crossover, Doppler horn + AM drum, two virtual
  *    mics 180 deg apart); 0% is an exact bypass (DSP-6)
@@ -31,6 +32,11 @@
  *    adjustable 0.2-20 s in 100 log-spaced steps (boots at 0.2 s). The
  *    tank runs continuously (live tails, no stale state); the 64 KiB
  *    delay buffer is caller-owned SDRAM passed to Init().
+ *  - Vibrato: global pitch modulation from one shared, free-running
+ *    6 Hz LFO (Vibrato.h). Depth 0-50 = +/-0-50 cents peak, applied to
+ *    every voice as a per-sample frequency multiplier on the stored
+ *    base frequencies (no oscillator phase resets, no drift). Depth 0
+ *    is an exact bypass. Separate from the rotary speaker's Doppler.
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
@@ -39,6 +45,7 @@
 #include "RotarySpeaker.h"
 #include "TonewheelCharacter.h"
 #include "PlateReverb.h"
+#include "Vibrato.h"
 
 namespace chompi
 {
@@ -73,6 +80,8 @@ class OrganEngine
     static constexpr int   kMaxReverbDecaySteps     = 100;
     static constexpr float kMinReverbDecaySeconds   = .2f;
     static constexpr float kMaxReverbDecaySeconds   = 20.f;
+    static constexpr int   kMaxVibratoDepthCents    = Vibrato::kMaxDepthCents;
+    static constexpr int   kDefaultVibratoDepth     = 0; /* vibrato off */
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
      *  uint16_t elements in writable memory (ORGAN uses SDRAM); pass it
@@ -104,6 +113,7 @@ class OrganEngine
                 voice.osc[p].SetAmp(1.f);
                 voice.osc[p].SetFreq(100.f);
                 voice.osc[p].SetWaveform(daisysp::Oscillator::WAVE_SIN);
+                base_freq_[v][p] = 100.f;
             }
         }
 
@@ -119,7 +129,7 @@ class OrganEngine
         drive_ = drive_target_
             = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
         distortion_.Init(sample_rate);
-        distortion_.SetType(Distortion::kExisting); /* boot default (FR-4b) */
+        distortion_.SetType(Distortion::kWarm); /* boot default (FR-4b) */
 
         rotary_.Init(sample_rate);
         SetRotaryStep(kDefaultRotaryStep);
@@ -128,6 +138,9 @@ class OrganEngine
         reverb_mix_percent_ = kDefaultReverbMixPercent;
         reverb_decay_step_  = kDefaultReverbDecayStep; /* plate_.Init()
                                                         * already set 0.2 s */
+
+        vibrato_.Init(sample_rate);
+        vibrato_.SetDepth(kDefaultVibratoDepth); /* boots exactly dry */
 
         for(int n = 0; n < 128; n++)
             note_held_[n] = false;
@@ -187,6 +200,30 @@ class OrganEngine
     }
 
     int GetRotaryStep() const { return rotary_step_; }
+
+    /** Apply one encoder click to the vibrato depth (0..50 cents peak,
+ *      one-cent steps, clamped). The shared 6 Hz LFO keeps running
+ *      regardless; depth 0 is an exact bypass. On reaching 0 the
+ *      sounding voices are snapped back to their exact base frequencies
+ *      once, so the bypass is bit-exact rather than "1.0 within float
+ *      rounding". Not saved; boots at 0. */
+    void SetVibratoDepth(int depth)
+    {
+        const bool was_on = vibrato_.GetDepth() > 0;
+        vibrato_.SetDepth(depth);
+        if(was_on && vibrato_.GetDepth() == 0)
+        {
+            for(int v = 0; v < kNumVoices; v++)
+            {
+                if(voices_[v].state == IDLE)
+                    continue;
+                for(int p = 0; p < kNumPipes; p++)
+                    voices_[v].osc[p].SetFreq(base_freq_[v][p]);
+            }
+        }
+    }
+
+    int GetVibratoDepth() const { return vibrato_.GetDepth(); }
 
     /** Apply one encoder click to the plate-reverb mix (0..100 percent,
  *      clamped). 0% is bit-exact dry, 100% is wet only; the ~10 ms
@@ -360,6 +397,18 @@ class OrganEngine
             daisysp::fonepole(master_gain_, master_gain_target_, .001f);
             daisysp::fonepole(drive_, drive_target_, .001f);
 
+            /* Vibrato: advance the one shared, free-running 6 Hz LFO and
+             * take this sample's global pitch multiplier (exactly 1.f at
+             * depth 0, no transcendental work then). Applied to every
+             * sounding voice as a multiplier on the STORED base
+             * frequencies: the oscillator phase is never reset and the
+             * frequency is recomputed from base each sample, so pitch
+             * neither clicks nor drifts. The two transcendental calls
+             * happen once per sample here, never in the oscillator
+             * loop. */
+            const int   vib_depth = vibrato_.GetDepth();
+            const float vib_mult  = vibrato_.Process();
+
             float mix = 0.f;
 
             for(int v = 0; v < kNumVoices; v++)
@@ -367,6 +416,12 @@ class OrganEngine
                 Voice &voice = voices_[v];
                 if(voice.state == IDLE)
                     continue;
+
+                if(vib_depth > 0)
+                {
+                    for(int p = 0; p < kNumPipes; p++)
+                        voice.osc[p].SetFreq(base_freq_[v][p] * vib_mult);
+                }
 
                 float sig = 0.f;
                 for(int p = 0; p < kNumPipes; p++)
@@ -490,6 +545,7 @@ class OrganEngine
             float f = base * PipeRatio(p);
             while(f > kFoldbackHz)
                 f *= .5f; /* organ foldback: drop whole octaves */
+            base_freq_[v][p] = f; /* vibrato multiplies this per sample */
             voice.osc[p].SetFreq(f);
             /* Character voicing + anti-alias masks track the FINAL folded
              * frequency (and fine tuning); identical for every voice slot
@@ -530,6 +586,8 @@ class OrganEngine
     PlateReverb plate_;
     uint8_t  reverb_mix_percent_;
     uint8_t  reverb_decay_step_;
+    Vibrato  vibrato_;
+    float    base_freq_[kNumVoices][kNumPipes]; /* pre-vibrato freqs */
     bool     note_held_[128];
 
   public:

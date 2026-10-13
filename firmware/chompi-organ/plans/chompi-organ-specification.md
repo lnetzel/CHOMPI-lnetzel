@@ -55,7 +55,7 @@ The four non-wheel knob encoders, left to right, shall control the volume of the
 | Encoder 3 | `ENC_2` | 2⅔′ pipe volume |
 | Encoder 4 | `ENC_3` | 2′ pipe volume |
 
-`ENC_5` (the transport wheel) is not a pipe-volume control and has no function in v1.
+`ENC_5` (the transport wheel) is not a pipe-volume control; it is assigned to the rotary speaker (FR-4c) and vibrato (FR-4d).
 
 Control behaviour:
 
@@ -105,10 +105,10 @@ The `ENC_6` encoder shall have three pages, cycled by pressing the `ENC_6` push-
 - **Page 2:** distortion amount. Turning right increases the distortion from 0 % (step 0, exact bypass) to 100 % (step 32); 32 steps, one step per click, no acceleration.
 - **Page 3:** plate-reverb mix.
 
-- The distortion is a selectable-character saturation stage applied to the organ mix before the master volume, so the drive character does not depend on the listening level (see DSP-5). Three types are available: **Existing** (the original tanh overdrive), **Warm** (vintage-style warm soft clipping) and **Fuzz** (aggressive fuzz saturation).
-- **SHIFT + `ENC_6` turn on page 2 selects the distortion type.** Turning right moves Existing → Warm → Fuzz, turning left moves back; the selection clamps at the ends and shall not wrap. While SHIFT is held on page 2, the key LEDs shall show the selection instead of any value bar or held notes: exactly five red white keys — KEY_1–KEY_5 for Existing, KEY_6–KEY_10 for Warm, KEY_11–KEY_15 for Fuzz — with all other key LEDs off. The selection shall be shown immediately when SHIFT is pressed on page 2, without requiring rotation, and continuously throughout the hold. Releasing SHIFT shall restore the (unchanged) distortion-amount bar for ~0.5 s.
+- The distortion is a selectable-character saturation stage applied to the organ mix before the master volume, so the drive character does not depend on the listening level (see DSP-5). Three types are available: **Warm** (vintage-style warm soft clipping), **Fuzz** (aggressive fuzz saturation), and **BrokenSpeaker** (harsh speaker-like breakup with narrow presence).
+- **SHIFT + `ENC_6` turn on page 2 selects the distortion type.** Turning right moves Warm → Fuzz → BrokenSpeaker, turning left moves back; the selection clamps at the ends and shall not wrap. While SHIFT is held on page 2, the key LEDs shall show the selection instead of any value bar or held notes: exactly five red white keys — KEY_1–KEY_5 for Warm, KEY_6–KEY_10 for Fuzz, KEY_11–KEY_15 for BrokenSpeaker — with all other key LEDs off. The selection shall be shown immediately when SHIFT is pressed on page 2, without requiring rotation, and continuously throughout the hold. Releasing SHIFT shall restore the (unchanged) distortion-amount bar for ~0.5 s.
 - Selecting a type shall never change the amount, master volume, tuning or note state. The amount applies equally to all three types; step 0 is an exact dry bypass for every type.
-- The distortion type defaults to Existing at every boot and is not saved. The distortion amount defaults to 0 % at boot and is not saved.
+- The distortion type defaults to Warm at every boot and is not saved. The distortion amount defaults to 0 % at boot and is not saved.
 - While page 2 is active, the `ENC_6` knob LED shall be red, with brightness tracking the distortion amount (with a floor so the page stays visible at 0 %) — including while the type-selector overlay is shown.
 - While the distortion amount is being turned (without SHIFT), the white-key value bar shall be uniformly red (no gradient), with the same ~0.5 s timeout as the volume bar.
 - SHIFT + `ENC_6` fine-tune (FR-5a) is not available on page 2.
@@ -121,6 +121,17 @@ The transport wheel (`ENC_5`) shall control the amount of the rotary-speaker sim
 - The rotary amount defaults to 0 % at boot and is not saved.
 - The effect runs after the overdrive and before the master volume, turning the mono organ mix into a stereo signal.
 - While the wheel is being turned, the white-key value bar shall be uniformly purple, filling left to right, with the same ~0.5 s timeout as the volume bar.
+
+### FR-4d — Vibrato (transport wheel)
+
+Pressing the transport wheel (`ENC_5`) shall toggle the wheel's assignment between the rotary-speaker amount (FR-4c) and the vibrato depth; rotary shall be selected at boot.
+
+- The vibrato shall be global pitch modulation across all organ voices from one shared, free-running 6 Hz LFO (DSP-7), independent of the rotary speaker's localized Doppler.
+- Turning the wheel while vibrato is selected shall adjust the depth over 51 integer values, 0–50, in one-cent steps mapped directly to peak pitch deviation in cents: depth 50 moves the pitch by ±50 cents (one semitone peak-to-peak). Depth 0 shall be an exact no-vibrato bypass.
+- The vibrato depth shall default to 0 at every boot and shall not be saved.
+- While vibrato is selected and the wheel is being turned, the white-key value bar shall be uniformly pink, filling left to right (0–50 mapped across the 15 white keys), with the same ~0.5 s timeout as the volume bar.
+- The two LEDs at the wheel column shall indicate the selection steadily until the next toggle: the left LED purple for rotary, the right LED pink for vibrato, with the unselected LED off.
+- Wheel rotation shall change only the selected control; the rotary behavior, range and control resolution shall remain unchanged.
 
 ### FR-5 — Keyboard input
 
@@ -234,15 +245,11 @@ The design shall be suitable for real-time operation on the CHOMPI Daisy Seed pl
 
 The distortion is a saturation stage on the final organ mix, placed before the master-volume gain, so the drive character does not depend on the listening level. One of three types is active at a time (FR-4b); all three share the same 32-step drive amount `d` (0–1), and step 0 (0 %) is an exact dry bypass for every type:
 
-- **Existing** (boot default): the original overdrive-pedal stage, unchanged.
-  - Drive amount `d` sets the pre-gain `g = 1 + 63 × d²` (1×–64×, quadratic feel).
-  - The shaped signal is `tanh(g × x)`, fully wet (no dry blend), so harmonic content is always present when the drive is above 0 %.
-  - The post gain `0.33 / tanh(0.33 × g)` anchors a ⅓-full-scale input to the same output level, so turning the knob up adds harmonics and compression instead of just loudness (like a pedal with automatic level compensation).
-  - No filtering.
-- **Warm:** gentler pre-gain `g = 1 + 15 × d²` (1×–16×, quadratic feel) into a smooth asymmetric tanh saturation (a small input bias gives modestly different positive/negative knees, producing even harmonics), followed by a ~20 Hz DC blocker (the asymmetry creates DC) and a ~6 kHz one-pole low-pass for rounded highs. Post gain normalized like Existing around the 0.33 reference level.
+- **Warm** (boot default): gentler pre-gain `g = 1 + 15 × d²` (1×–16×, quadratic feel) into a smooth asymmetric tanh saturation (a small input bias gives modestly different positive/negative knees, producing even harmonics), followed by a ~20 Hz DC blocker (the asymmetry creates DC) and a ~6 kHz one-pole low-pass for rounded highs. Post gain normalized around the 0.33 reference level.
 - **Fuzz:** strong pre-gain `g = 1 + 127 × d²` (1×–128×, quadratic feel) into a symmetric bounded soft-knee clipper (near-hard saturation, |y| ≤ 2/3), followed by a ~10 kHz one-pole low-pass to moderate harsh highs. Same 0.33 reference normalization. No bit reduction, no intentional DC.
+- **BrokenSpeaker:** aggressive hard clipping pre-gain `g = 1 + 199 × d²` (1×–200×, quadratic feel) into a symmetric hard clip (|y| ≤ 0.7), followed by ~400 Hz high-pass filtering (removes extreme lows) and a ~4 kHz one-pole low-pass to create a narrow vocal-like presence peak. Fully wet while amount > 0, settling to exact dry bypass at amount 0. This voicing simulates a narrow speaker-like bandpass with harsh breakup and resonant coloration.
 
-Type changes shall crossfade the per-type outputs linearly over ~10 ms: a three-element nonnegative weight vector ramps toward the selected one-hot while always summing to one, and retargeting mid-fade continues from the current weights. Filter states of inactive types shall track the live signal, so switching exposes no stale tails. When the amount target returns to 0, Warm/Fuzz shall transition wet→dry over ~10 ms and settle to an exact dry bypass with no residual filtered tail; Existing keeps its original smoothed-amount gate.
+Type changes shall crossfade the per-type outputs linearly over ~10 ms: a three-element nonnegative weight vector ramps toward the selected one-hot while always summing to one, and retargeting mid-fade continues from the current weights. Filter states of inactive types shall track the live signal, so switching exposes no stale tails. When the amount target returns to 0, all types shall transition wet→dry over ~10 ms and settle to an exact dry bypass with no residual filtered tail.
 
 - The drive amount shall be smoothed so changes do not produce clicks.
 
@@ -256,6 +263,15 @@ The rotary speaker is a 60s Hammond/Leslie-style mono-to-stereo stage, placed af
 - The amount (0–1, in 32 steps, smoothed) scales all modulation depths and also ramps the rotor speed from a slow chorale-like swirl (2 Hz horn) to the classic fast tremolo (6.8 Hz horn), like a Leslie spinning up.
 - Step 0 (0 %) is an exact bypass (both channels carry the dry mix) and shall cost no CPU.
 
+### DSP-7 — Vibrato
+
+The vibrato is a global pitch-modulation stage applied at the oscillators, before the mix and all effect stages:
+
+- One shared, free-running 6 Hz sine LFO; every voice shall see the same instantaneous pitch multiplier 2^(depth/1200 · sin(2π·phase)).
+- The depth (0–50 cents peak, one-cent steps) scales the multiplier; depth 0 shall be an exact bypass (multiplier exactly 1, no LFO computation).
+- The multiplier shall be applied to each voice's stored base frequencies every sample: oscillator phase shall never be reset and frequency shall never accumulate, so pitch neither clicks nor drifts and the base tuning is preserved.
+- The LFO phase shall advance continuously regardless of note or depth state; changing depth mid-cycle only rescales the deviation.
+
 ## 4. User interaction requirements
 
 - The six encoders shall retain the control assignments specified in FR-2, FR-4, FR-4b and FR-4c while the organ instrument is active.
@@ -263,10 +279,11 @@ The rotary speaker is a 60s Hammond/Leslie-style mono-to-stereo stage, placed af
 - Pipe volume changes shall take effect smoothly without audible clicks.
 - The main volume control shall change loudness without altering the balance between the four registrations.
 - LED feedback (CHOMPI has no display):
-  - While a pipe encoder, the main-volume encoder or the transport wheel is being turned, the key LEDs shall show the value as a bar on the white keys only (leftmost white key = 0 %, rightmost white key = 100 %). Volume bars (page-1 pipes and main volume) shall color the lit keys by position: green for the first 50 %, orange 50–75 %, red above 75 %. The page-2 waveform bar is uniformly blue; the distortion-amount bar is uniformly red; the rotary bar (FR-4c) is uniformly purple. The bar disappears about 0.5 s after the last click.
-  - While SHIFT is held on volume-encoder page 2, the key LEDs shall instead show the distortion-type selector (FR-4b) as the highest-priority keyboard display: exactly five red white keys (KEY_1–KEY_5 Existing, KEY_6–KEY_10 Warm, KEY_11–KEY_15 Fuzz) with all other key LEDs off, including the octave hints. Other encoder or MIDI value bars shall not replace the selector. On SHIFT release the distortion-amount bar shall reappear for ~0.5 s. Keys, octave controls and the latch shall remain functional underneath the overlay.
+  - While a pipe encoder, the main-volume encoder or the transport wheel is being turned, the key LEDs shall show the value as a bar on the white keys only (leftmost white key = 0 %, rightmost white key = 100 %). Volume bars (page-1 pipes and main volume) shall color the lit keys by position: green for the first 50 %, orange 50–75 %, red above 75 %. The page-2 waveform bar is uniformly blue; the distortion-amount bar is uniformly red; the rotary bar (FR-4c) is uniformly purple; the vibrato bar (FR-4d) is uniformly pink. The bar disappears about 0.5 s after the last click.
+  - While SHIFT is held on volume-encoder page 2, the key LEDs shall instead show the distortion-type selector (FR-4b) as the highest-priority keyboard display: exactly five red white keys (KEY_1–KEY_5 Warm, KEY_6–KEY_10 Fuzz, KEY_11–KEY_15 BrokenSpeaker) with all other key LEDs off, including the octave hints. Other encoder or MIDI value bars shall not replace the selector. On SHIFT release the distortion-amount bar shall reappear for ~0.5 s. Keys, octave controls and the latch shall remain functional underneath the overlay.
   - Pipe knob LEDs shall show the pipe's value: white for page 1 (volume), blue for page 2 (waveform morph). The `ENC_6` knob LED follows the position-gradient colors on page 1 (volume) and is red on page 2 (distortion, FR-4b), also while the type-selector overlay is shown.
   - Otherwise, key LEDs shall light up for currently held notes.
+  - The two LEDs at the transport-wheel column shall steadily indicate the wheel's selection (FR-4d): left purple for rotary, right pink for vibrato, until the next toggle.
   - The LOOP key LED shall be solid red while the note latch is active (FR-5d); latched notes' key LEDs stay lit like held notes.
   - While SHIFT is held, the KEY_16/KEY_17 key LEDs shall indicate the octave-shift state (see FR-5c).
 
@@ -286,6 +303,8 @@ The rotary speaker is a 60s Hammond/Leslie-style mono-to-stereo stage, placed af
 | Overdrive amount | 0 % (step 0, not saved) |
 | Distortion type | Existing (not saved) |
 | Rotary speaker | 0 % (step 0, not saved) |
+| Vibrato depth | 0 cents (not saved) |
+| Wheel selection | Rotary (not saved) |
 
 Saved levels from the SD card (FR-0a) override these defaults at boot.
 

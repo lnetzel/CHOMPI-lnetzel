@@ -2,9 +2,9 @@
 
 Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
-tonewheel-style Character, selectable distortion (Existing/Warm/Fuzz),
-a rotary-speaker stage, and a compact vintage-1960s-inspired plate
-reverb.
+tonewheel-style Character, selectable distortion (Warm/Fuzz/BrokenSpeaker),
+a rotary-speaker stage, a compact vintage-1960s-inspired plate
+reverb, and global 6 Hz pitch vibrato.
 
 ## Controls
 
@@ -35,8 +35,17 @@ persistence).
 
 ### Transport wheel (ENC_5)
 
-Rotary-speaker amount, 32 steps; 0 is an exact bypass. Purple white-key
-bar while turning.
+The wheel controls one of two effects; pressing the wheel toggles the
+assignment (boots on rotary). The two LEDs at the wheel show the
+selection steadily until the next toggle: left LED purple = rotary,
+right LED pink = vibrato. Turning the wheel changes only the selected
+effect and shows its white-key value bar for 500 ms.
+
+- Rotary-speaker amount: 32 steps; 0 is an exact bypass. Purple bar.
+- Vibrato depth: 0-50 cents peak deviation in one-cent steps from one
+  shared, free-running 6 Hz LFO across all voices (depth 50 = one
+  semitone peak-to-peak); 0 is an exact bypass and boots at 0. Pink bar.
+  Not saved.
 
 ### Volume encoder (ENC_6)
 
@@ -46,14 +55,14 @@ bypass) -> plate-reverb mix (page 3, blue LED with brightness floor).
 Turning or pressing the encoder shows the current page's white-key value
 bar for 500 ms.
 
-Page 2's distortion has three selectable characters: Existing (the
-original tanh overdrive), Warm (softer asymmetric clipping) and Fuzz
-(aggressive symmetric saturation). SHIFT + turn on page 2 moves Existing
--> Warm -> Fuzz (clamped at the ends, no wrap); the amount is not
-changed. While SHIFT is held on page 2, exactly five red white-keys show
-the selection (KEY_1-5 Existing, KEY_6-10 Warm, KEY_11-15 Fuzz) and all
-other key LEDs are off; releasing SHIFT restores the amount bar for
-500 ms. The type boots to Existing and is not saved.
+Page 2's distortion has three selectable characters: Warm (vintage soft
+clipping), Fuzz (aggressive symmetric saturation), and BrokenSpeaker
+(harsh speaker-like breakup with narrow presence). SHIFT + turn on page 2
+moves Warm -> Fuzz -> BrokenSpeaker (clamped at the ends, no wrap); the
+amount is not changed. While SHIFT is held on page 2, exactly five red
+white-keys show the selection (KEY_1-5 Warm, KEY_6-10 Fuzz, KEY_11-15
+BrokenSpeaker) and all other key LEDs are off; releasing SHIFT restores
+the amount bar for 500 ms. The type boots to Warm and is not saved.
 
 Page 3 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
 exact dry and 100% is wet only (a linear complementary crossfade with a
@@ -103,12 +112,13 @@ Character 0 is unchanged.
 
 ## Signal flow
 
-sine -> Character shaping (per pipe) -> pipe gain -> voice envelope/
-velocity -> voice mix -> distortion (Existing/Warm/Fuzz) -> rotary
+pitch vibrato (shared 6 Hz LFO at the oscillators) -> sine -> Character
+shaping (per pipe) -> pipe gain -> voice envelope/velocity -> voice mix
+-> distortion (Warm/Fuzz/BrokenSpeaker) -> rotary
 speaker -> plate reverb -> master gain -> headphone + master stereo
 output pairs. Character 0 exactly bypasses shaping; the clean-sine
 engine is bit-identical to the previous firmware's sine-only sound.
-Reverb 0% is bit-exact dry.
+Reverb 0% is bit-exact dry; vibrato depth 0 is an exact bypass.
 
 ## Building
 
