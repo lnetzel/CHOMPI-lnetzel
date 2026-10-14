@@ -73,6 +73,7 @@
             "approve": true,
             "matchCommandLine": true
         },
-        "&": true
+        "&": true,
+        "ForEach-Object": true
     }
 }

@@ -25,7 +25,7 @@
  *    the fuzz's post low-pass logarithmically from 500 Hz (0%, dark)
  *    to the original 10 kHz (100%, boot default = the historical Fuzz
  *    sound, no additional darkening), smoothed click-free; the tone is
- *    session-only (FR-4b). An input-referenced output leveling (per-
+ *    saved in the SD-card presets (FR-4b). An input-referenced output leveling (per-
  *  block RMS measurement, ~50 ms smoothing, trim = dry level / fuzzed
  *  level, clamped <= 1 and floored at -30 dB), folded through the
  *    live wet amount, is applied after the rotary and before the plate
@@ -55,7 +55,7 @@
  *    targets are recomputed once per block in Prepare(); the existing
  *    ~1 ms gain slew and ~10 ms Character ramp smooth the block steps.
  *    Amount 0 is bit-exact the unmodulated center; mute still forces
- *    silence. Session-only: no SD persistence, no MIDI CC.
+ *    silence. Saved in the SD-card presets; no MIDI CC.
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
@@ -144,7 +144,7 @@ class OrganEngine
         for(int p = 0; p < kNumPipes; p++)
         {
             pipe_steps[p]  = kDefaultStep;
-            pipe_muted_[p] = false; /* mute is session-only, boots clear */
+            pipe_muted_[p] = false; /* mute boots clear */
             pipe_gain_[p] = pipe_gain_target_[p] = StepToGain(kDefaultStep);
             pipe_attack_step_[p]  = kDefaultEnvStep;
             pipe_release_step_[p] = kDefaultEnvStep;
@@ -207,8 +207,8 @@ class OrganEngine
     /** Mute/unmute a pipe (SHIFT + pipe-encoder press). The mute is
  *      folded into pipe_gain_target_, so the existing ~1 ms gain slew
  *      in Process() makes it click-free, and the level step is
- *      preserved while muted and restored on unmute. Session-only:
- *      boots unmuted, not saved, no MIDI CC. */
+ *      preserved while muted and restored on unmute. Boots unmuted;
+ *      saved in the SD-card presets; no MIDI CC. */
     void SetPipeMuted(int pipe, bool muted)
     {
         if(pipe < 0 || pipe >= kNumPipes)
@@ -247,7 +247,8 @@ class OrganEngine
  *      (0..kMaxModSteps, clamped). 100% swings the level inside a
  *      +/-20% window around its center; 0 is the exact unmodulated
  *      center. The modulator keeps free-running; changing the amount
- *      never restarts it. Session-only: boots 0, no MIDI CC. */
+ *      never restarts it. Boots 0; saved in the SD-card presets; no
+ *      MIDI CC. */
     void SetPipeVolModStep(int pipe, int step)
     {
         if(pipe < 0 || pipe >= kNumPipes)
@@ -264,7 +265,8 @@ class OrganEngine
     /** Modulation Mode: set a pipe's Character-modulation amount
  *      (0..kMaxModSteps, clamped). Same window semantics as the volume
  *      modulation, applied to the Character center before the
- *      smoothstep easing. Session-only: boots 0, no MIDI CC. */
+ *      smoothstep easing. Boots 0; saved in the SD-card presets; no
+ *      MIDI CC. */
     void SetPipeCharModStep(int pipe, int step)
     {
         if(pipe < 0 || pipe >= kNumPipes)
@@ -328,7 +330,7 @@ class OrganEngine
  *      0 = 500 Hz low-pass (dark), 100 = the original 10 kHz (boot
  *      default, no additional darkening). Never changes the amount,
  *      tuning or note state; the filter coefficient ramps ~10 ms,
- *      click-free. Session-only. */
+ *      click-free. Saved in the SD-card presets. */
     void SetDriveTonePercent(int percent)
     {
         distortion_.SetTonePercent(percent);
@@ -353,7 +355,7 @@ class OrganEngine
  *      regardless; depth 0 is an exact bypass. On reaching 0 the
  *      sounding voices are snapped back to their exact base frequencies
  *      once, so the bypass is bit-exact rather than "1.0 within float
- *      rounding". Not saved; boots at 0. */
+ *      rounding". Boots at 0; saved in the SD-card presets. */
     void SetVibratoDepth(int depth)
     {
         const bool was_on = vibrato_.GetDepth() > 0;
@@ -799,10 +801,10 @@ class OrganEngine
     bool     freqs_dirty_;
     float    pipe_gain_[kNumPipes];
     float    pipe_gain_target_[kNumPipes];
-    bool     pipe_muted_[kNumPipes]; /* session-only, boots unmuted */
+    bool     pipe_muted_[kNumPipes]; /* boots unmuted; saved in presets */
     TonewheelCharacter character_;
-    uint8_t  vol_mod_step_[kNumPipes];  /* session-only, boot 0 */
-    uint8_t  char_mod_step_[kNumPipes]; /* session-only, boot 0 */
+    uint8_t  vol_mod_step_[kNumPipes];  /* boot 0; saved in presets */
+    uint8_t  char_mod_step_[kNumPipes]; /* boot 0; saved in presets */
     DriftModulator vol_mod_[kNumPipes];  /* free-running per-pipe drift */
     DriftModulator char_mod_[kNumPipes];
     float    master_gain_;

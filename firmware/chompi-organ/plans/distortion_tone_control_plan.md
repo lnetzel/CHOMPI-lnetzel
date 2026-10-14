@@ -23,8 +23,10 @@ darkening, not removing Fuzz's original low-pass.
   tone setting.
 - SHIFT+turn on page 2 changes tone by 1 percentage point per accepted
   encoder click, clamped to 0-100%, with no wrap or acceleration.
-- Tone defaults to 100% on every boot and is session-only, with no new
-  MIDI CC or SD persistence.
+- Tone defaults to 100% on every boot, with no new MIDI CC.
+  Amended 2026-10-14 (preset_management_plan.md): the tone is stored in
+  the SD-card presets as `drive_tone`; it still boots at 100% and is
+  applied only when a preset slot is loaded.
 - Cutoff follows `500 * pow(10000 / 500, tone_percent / 100)` Hz:
   0% is 500 Hz, 100% is the original 10 kHz. Counterclockwise darkens;
   0% is not a mute.

@@ -15,6 +15,11 @@ LDSCRIPT = chompi_sram.lds
 CPP_SOURCES = chompi_main.cpp \
 	encoder.cpp
 
+# SD-card presets: FatFS + coreJSON (shared from chompi-wave's libs)
+USE_FATFS = 1
+C_SOURCES = ../../../chompi-wave/code/libs/coreJSON/source/core_json.c
+C_INCLUDES += -I../../../chompi-wave/code/libs/coreJSON/source/include
+
 # Libs: reuse chompi-wave's libDaisy/DaisySP (same toolchain, prebuilt)
 LIBDAISY_DIR = ../../../chompi-wave/code/libs/libDaisy
 DAISYSP_DIR = ../../../chompi-wave/code/libs/DaisySP

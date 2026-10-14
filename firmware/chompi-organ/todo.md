@@ -17,7 +17,9 @@
     * Triangle (not done)
 
 ## Presets
-* Save and load presets just like on tape but only one bank. ALL values are saved
+* ~~Save and load presets just like on tape but only one bank. ALL values
+  are saved~~ DONE: 15 SD-card slots (ORGAN/P01..P15.json), per
+  plans/preset_management_plan.md
 
 ## Tweaks
 * Even out the volume for the distortions

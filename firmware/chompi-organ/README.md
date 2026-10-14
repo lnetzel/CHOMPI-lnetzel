@@ -4,8 +4,9 @@ Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
 tonewheel-style Character, fuzz distortion with a tone control,
 a rotary-speaker stage, a compact vintage-1960s-inspired plate
-reverb, global 6 Hz pitch vibrato, and a Modulation Mode that drifts
-each pipe's volume and Character slowly and independently.
+reverb, global 6 Hz pitch vibrato, a Modulation Mode that drifts
+each pipe's volume and Character slowly and independently, and 15
+SD-card preset slots.
 
 ## Controls
 
@@ -40,8 +41,8 @@ Each pipe has its own gate envelope, so pipes fade in and out at
 different rates - e.g. let the 2' pipe swell up seconds after the 8'
 fundamental speaks. A voice stays allocated until every pipe's release
 has finished; voice stealing keeps the fixed 5 ms steal fade. Attack and
-release boot at step 0 (5 ms) and are kept for the session (no SD-card
-persistence, no MIDI CC).
+release boot at step 0 (5 ms), are stored in the SD-card presets (see
+the Presets section) and have no MIDI CC.
 
 Each pipe has its own Character amount, applied to that pipe across all
 six voices; adjusting one pipe never changes the others' amounts or
@@ -52,17 +53,17 @@ tonewheel-*inspired* coloration - it is not an accurate physical Hammond
 model and does not simulate neighboring-tonewheel leakage. Muted pipes
 and finished envelopes stay silent; there is no idle background tone.
 
-Character amounts boot at zero and are kept for the session (no SD-card
-persistence).
+Character amounts boot at step 32 (50%) and are stored in the SD-card
+presets (see the Presets section).
 
 SHIFT adds two pipe-control gestures on the pipe encoders:
 
 - **SHIFT + press** toggles that pipe's mute (the page does not cycle).
   A muted pipe is silenced click-free (its level step is preserved and
   restored on unmute), and its knob LED goes solid red, overriding the
-  page color. Mute is session-only, boots unmuted and has no MIDI CC;
-  level CC 70-73 still edits a muted pipe's step, which stays silent
-  until unmuted.
+  page color. Mute boots unmuted, is stored in the SD-card presets and
+  has no MIDI CC; level CC 70-73 still edits a muted pipe's step, which
+  stays silent until unmuted.
 - **SHIFT + turn** sets the value for all four pipes at once, per the
   turned pipe's current page: page 1 sets all four levels to the same
   value, page 2 all four Character amounts, page 3 all four attack
@@ -109,8 +110,8 @@ them; the modulation amounts only scale how much of the ongoing drift
 reaches the sound.
 
 All modulation amounts boot at 0 (the organ sounds exactly like Normal
-Mode until amounts are raised) and are session-only: no SD-card
-persistence, no MIDI CC. The Normal Mode bars and MIDI CCs keep
+Mode until amounts are raised) and are stored in the SD-card presets;
+there is no MIDI CC for them. The Normal Mode bars and MIDI CCs keep
 showing the un-modulated center values.
 
 ### Transport wheel (ENC_5)
@@ -125,7 +126,7 @@ effect and shows its white-key value bar for 500 ms.
 - Vibrato depth: 0-50 cents peak deviation in one-cent steps from one
   shared, free-running 6 Hz LFO across all voices (depth 50 = one
   semitone peak-to-peak); 0 is an exact bypass and boots at 0. Pink bar.
-  Not saved.
+  The depth is stored in the SD-card presets.
 
 ### Volume encoder (ENC_6)
 
@@ -145,8 +146,7 @@ changes are smoothed click-free (~10 ms). While SHIFT is held on page 2
 the tone shows immediately as a red bar across the 15 white keys (none
 lit at 0%, eight at 50%, all fifteen at 100%) and all other key LEDs
 are off; releasing SHIFT restores the amount bar for 500 ms. The tone
-boots to 100% and is kept for the session only (no SD-card persistence,
-no MIDI CC).
+boots to 100% and is stored in the SD-card presets; it has no MIDI CC.
 
 To keep the perceived loudness even at any distortion amount, an
 automatic output leveling trims the fuzzed signal after the rotary and
@@ -168,7 +168,7 @@ exact dry and 100% is wet only (a linear complementary crossfade with a
 0%, half (8 keys) at 50%, all 15 at 100%.
 
 SHIFT + turn on page 3 adjusts the plate decay: 100 log-spaced steps
-from 0.5 s (boot default) to 20 s, shown on the same blue white-key bar
+from 0.2 s (boot default) to 20 s, shown on the same blue white-key bar
 while turning. The wet level and tank headroom are normalized across the
 range, so the decay changes the tail duration, not the loudness.
 
@@ -181,8 +181,8 @@ naturally after note release and survive page changes; turning the
 master volume to zero silences dry and wet alike (the reverb sits before
 the master gain).
 
-The mix and decay boot at 0% / 0.5 s and are kept for the session only
-(no SD-card persistence, no MIDI CC).
+The mix and decay boot at 0% / 0.2 s and are stored in the SD-card
+presets; they have no MIDI CC.
 
 SHIFT + turn = fine tune (+/-50 cents) on page 1 only (page 2 adjusts
 the distortion tone, page 3 adjusts decay). Boot default volume is 25%.
@@ -192,6 +192,69 @@ the distortion tone, page 3 adjusts decay). Boot default volume is 25%.
 25 playable keys (C3-C5). SHIFT + C#3/D#3 = octave down/up (+/-2).
 KEY_28 (LOOP) toggles the key latch; while latched, re-pressing a key
 releases its note. KEY_26+27+28 held at power-on enters shipping mode.
+With SHIFT held the white keys become the 15 preset slots (see the
+Presets section).
+
+## SD-card presets
+
+The organ keeps 15 preset slots on the SD card (folder `ORGAN/`, one
+small `P01.json` .. `P15.json` file per slot, ~300 B, human-readable).
+All 15 slots are cached in RAM: loading, saving, copying and deleting
+act on the cache instantly and never wait for the card, and the
+background writer does one small step per main-loop pass, so nothing
+freezes or glitches the audio. A save is written as a `.tmp` file that
+is then renamed over the old file, so a power loss mid-save can corrupt
+at most the slot being written. The organ always boots on its factory
+defaults; a preset is only applied when you load it.
+
+Gestures (SHIFT = the CHOMPI key):
+
+- **Load:** hold SHIFT and press a white key (C3-C5 = slots 1-15). A
+  filled slot applies instantly and becomes the current slot; an empty
+  slot does nothing. Held and latched notes keep sounding - every
+  change is ramped or phase-continuous.
+- **Save:** SHIFT + KEY_25 enters save select (pressing KEY_25 again
+  cancels). Press any white key to choose the slot, then release and
+  press SHIFT to confirm. The current engine state is captured, the
+  SAVING animation shows for ~1 s and the slot becomes the current slot.
+- **Copy:** SHIFT + KEY_24 enters copy select (pressing KEY_24 again
+  cancels). Press a filled source slot (it turns green), then a
+  different destination slot, then release and press SHIFT to confirm.
+- **Delete:** SHIFT + KEY_23 enters erase select (pressing KEY_23 again
+  cancels). Press a filled slot, then release and press SHIFT to
+  confirm. Deleting the current slot clears "current".
+
+While a selection mode is active the keys select slots only (no notes,
+no latch changes); notes held before entering keep sounding and release
+normally, and the encoders, wheel and MIDI keep working throughout.
+
+LEDs, while SHIFT is held or a selection mode is active:
+
+- The 15 white keys are the 15 slots: filled = purple (blinking dim in
+  the selection modes), the current slot = white, the selected slot =
+  blue (save / copy destination) or red (erase target), the copy source
+  = green, selectable empty slots = dim grey (save / copy destination).
+- The three top black keys show the operations: delete (KEY_23) = red,
+  copy (KEY_24) = green, save (KEY_25) = blue; during an operation only
+  that operation's LED is lit.
+- The CHOMPI key LED is purple while SHIFT is held, blinks red once a
+  slot is selected, and blinks white during the ~1 s SAVING / COPYING /
+  ERASING animations.
+- Exception: on the distortion page (volume-encoder page 2), holding
+  SHIFT keeps showing the red tone bar on the white keys instead of the
+  slot overview; loads still work.
+
+With no SD card the white keys show red while SHIFT is held and all
+preset gestures are inert; the organ stays fully playable. Removing the
+card mid-session disables the presets; re-inserting it re-mounts the
+card and fills still-empty, untouched slots from it. A card pulled
+mid-write can leave a stray `.tmp` file, which is ignored.
+
+Saved in every preset: per-pipe level, Character, attack, release, mute
+and volume/Character-modulation amounts, plus vibrato depth, rotary
+amount, fuzz amount and tone, and reverb mix and decay. NOT saved:
+master volume, fine tune, octave shift, latch, page selections and the
+wheel's rotary/vibrato selection.
 
 ## MIDI (channel 1, DIN and USB)
 
@@ -255,4 +318,7 @@ floor). The drift-modulator tests cover the sliding-window math
 (including the amount-0 exact-center guarantee), the 2.5-10 s random
 half durations and 5-20 s cycles, per-block continuity, modulator
 independence across the 8 seeds, and fixed-seed determinism at 48 kHz
-and 32 kHz.
+and 32 kHz. The preset tests cover the versioned JSON round-trip of
+every field, defaults for missing keys, clamping of out-of-range and
+garbage values, version tolerance, the 15-slot bank's save/copy/erase
+and dirty tracking, and engine capture/apply against a fake engine.

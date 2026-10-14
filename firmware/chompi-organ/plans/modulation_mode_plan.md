@@ -65,7 +65,9 @@ amounts on two pages.
 
 ### Defaults / scope
 - All modulation amounts boot at 0 (sound identical to today until used).
-- Session-only: no SD persistence, no new MIDI CCs.
+- Amended 2026-10-14 (preset_management_plan.md): the amounts are stored
+  in the SD-card presets as `vol_mod[4]` / `char_mod[4]`; they still boot
+  at 0 and are applied only when a preset slot is loaded. No new MIDI CCs.
 - In Modulation Mode only pipe encoder turn/push behavior changes.
   SHIFT+pipe-encoder press (mute), volume encoder ENC_6 pages, transport
   wheel, keys, octave, latch and all LED indicators other than the pipe knob

@@ -24,12 +24,17 @@ Source code shall live in `firmware/chompi-organ/code/src` (same layout as the o
 
 The implementation is done when the firmware builds cleanly; hardware verification follows separately.
 
-### FR-0a — SD card
+### FR-0a — SD card presets
 
-An SD card is expected at runtime. It shall be used to save and load the four pipe levels and the four pipe waveform-morph settings. Main volume is not saved by the organ; it follows the existing hardware-volume behaviour (FR-4). The storage format shall be designed so that it can later hold multiple presets/registrations.
+The organ shall provide 15 persistent preset slots on the SD card, one small versioned JSON file per slot in `ORGAN/` (`P01.json` … `P15.json`, ~300 B). All slots shall be cached in RAM; load, save, copy and delete shall act on the cache and the engine immediately and shall never wait for the card. SD I/O shall run only from the main loop as a staged, non-blocking writer (one small FatFS step per pass, write-as-`.tmp`-then-rename), so it never stalls the audio ISR or the watchdog.
 
-- **Save:** Settings shall be auto-saved a few seconds after the last encoder change. SD writes shall never interrupt audio.
-- **Load:** Settings shall be loaded at boot. If the card or settings file is missing or unreadable, defaults (see section 5) shall be used and the instrument shall remain playable.
+- **Load:** SHIFT + a white key (C3–C5 = slots 1–15) applies a filled slot instantly and makes it the current slot; empty slots do nothing. Held and latched notes shall keep sounding (every applied change is ramped or phase-continuous).
+- **Save:** SHIFT + KEY_25 enters save select (pressing KEY_25 again cancels); a white key chooses any slot; a fresh SHIFT press confirms. The saved slot becomes the current slot.
+- **Copy:** SHIFT + KEY_24 enters copy select (pressing KEY_24 again cancels); white keys choose a filled source, then a different destination; a fresh SHIFT press confirms.
+- **Delete:** SHIFT + KEY_23 enters erase select (pressing KEY_23 again cancels); a white key chooses a filled slot; a fresh SHIFT press confirms. Deleting the current slot clears "current".
+- The SAVING/COPYING/ERASING animations shall show for at least 1 s. While a selection mode is active, keyboard keys select slots only (no notes, no latch changes); encoders, the wheel and MIDI keep working, and releases of notes held before entering a mode are still delivered.
+- Boot shall always use the factory defaults (section 5); the card is read into the RAM cache at boot, but a preset is applied only on load. If the card is missing or unreadable, the organ shall remain fully playable with the presets disabled (white keys red while SHIFT is held; gestures inert).
+- Saved per slot: per-pipe level, Character, attack, release, mute and volume/Character-modulation amounts, plus vibrato depth, rotary amount, fuzz amount and tone, and reverb mix and decay. Not saved: main volume (FR-4), fine tune, octave shift, latch, page and wheel selections.
 
 ### FR-1 — Organ pipes / registrations
 
@@ -75,18 +80,18 @@ Each of the four pipe encoders shall have four pages, cycled per pipe by pressin
 
 - Pages are per pipe: each pipe's Character is adjusted independently, and pipes can have different amounts.
 - Character changes shall apply to sounding notes immediately and without clicks.
-- Character amounts are kept for the session and are not saved; the page state itself is not saved and always starts on page 1.
+- Character amounts are stored in the SD-card presets (FR-0a); the page state itself is not saved and always starts on page 1.
 - **Page 3:** pipe attack time. Turning the encoder sets how fast that pipe fades in after a key press: 32 steps, log-spaced from 5 ms (step 0, boot default — the original fixed timing) to 10 s (step 32). While a page-3 encoder is being turned, the white-key value bar shall be uniformly purple; the knob LED shall be purple (brightness tracking the step with a floor so the page stays visible at step 0).
 - **Page 4:** pipe release time. Same 32-step log-spaced 5 ms–10 s mapping as page 3, applied to the fade-out after the key is released. The 5 ms floor (not a true 0 ms) keeps the release click-free. The white-key value bar and the knob LED shall be uniformly yellow.
 
 - Pages are per pipe: each pipe's envelope is adjusted independently, and pipes can have different attack/release times, so one pipe can fade up later than another.
 - Attack/release changes shall apply to sounding notes immediately and without clicks.
 - Each pipe has its own gate envelope per voice; a voice shall remain allocated until every pipe's release has finished (the slowest pipe holds the voice). Voice stealing keeps the fixed 5 ms steal fade on all pipes.
-- Attack/release settings are kept for the session and are not saved; both boot at step 0 (5 ms), identical to the original fixed timing. The page state itself is not saved and always starts on page 1.
+- Attack/release settings are stored in the SD-card presets (FR-0a); both boot at step 0 (5 ms), identical to the original fixed timing. The page state itself is not saved and always starts on page 1.
 - Attack and release have no MIDI CC mapping (unlike pipe level, CC 70–73, and Character, CC 74–77).
 - While a pipe encoder is on page 2, its knob LED shall be blue (brightness tracking the Character amount); on page 1 the knob LED is white as before.
 - While a page-2 encoder is being turned, the white-key value bar shall be blue (leftmost white key = clean, rightmost = fully aged), with the same ~0.5 s timeout as the volume bar.
-- **SHIFT + pipe-encoder press** shall toggle that pipe's mute instead of cycling its page (the press is fully consumed). While muted the pipe shall be silent — click-free, via the existing ~1 ms level-gain slew, with the level step preserved and restored on unmute — and the pipe's knob LED shall be solid red, overriding the page color. Mute is session-only: it boots unmuted, is not saved, and has no MIDI CC (level CC 70–73 still edits a muted pipe's step, which stays silent until unmuted). Muted pipes keep their oscillators running at gain 0.
+- **SHIFT + pipe-encoder press** shall toggle that pipe's mute instead of cycling its page (the press is fully consumed). While muted the pipe shall be silent — click-free, via the existing ~1 ms level-gain slew, with the level step preserved and restored on unmute — and the pipe's knob LED shall be solid red, overriding the page color. Mute boots unmuted, is stored in the SD-card presets (FR-0a), and has no MIDI CC (level CC 70–73 still edits a muted pipe's step, which stays silent until unmuted). Muted pipes keep their oscillators running at gain 0.
 - **SHIFT + pipe-encoder turn** shall set the value for all four pipes at once, per the turned pipe's current page: page 1 sets all four levels, page 2 all four Character amounts, page 3 all four attack times and page 4 all four release times to the turned pipe's new clamped value (an absolute broadcast, not a relative delta). The white-key bar shall show the turned pipe's page value, which all four pipes then share; global level and Character sets shall emit the corresponding MIDI CCs for all four pipes.
 
 ### FR-2c — Modulation Mode (per-pipe drift amounts)
@@ -100,7 +105,7 @@ In Modulation Mode only the four pipe encoders' turn/push behavior and their kno
 - Turning a pipe encoder shall set that pipe's amount for its modulation page: 32 steps, 0–100 % (~3 % per click), clamped, no wrap. **SHIFT + turn** shall apply the delta to the turned pipe and broadcast the resulting clamped value to all four pipes (same absolute-broadcast pattern as Normal Mode).
 - While a pipe encoder is being turned (or its page toggled), the white-key value bar shall show the amount for ~0.5 s with the same rounding as the other 32-step bars: uniformly white on page 1, uniformly blue on page 2.
 - Flipping the switch mid-bar shall cancel the old mode's bar; the knob LEDs shall immediately show the active mode's pages.
-- All modulation amounts shall boot at 0 (the sound is then identical to Normal Mode), are session-only, and shall have no MIDI CCs. User/MIDI-facing values (pipe steps, Character steps, CCs, Normal Mode bars) shall remain the un-modulated centers. The drift itself is specified in DSP-8.
+- All modulation amounts shall boot at 0 (the sound is then identical to Normal Mode), are stored in the SD-card presets (FR-0a), and shall have no MIDI CCs. User/MIDI-facing values (pipe steps, Character steps, CCs, Normal Mode bars) shall remain the un-modulated centers. The drift itself is specified in DSP-8.
 
 ### FR-3 — Default pipe levels
 
@@ -129,9 +134,9 @@ The `ENC_6` encoder shall have three pages, cycled by pressing the `ENC_6` push-
 - **Page 3:** plate-reverb mix.
 
 - The distortion is a fuzz saturation stage with a tone control, applied to the organ mix before the master volume, so the drive character does not depend on the listening level (see DSP-5).
-- **SHIFT + `ENC_6` turn on page 2 adjusts the distortion tone.** Turning right brightens, turning left darkens; 1 percentage point per click, clamped to 0–100 % without wrap. While SHIFT is held on page 2, the key LEDs shall show the tone instead of any value bar or held notes: a red bar across the 15 white keys with rounded percentage mapping (no keys lit at 0 %, eight at 50 %, all fifteen at 100 %), with all other key LEDs off. The tone shall be shown immediately when SHIFT is pressed on page 2, without requiring rotation, and continuously throughout the hold. Releasing SHIFT shall restore the (unchanged) distortion-amount bar for ~0.5 s.
+- **SHIFT + `ENC_6` turn on page 2 adjusts the distortion tone.** Turning right brightens, turning left darkens; 1 percentage point per click, clamped to 0–100 % without wrap. While SHIFT is held on page 2, the key LEDs shall show the tone instead of any value bar or held notes (an active preset selection mode takes precedence, FR-0a): a red bar across the 15 white keys with rounded percentage mapping (no keys lit at 0 %, eight at 50 %, all fifteen at 100 %), with all other key LEDs off. The tone shall be shown immediately when SHIFT is pressed on page 2, without requiring rotation, and continuously throughout the hold. Releasing SHIFT shall restore the (unchanged) distortion-amount bar for ~0.5 s.
 - Changing the tone shall never change the amount, master volume, tuning or note state. Step 0 of the amount is an exact dry bypass at every tone setting.
-- The distortion tone defaults to 100 % at every boot and is not saved. The distortion amount defaults to 0 % at boot and is not saved.
+- The distortion tone defaults to 100 % at every boot and is stored in the SD-card presets (FR-0a). The distortion amount defaults to 0 % at boot and is stored in the SD-card presets (FR-0a).
 - While page 2 is active, the `ENC_6` knob LED shall be red, with brightness tracking the distortion amount (with a floor so the page stays visible at 0 %) — including while the tone bar is shown.
 - While the distortion amount is being turned (without SHIFT), the white-key value bar shall be uniformly red (no gradient), with the same ~0.5 s timeout as the volume bar.
 - SHIFT + `ENC_6` fine-tune (FR-5a) is not available on page 2.
@@ -141,7 +146,7 @@ The `ENC_6` encoder shall have three pages, cycled by pressing the `ENC_6` push-
 The transport wheel (`ENC_5`) shall control the amount of the rotary-speaker simulation (DSP-6):
 
 - Turning right increases the rotary amount from 0 % (step 0, exact bypass) to 100 % (step 32); 32 steps, one step per click, no acceleration.
-- The rotary amount defaults to 0 % at boot and is not saved.
+- The rotary amount defaults to step 10 (~30 %) at boot and is stored in the SD-card presets (FR-0a).
 - The effect runs after the overdrive and before the master volume, turning the mono organ mix into a stereo signal.
 - While the wheel is being turned, the white-key value bar shall be uniformly purple, filling left to right, with the same ~0.5 s timeout as the volume bar.
 
@@ -191,7 +196,7 @@ The lowest key shall play C3 (MIDI note 48, ≈130.8 Hz); keys ascend chromatica
   | 76 | 2⅔′ pipe waveform morph |
   | 77 | 2′ pipe waveform morph |
 
-  Incoming CC values 0–127 map to steps 0–32 (rounded). Turning a pipe encoder sends the matching CC with the step scaled to 0–127. Values changed by CC are auto-saved like encoder changes (FR-0a).
+  Incoming CC values 0–127 map to steps 0–32 (rounded). Turning a pipe encoder sends the matching CC with the step scaled to 0–127. Loading a preset (FR-0a) re-sends the level and Character CCs so controllers resync.
 
 ### FR-5c — Octave shift
 
@@ -331,20 +336,20 @@ Eight independent, free-running drift modulators (4 pipes × {volume, Character}
 | Main volume | 25 % of maximum at boot; existing hardware-volume behaviour otherwise |
 | Octave shift | 0 (not saved) |
 | Polyphony | 6 voices |
-| Pipe Character | Step 32 / 64 (not saved) |
-| Pipe mute | Unmuted at boot (session-only, no MIDI CC) |
+| Pipe Character | Step 32 / 64 (saved in presets) |
+| Pipe mute | Unmuted at boot (saved in presets, no MIDI CC) |
 | Encoder page | Page 1 (volume) for all pipes (not saved) |
-| Overdrive amount | 0 % (step 0, not saved) |
-| Distortion tone | 100 % (not saved) |
-| Rotary speaker | 0 % (step 0, not saved) |
-| Vibrato depth | 0 cents (not saved) |
+| Overdrive amount | 0 % (step 0, saved in presets) |
+| Distortion tone | 100 % (saved in presets) |
+| Rotary speaker | ~30 % (step 10, saved in presets) |
+| Vibrato depth | 0 cents (saved in presets) |
 | Wheel selection | Rotary (not saved) |
 | Mode switch | Normal Mode (toggle down; not saved) |
-| Pipe volume-modulation amounts | 0 % (step 0 / 32, session-only, no MIDI CC) |
-| Pipe Character-modulation amounts | 0 % (step 0 / 32, session-only, no MIDI CC) |
+| Pipe volume-modulation amounts | 0 % (step 0 / 32, saved in presets, no MIDI CC) |
+| Pipe Character-modulation amounts | 0 % (step 0 / 32, saved in presets, no MIDI CC) |
 | Modulation Mode encoder page | Modulation page 1 (volume modulation) for all pipes (not saved) |
 
-Saved levels from the SD card (FR-0a) override these defaults at boot.
+The organ always boots on these defaults; SD-card presets (FR-0a) are read into the RAM cache at boot but apply only when a slot is loaded.
 
 ## 6. Acceptance criteria
 
@@ -368,7 +373,7 @@ The following features are potential future extensions, not requirements for the
 
 - Vibrato or chorus.
 - Reverb.
-- Multiple presets/registrations (saving the current levels is in scope, see FR-0a).
+- Multiple preset banks (one bank of 15 slots is in scope, see FR-0a).
 - Independent per-pipe tuning, modulation, or effects.
 
 The initial architecture should avoid unnecessarily preventing these extensions.
@@ -378,7 +383,7 @@ The initial architecture should avoid unnecessarily preventing these extensions.
 All open questions have been resolved:
 
 1. ~~**Encoder interaction:**~~ Resolved — see FR-2 (no acceleration) and section 4 (LED level bar).
-2. ~~**Parameter persistence:**~~ Resolved — see FR-0a (auto-save to SD, load at boot).
+2. ~~**Parameter persistence:**~~ Resolved — see FR-0a (15 SD-card preset slots, explicit load/save).
 3. ~~**Volume curve:**~~ Resolved for pipes — see FR-2 (32 steps, squared curve). Main volume follows existing hardware behaviour (FR-4).
 4. ~~**Voice stealing:**~~ Resolved — see FR-6 (oldest note).
 5. ~~**Envelope behaviour:**~~ Resolved — see DSP-3 (5 ms / 5 ms).

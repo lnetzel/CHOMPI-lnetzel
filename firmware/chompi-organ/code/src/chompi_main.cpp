@@ -12,6 +12,8 @@
 #include "daisysp.h"
 #include "OrganEngine.h"
 #include "MidiHandler.h"
+#include "OrganPreset.h"
+#include "PresetStorage.h"
 #ifdef ORGAN_CPU_METER
 #include "util/CpuLoadMeter.h"
 #endif
@@ -333,6 +335,51 @@ static volatile uint8_t cc_character_step_[OrganEngine::kNumPipes];
 static volatile bool    cc_pipe_dirty_[OrganEngine::kNumPipes];
 static volatile bool    cc_character_dirty_[OrganEngine::kNumPipes];
 
+/* ---- SD-card presets: one bank of 15 slots (ORGAN/P01..P15.json) ---- */
+static OrganPresetBank preset_bank_;
+static PresetStorage   preset_storage_;
+
+/** Preset UI modes (Tape's gestures): slot-selection modes plus the
+ *  >=1 s SAVING/COPYING/ERASING animations. Volatile: written by
+ *  PollControls (audio ISR), read by UpdateLeds (main loop); the main
+ *  loop only ends the animations and cancels a selection when the card
+ *  is removed. */
+enum PresetMode
+{
+    kPresetNone = 0,
+    kPresetSaveSel,
+    kPresetSaving,
+    kPresetEraseSel,
+    kPresetErasing,
+    kPresetCopySrc,
+    kPresetCopyDest,
+    kPresetCopying
+};
+static volatile int      preset_mode_     = kPresetNone;
+static volatile int      preset_sel_slot_ = -1; /* chosen slot */
+static volatile int      preset_copy_src_ = -1; /* copy source slot */
+static volatile int      preset_current_  = -1; /* last loaded/saved slot */
+static volatile uint32_t preset_anim_t_   = 0;  /* animation start (ms) */
+
+/** White-key SwIds, slot 0 (C3, leftmost) .. slot 14 (C5, rightmost). */
+static const int kWhiteKeySw[kNumWhiteKeys] = {
+    static_cast<int>(Hardware::SwId::KEY_1),
+    static_cast<int>(Hardware::SwId::KEY_2),
+    static_cast<int>(Hardware::SwId::KEY_3),
+    static_cast<int>(Hardware::SwId::KEY_4),
+    static_cast<int>(Hardware::SwId::KEY_5),
+    static_cast<int>(Hardware::SwId::KEY_6),
+    static_cast<int>(Hardware::SwId::KEY_7),
+    static_cast<int>(Hardware::SwId::KEY_8),
+    static_cast<int>(Hardware::SwId::KEY_9),
+    static_cast<int>(Hardware::SwId::KEY_10),
+    static_cast<int>(Hardware::SwId::KEY_11),
+    static_cast<int>(Hardware::SwId::KEY_12),
+    static_cast<int>(Hardware::SwId::KEY_13),
+    static_cast<int>(Hardware::SwId::KEY_14),
+    static_cast<int>(Hardware::SwId::KEY_15),
+};
+
 /** A4: incremented by the audio ISR; the IWDG is only refreshed while this
  *  keeps changing (see MainLoop), so any lockup resets the device. */
 volatile uint32_t audio_ticks = 0;
@@ -344,11 +391,192 @@ static void CcLevelCallback(int pipe, int page)
     bar_until_ = System::GetNow() + 500;
 }
 
+/* ---- preset gesture helpers (audio ISR context) ---- */
+
+static int WhiteKeySlot(int swid)
+{
+    for(int i = 0; i < kNumWhiteKeys; i++)
+        if(kWhiteKeySw[i] == swid)
+            return i;
+    return -1;
+}
+
+/** Load a slot: apply the RAM-cached preset to the engine through the
+ *  regular (ramped/phase-continuous) setters, so held and latched notes
+ *  keep sounding click-free. Empty slots do nothing. */
+static void PresetLoadSlot(int slot)
+{
+    if(!preset_bank_.IsValid(slot))
+        return;
+    ApplyToEngine(preset_bank_.Get(slot), engine);
+    preset_current_ = slot;
+    /* resync MIDI controllers with the loaded values (the coalesced CCs
+     * go out in MainLoop) */
+    for(int p = 0; p < OrganEngine::kNumPipes; p++)
+    {
+        cc_pipe_step_[p]       = engine.GetPipeStep(p);
+        cc_pipe_dirty_[p]      = true;
+        cc_character_step_[p]  = engine.GetPipeCharacterStep(p);
+        cc_character_dirty_[p] = true;
+    }
+    bar_pipe_  = -1; /* cancel any active value bar */
+    bar_until_ = 0;
+}
+
+static void PresetEnterMode(int mode)
+{
+    preset_mode_     = mode;
+    preset_sel_slot_ = -1;
+    preset_copy_src_ = -1;
+    bar_pipe_        = -1; /* the preset view takes over the white keys */
+    bar_until_       = 0;
+}
+
+/** A FRESH SHIFT press confirms the pending selection. Entering a mode
+ *  needs SHIFT already held, so the entering hold can never double as
+ *  the confirm; the user releases and re-presses SHIFT to confirm. */
+static void PresetShiftConfirm()
+{
+    switch(preset_mode_)
+    {
+        case kPresetSaveSel:
+            if(preset_sel_slot_ >= 0)
+            {
+                OrganPreset p;
+                CaptureFromEngine(p, engine);
+                preset_bank_.Save(preset_sel_slot_, p);
+                preset_current_ = preset_sel_slot_;
+                preset_mode_    = kPresetSaving;
+                preset_anim_t_  = System::GetNow();
+            }
+            break;
+        case kPresetEraseSel:
+            if(preset_sel_slot_ >= 0)
+            {
+                preset_bank_.Erase(preset_sel_slot_);
+                if(preset_current_ == preset_sel_slot_)
+                    preset_current_ = -1; /* deleting the current slot
+                                           * clears "current" */
+                preset_mode_   = kPresetErasing;
+                preset_anim_t_ = System::GetNow();
+            }
+            break;
+        case kPresetCopyDest:
+            if(preset_sel_slot_ >= 0 && preset_copy_src_ >= 0)
+            {
+                preset_bank_.Copy(preset_copy_src_, preset_sel_slot_);
+                preset_mode_   = kPresetCopying;
+                preset_anim_t_ = System::GetNow();
+            }
+            break;
+        default: break; /* COPY_SRC: a destination is still needed */
+    }
+}
+
+/** Preset gestures. Returns true when the key event is consumed (it never
+ *  reaches the note/latch logic). Releases of notes started before a
+ *  mode was entered fall through, so held notes cannot hang. */
+static bool PresetKeyEvent(int swid, bool down)
+{
+    if(preset_mode_ != kPresetNone)
+    {
+        if(!down)
+            return active_note_[swid] == 0; /* live note: fall through */
+        const int slot = WhiteKeySlot(swid);
+        if(slot >= 0)
+        {
+            switch(preset_mode_)
+            {
+                case kPresetSaveSel:
+                    preset_sel_slot_ = slot; /* any slot */
+                    break;
+                case kPresetEraseSel:
+                    if(preset_bank_.IsValid(slot)) /* filled slots only */
+                        preset_sel_slot_ = slot;
+                    break;
+                case kPresetCopySrc:
+                    if(preset_bank_.IsValid(slot))
+                    {
+                        preset_copy_src_ = slot;
+                        preset_mode_     = kPresetCopyDest;
+                    }
+                    break;
+                case kPresetCopyDest:
+                    if(slot != preset_copy_src_) /* a different slot */
+                        preset_sel_slot_ = slot;
+                    break;
+                default: break; /* animations: consume everything */
+            }
+            return true;
+        }
+        /* the matching operation key cancels; the others are inert */
+        if(swid == static_cast<int>(Hardware::SwId::KEY_23))
+        {
+            if(preset_mode_ == kPresetEraseSel)
+                preset_mode_ = kPresetNone;
+            return true;
+        }
+        if(swid == static_cast<int>(Hardware::SwId::KEY_24))
+        {
+            if(preset_mode_ == kPresetCopySrc
+               || preset_mode_ == kPresetCopyDest)
+                preset_mode_ = kPresetNone;
+            return true;
+        }
+        if(swid == static_cast<int>(Hardware::SwId::KEY_25))
+        {
+            if(preset_mode_ == kPresetSaveSel)
+                preset_mode_ = kPresetNone;
+            return true;
+        }
+        return true; /* every other key is consumed while a mode is active */
+    }
+
+    /* NONE mode: SHIFT + key preset gestures (unshifted keys, and SHIFT
+     * with the octave keys, fall through to the normal handling) */
+    if(!down || !shift_held_)
+        return false;
+    const bool oct = swid == static_cast<int>(Hardware::SwId::KEY_16)
+                     || swid == static_cast<int>(Hardware::SwId::KEY_17);
+    if(preset_storage_.NoSdCard())
+        return !oct; /* red-key view: gestures do nothing, octave works */
+    if(swid == static_cast<int>(Hardware::SwId::KEY_23))
+    {
+        PresetEnterMode(kPresetEraseSel);
+        return true;
+    }
+    if(swid == static_cast<int>(Hardware::SwId::KEY_24))
+    {
+        PresetEnterMode(kPresetCopySrc);
+        return true;
+    }
+    if(swid == static_cast<int>(Hardware::SwId::KEY_25))
+    {
+        PresetEnterMode(kPresetSaveSel);
+        return true;
+    }
+    const int slot = WhiteKeySlot(swid);
+    if(slot >= 0)
+    {
+        PresetLoadSlot(slot);
+        return true;
+    }
+    return false;
+}
+
 /** Key + encoder polling, called from the audio ISR once per block (2 kHz). */
 static void PollControls()
 {
     /* shift key (CHOMPI key) */
     shift_held_ = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_26));
+
+    /* a fresh SHIFT press confirms a pending preset selection */
+    {
+        static bool prev_shift_held_ = false;
+        if(shift_held_ && !prev_shift_held_)
+            PresetShiftConfirm();
+        prev_shift_held_ = shift_held_;
+    }
 
     /* Modulation Mode toggle (UP = modulation). Flipping the switch
      * mid-bar cancels the old mode's bar; the knob LEDs follow
@@ -459,6 +687,17 @@ static void PollControls()
         const bool down = hw.button_sr.State(swid);
         if(down == prev_key_[swid])
             continue;
+
+        /* Presets: while a selection mode (or its animation) is active,
+         * key presses select/confirm/cancel and never play notes or
+         * touch the latch; in NONE mode SHIFT+white-key loads a slot and
+         * SHIFT+KEY_23/24/25 enters erase/copy/save select. Releases of
+         * notes started before the mode fall through, so nothing hangs. */
+        if(PresetKeyEvent(swid, down))
+        {
+            prev_key_[swid] = down;
+            continue;
+        }
         prev_key_[swid] = down;
 
         const bool oct_key = (swid == static_cast<int>(Hardware::SwId::KEY_16))
@@ -652,7 +891,7 @@ static void PollControls()
                      * to the turned pipe, reads back its clamped value
                      * and broadcasts it to all 4 pipes (the same
                      * absolute-broadcast pattern as Normal Mode). No
-                     * MIDI CCs: modulation amounts are session-only. */
+                     * MIDI CCs for the modulation amounts. */
                     if(mod_page_[p] == 0)
                     {
                         engine.SetPipeVolModStep(
@@ -806,20 +1045,85 @@ void AudioCallback(AudioHandle::InputBuffer in,
 #endif
 }
 
-/** Key LEDs: level bar while a pipe knob turns, else held notes. */
+/** Key LEDs: preset views/modes while active, level bar while a pipe
+ *  knob turns, the SHIFT slot overview, else held notes. */
 static void UpdateLeds()
 {
     const uint32_t now = System::GetNow();
 
-    if(tone_overlay_active_)
+    /* 250 ms blink for the preset UI */
+    static bool     pre_blink   = false;
+    static uint32_t pre_blink_t = 0;
+    if(now - pre_blink_t > 250)
     {
-        /* Distortion tone overlay (FR-4b): highest-priority keyboard
-         * display while SHIFT is held on the drive page, independent of
-         * bar timeouts and other encoder/MIDI bars. The tone shows
-         * immediately and continuously as a red bar across the 15 white
-         * keys (rounded percentage mapping: none lit at 0%, eight at
-         * 50%, all fifteen at 100%); every other keyboard LED is off,
-         * including the octave hints. The dedicated SHIFT/latch and knob
+        pre_blink   = !pre_blink;
+        pre_blink_t = now;
+    }
+
+    if(preset_mode_ != kPresetNone)
+    {
+        /* A preset selection mode (or animation) takes over the white
+         * keys: filled slots blink at 0.4x purple in the selection
+         * modes; the selected slot is blue (save / copy destination) or
+         * red (erase target); the copy source is green; selectable
+         * empty slots are dim grey in SAVE_SEL/COPY_DEST, off
+         * otherwise. During the SAVING/COPYING/ERASING animations the
+         * slots show their new state steadily. */
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        const bool anim = preset_mode_ == kPresetSaving
+                          || preset_mode_ == kPresetCopying
+                          || preset_mode_ == kPresetErasing;
+        for(int w = 0; w < kNumWhiteKeys; w++)
+        {
+            float      r = 0.f, g = 0.f, b = 0.f;
+            const bool filled = preset_bank_.IsValid(w);
+            if(anim)
+            {
+                if(filled)
+                {
+                    r = .55f;
+                    b = 1.f; /* steady purple */
+                }
+            }
+            else if(preset_mode_ == kPresetCopyDest && w == preset_copy_src_)
+            {
+                g = 1.f; /* copy source: green */
+            }
+            else if(w == preset_sel_slot_)
+            {
+                if(preset_mode_ == kPresetEraseSel)
+                    r = 1.f; /* erase target: red */
+                else
+                    b = 1.f; /* save / copy destination: blue */
+            }
+            else if(filled)
+            {
+                if(pre_blink)
+                {
+                    r = .22f;
+                    b = .4f; /* 0.4x purple, blinking */
+                }
+            }
+            else if(preset_mode_ == kPresetSaveSel
+                    || preset_mode_ == kPresetCopyDest)
+            {
+                r = g = b = .4f; /* selectable empty slots: dim grey */
+            }
+            SetSmtLedFloat(white_key_led[w], r, g, b);
+        }
+    }
+    else if(tone_overlay_active_)
+    {
+        /* Distortion tone overlay (FR-4b): while SHIFT is held on the
+         * drive page the tone shows immediately and continuously as a
+         * red bar across the 15 white keys (rounded percentage mapping:
+         * none lit at 0%, eight at 50%, all fifteen at 100%); every
+         * other keyboard LED is off, including the octave hints (the
+         * erase/copy/save operation LEDs below still render). Only an
+         * active preset mode ranks higher, so the tone bar keeps its
+         * feedback while tuning; on the other volume pages the SHIFT
+         * slot view shows instead. The dedicated SHIFT/latch and knob
          * LEDs below are unaffected; notes and octave keys keep working
          * underneath the overlay. */
         const int lit = (engine.GetDriveTonePercent() * kNumWhiteKeys + 50)
@@ -936,6 +1240,39 @@ static void UpdateLeds()
             SetSmtLedFloat(white_key_led[w], r, g, b);
         }
     }
+    else if(shift_held_)
+    {
+        /* SHIFT preset view (NONE mode): the 15 white keys are the 15
+         * preset slots - filled purple, the current slot white, empty
+         * off; all red with no SD card. The two octave-key hints stay
+         * lit; the erase/copy/save operation LEDs are added below. */
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        if(preset_storage_.NoSdCard())
+        {
+            for(int w = 0; w < kNumWhiteKeys; w++)
+                SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
+        }
+        else
+        {
+            for(int w = 0; w < kNumWhiteKeys; w++)
+            {
+                if(w == preset_current_ && preset_bank_.IsValid(w))
+                    SetSmtLedFloat(white_key_led[w], 1.f, 1.f, 1.f);
+                else if(preset_bank_.IsValid(w))
+                    SetSmtLedFloat(white_key_led[w], .55f, 0.f, 1.f);
+            }
+        }
+        /* the two octave keys (C#3/D#3) are always lit dim white so the
+         * control is discoverable; the active direction turns orange
+         * (dim = 1 octave, bright = 2) */
+        const float dn = octave_ < 0 ? (octave_ < -1 ? 1.f : .45f) : 0.f;
+        const float up = octave_ > 0 ? (octave_ > 1 ? 1.f : .45f) : 0.f;
+        SetSmtLedFloat(0, dn > 0.f ? dn : .10f,
+                       dn > 0.f ? .5f * dn : .10f, 0.f);
+        SetSmtLedFloat(1, up > 0.f ? up : .10f,
+                       up > 0.f ? .5f * up : .10f, 0.f);
+    }
     else
     {
         bar_pipe_ = -1;
@@ -951,18 +1288,31 @@ static void UpdateLeds()
             SetSmtLedFloat(led_map[swid], on ? 1.f : 0.f, on ? 1.f : 0.f,
                            on ? 1.f : 0.f);
         }
-        /* SHIFT held: the two octave keys (C#3/D#3) are always lit dim
-         * white so the control is discoverable; the active direction turns
-         * orange (dim = 1 octave, bright = 2) */
-        if(shift_held_)
+    }
+
+    /* preset operation LEDs on the three top black keys (SMT 7/8/9):
+     * erase = red, copy = green, save = blue, shown while SHIFT is held
+     * or a preset mode is active; during an operation only that
+     * operation's LED is lit; all off with no SD card */
+    if(shift_held_ || preset_mode_ != kPresetNone)
+    {
+        float er = 0.f, cp = 0.f, sv = 0.f;
+        if(!preset_storage_.NoSdCard())
         {
-            const float dn = octave_ < 0 ? (octave_ < -1 ? 1.f : .45f) : 0.f;
-            const float up = octave_ > 0 ? (octave_ > 1 ? 1.f : .45f) : 0.f;
-            SetSmtLedFloat(0, dn > 0.f ? dn : .10f,
-                           dn > 0.f ? .5f * dn : .10f, 0.f);
-            SetSmtLedFloat(1, up > 0.f ? up : .10f,
-                           up > 0.f ? .5f * up : .10f, 0.f);
+            switch(preset_mode_)
+            {
+                case kPresetNone: er = cp = sv = 1.f; break;
+                case kPresetEraseSel:
+                case kPresetErasing: er = 1.f; break;
+                case kPresetCopySrc:
+                case kPresetCopyDest:
+                case kPresetCopying: cp = 1.f; break;
+                default: sv = 1.f; break; /* save select / saving */
+            }
         }
+        SetSmtLedFloat(7, er, 0.f, 0.f);
+        SetSmtLedFloat(8, 0.f, cp, 0.f);
+        SetSmtLedFloat(9, 0.f, 0.f, sv);
     }
 
     /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
@@ -1080,11 +1430,35 @@ static void UpdateLeds()
         SetPthLedFloat(6, 0.f, 0.f, 0.f);
     }
 
-    /* shift indicator on the CHOMPI key LED */
-    if(shift_held_)
-        SetPthLedFloat(0, .67f, 0.f, 1.f);
+    /* CHOMPI/SHIFT key LED: purple while SHIFT is held with no preset
+     * mode active; blinking red once a slot is selected in SAVE_SEL,
+     * ERASE_SEL or COPY_DEST; blinking white during the SAVING, COPYING
+     * and ERASING animations; off otherwise (copy-source select has no
+     * slot yet) */
+    if(preset_mode_ == kPresetNone)
+    {
+        if(shift_held_)
+            SetPthLedFloat(0, .67f, 0.f, 1.f);
+        else
+            SetPthLedFloat(0, 0.f, 0.f, 0.f);
+    }
+    else if(preset_mode_ == kPresetSaving || preset_mode_ == kPresetCopying
+            || preset_mode_ == kPresetErasing)
+    {
+        const float w = pre_blink ? 1.f : 0.f;
+        SetPthLedFloat(0, w, w, w);
+    }
+    else if(preset_sel_slot_ >= 0
+            && (preset_mode_ == kPresetSaveSel
+                || preset_mode_ == kPresetEraseSel
+                || preset_mode_ == kPresetCopyDest))
+    {
+        SetPthLedFloat(0, pre_blink ? 1.f : 0.f, 0.f, 0.f);
+    }
     else
+    {
         SetPthLedFloat(0, 0.f, 0.f, 0.f);
+    }
 
     /* latch indicator on the LOOP key LED (PTH 8): solid red while latched */
     SetPthLedFloat(8, latch_on_ ? 1.f : 0.f, 0.f, 0.f);
@@ -1118,6 +1492,10 @@ void MainLoop(void *data)
         IWDG1->KR      = 0x0000AAAA;
     }
 
+    /* staged, non-blocking preset SD writer: one small FatFS step per
+     * pass, at thread level only (never in the audio ISR) */
+    preset_storage_.Service(preset_bank_);
+
     /* drain queued MIDI note on/off messages (B2: notes only; CCs below) */
     while(!out_q.IsEmpty())
     {
@@ -1148,6 +1526,16 @@ void MainLoop(void *data)
     midi.ProcessMidiOut();
 
     const uint32_t now = System::GetNow();
+
+    /* the SAVING/COPYING/ERASING animations show for at least 1 s; a
+     * removed SD card cancels any pending preset selection */
+    if((preset_mode_ == kPresetSaving || preset_mode_ == kPresetCopying
+        || preset_mode_ == kPresetErasing)
+       && now - preset_anim_t_ >= 1000)
+        preset_mode_ = kPresetNone;
+    else if(preset_mode_ != kPresetNone && preset_storage_.NoSdCard())
+        preset_mode_ = kPresetNone;
+
     if(now - ledt > 16)
     {
         ledt = now;
@@ -1190,6 +1578,14 @@ int main(void)
     }
 
     engine.Init(hw.seed.AudioSampleRate(), plate_delay_mem);
+
+    /* SD-card presets: mount, create ORGAN/ if missing, and read all 15
+     * slots into the RAM cache before audio starts. With no card (or no
+     * files) the cache stays empty and the organ runs on its factory
+     * defaults; a cached preset is only applied when a slot is loaded. */
+    preset_bank_.Init();
+    preset_storage_.Init();
+    preset_storage_.LoadAll(preset_bank_);
 
     LedSetup();
 
