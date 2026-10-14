@@ -46,6 +46,16 @@
  *    every voice as a per-sample frequency multiplier on the stored
  *    base frequencies (no oscillator phase resets, no drift). Depth 0
  *    is an exact bypass. Separate from the rotary speaker's Doppler.
+ *  - Modulation Mode drift: eight slow, free-running DriftModulators
+ *    (one per pipe for volume, one per pipe for Character) give the
+ *    organ a living, organic movement. Each parameter's user value is
+ *    the window center; the per-pipe amount (32 steps, boot 0)
+ *    scales a +/-20% full-scale window that slides to stay inside
+ *    [0,1] (DriftModulator::ApplyWindow). Modulated gain/Character
+ *    targets are recomputed once per block in Prepare(); the existing
+ *    ~1 ms gain slew and ~10 ms Character ramp smooth the block steps.
+ *    Amount 0 is bit-exact the unmodulated center; mute still forces
+ *    silence. Session-only: no SD persistence, no MIDI CC.
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
@@ -56,6 +66,7 @@
 #include "PlateReverb.h"
 #include "Vibrato.h"
 #include "EnvelopeMap.h"
+#include "DriftModulator.h"
 
 namespace chompi
 {
@@ -94,6 +105,7 @@ class OrganEngine
     static constexpr int   kDefaultVibratoDepth     = 0; /* vibrato off */
     static constexpr int   kMaxEnvSteps     = EnvelopeMap::kMaxSteps;
     static constexpr int   kDefaultEnvStep  = 0; /* 5 ms: the original timing */
+    static constexpr int   kMaxModSteps     = 32; /* per-pipe modulation amounts */
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
      *  uint16_t elements in writable memory (ORGAN uses SDRAM); pass it
@@ -141,6 +153,21 @@ class OrganEngine
             release_inc_[p] = attack_inc_[p];
         }
 
+        /* Modulation Mode drift: 8 free-running modulators, distinct
+         * fixed seeds (nonzero, xorshift32-safe) so the pipes never run
+         * in lockstep; amounts boot at 0 = exact unmodulated sound. */
+        const uint32_t vol_seeds[kNumPipes]
+            = {0x2545F491u, 0x8F3A7B15u, 0x6C8E9CF1u, 0x1F123BB5u};
+        const uint32_t char_seeds[kNumPipes]
+            = {0xD1B54A35u, 0x9E3779B9u, 0x4A3C6D27u, 0x85A5E1B3u};
+        for(int p = 0; p < kNumPipes; p++)
+        {
+            vol_mod_step_[p]  = 0;
+            char_mod_step_[p] = 0;
+            vol_mod_[p].Init(sample_rate, vol_seeds[p]);
+            char_mod_[p].Init(sample_rate, char_seeds[p]);
+        }
+
         master_gain_ = master_gain_target_ = kDefaultMasterGain;
 
         drive_step_ = kDefaultDriveStep;
@@ -171,9 +198,8 @@ class OrganEngine
         if(pipe < 0 || pipe >= kNumPipes)
             return;
         step = step < 0 ? 0 : (step > kMaxSteps ? kMaxSteps : step);
-        pipe_steps[pipe]        = static_cast<uint8_t>(step);
-        pipe_gain_target_[pipe] = pipe_muted_[pipe] ? 0.f
-                                                    : StepToGain(step);
+        pipe_steps[pipe] = static_cast<uint8_t>(step);
+        UpdatePipeGainTarget(pipe);
     }
 
     int GetPipeStep(int pipe) const { return pipe_steps[pipe]; }
@@ -187,8 +213,8 @@ class OrganEngine
     {
         if(pipe < 0 || pipe >= kNumPipes)
             return;
-        pipe_muted_[pipe]       = muted;
-        pipe_gain_target_[pipe] = muted ? 0.f : StepToGain(pipe_steps[pipe]);
+        pipe_muted_[pipe] = muted;
+        UpdatePipeGainTarget(pipe);
     }
 
     bool GetPipeMuted(int pipe) const
@@ -215,6 +241,41 @@ class OrganEngine
     int GetPipeCharacterStep(int pipe) const
     {
         return character_.GetStep(pipe);
+    }
+
+    /** Modulation Mode: set a pipe's volume-modulation amount
+ *      (0..kMaxModSteps, clamped). 100% swings the level inside a
+ *      +/-20% window around its center; 0 is the exact unmodulated
+ *      center. The modulator keeps free-running; changing the amount
+ *      never restarts it. Session-only: boots 0, no MIDI CC. */
+    void SetPipeVolModStep(int pipe, int step)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        step = step < 0 ? 0 : (step > kMaxModSteps ? kMaxModSteps : step);
+        vol_mod_step_[pipe] = static_cast<uint8_t>(step);
+    }
+
+    int GetPipeVolModStep(int pipe) const
+    {
+        return (pipe < 0 || pipe >= kNumPipes) ? 0 : vol_mod_step_[pipe];
+    }
+
+    /** Modulation Mode: set a pipe's Character-modulation amount
+ *      (0..kMaxModSteps, clamped). Same window semantics as the volume
+ *      modulation, applied to the Character center before the
+ *      smoothstep easing. Session-only: boots 0, no MIDI CC. */
+    void SetPipeCharModStep(int pipe, int step)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        step = step < 0 ? 0 : (step > kMaxModSteps ? kMaxModSteps : step);
+        char_mod_step_[pipe] = static_cast<uint8_t>(step);
+    }
+
+    int GetPipeCharModStep(int pipe) const
+    {
+        return (pipe < 0 || pipe >= kNumPipes) ? 0 : char_mod_step_[pipe];
     }
 
     /** Apply one encoder click to a pipe's attack time (0..kMaxEnvSteps,
@@ -447,13 +508,34 @@ class OrganEngine
     bool IsNoteHeld(uint8_t note) const { return note_held_[note & 0x7f]; }
 
     /** Called once per audio block, before Process(). */
-    void Prepare()
+    void Prepare(size_t num_samples)
     {
         /* B4: the distortion gain/normalization only depend on the
          * drive target, so compute them once per block instead of a
          * divide per sample. drive_ still slews per sample for
          * a click-free bypass. */
         distortion_.PrepareBlock(drive_target_);
+
+        /* Modulation Mode drift: advance the eight free-running
+         * modulators once per block and re-derive the modulated pipe
+         * gain targets and Character ramp targets from the user
+         * centers. The existing ~1 ms per-sample gain slew and the
+         * Character ~10 ms ramp smooth the block-rate steps; amount 0
+         * reproduces the unmodulated targets bit-exactly. */
+        for(int p = 0; p < kNumPipes; p++)
+        {
+            vol_mod_[p].Advance(static_cast<int>(num_samples));
+            char_mod_[p].Advance(static_cast<int>(num_samples));
+            UpdatePipeGainTarget(p);
+            const float a_center = static_cast<float>(character_.GetStep(p))
+                                   * (1.f / kMaxCharacterSteps);
+            const float a_amount = static_cast<float>(char_mod_step_[p])
+                                   * (1.f / kMaxModSteps);
+            character_.SetModulatedTarget(
+                p,
+                DriftModulator::ApplyWindow(a_center, a_amount,
+                                            char_mod_[p].Value()));
+        }
 
         if(freqs_dirty_)
         {
@@ -651,6 +733,21 @@ class OrganEngine
         return x * x;
     }
 
+    /** Derive one pipe's gain target from its level-step center, its
+     *  volume-modulation amount and the modulator's current value;
+     *  mute forces silence. Amount 0 is bit-exact StepToGain(step):
+     *  ApplyWindow(x, 0, u) returns x unchanged. Called per block from
+     *  Prepare() and immediately from the level/mute setters. */
+    void UpdatePipeGainTarget(int pipe)
+    {
+        const float x  = static_cast<float>(pipe_steps[pipe]) / kMaxSteps;
+        const float am = static_cast<float>(vol_mod_step_[pipe])
+                         * (1.f / kMaxModSteps);
+        const float xm = DriftModulator::ApplyWindow(x, am,
+                                                     vol_mod_[pipe].Value());
+        pipe_gain_target_[pipe] = pipe_muted_[pipe] ? 0.f : xm * xm;
+    }
+
     float NoteToHz(uint8_t note) const
     {
         return 440.f
@@ -704,6 +801,10 @@ class OrganEngine
     float    pipe_gain_target_[kNumPipes];
     bool     pipe_muted_[kNumPipes]; /* session-only, boots unmuted */
     TonewheelCharacter character_;
+    uint8_t  vol_mod_step_[kNumPipes];  /* session-only, boot 0 */
+    uint8_t  char_mod_step_[kNumPipes]; /* session-only, boot 0 */
+    DriftModulator vol_mod_[kNumPipes];  /* free-running per-pipe drift */
+    DriftModulator char_mod_[kNumPipes];
     float    master_gain_;
     float    master_gain_target_;
     float    drive_;

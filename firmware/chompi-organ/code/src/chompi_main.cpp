@@ -149,7 +149,9 @@ enum BarKind
     kBarReverb,   /**< uniformly blue: plate-reverb mix bar */
     kBarVibrato,  /**< uniformly pink: vibrato-depth bar */
     kBarAttack,   /**< uniformly purple: pipe attack-time bar */
-    kBarRelease   /**< uniformly yellow: pipe release-time bar */
+    kBarRelease,  /**< uniformly yellow: pipe release-time bar */
+    kBarModVolume,   /**< uniformly white: pipe volume-modulation bar */
+    kBarModCharacter /**< uniformly blue: pipe Character-modulation bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
@@ -212,6 +214,20 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
         b = 1.f; /* purple: the whole rotary bar */
         return;
     }
+    if(kind == kBarModVolume)
+    {
+        r = 1.f;
+        g = 1.f;
+        b = 1.f; /* white: the whole volume-modulation bar */
+        return;
+    }
+    if(kind == kBarModCharacter)
+    {
+        r = 0.f;
+        g = 0.f;
+        b = 1.f; /* blue: the whole Character-modulation bar */
+        return;
+    }
     r = 0.f;
     g = 1.f;
     b = 0.f; /* green: first 50% of keys */
@@ -231,7 +247,9 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 static volatile int      bar_pipe_  = -1;     /* pipe/volume bar showing */
 static volatile int      bar_page_  = 0;      /* pipes: 0 = level,
                                                * 1 = Character, 2 = attack,
-                                               * 3 = release; volume bar:
+                                               * 3 = release,
+                                               * 4/5 = mod-mode volume/
+                                               * Character bars; volume bar:
                                                * 0 = master, 1 = drive,
                                                * 2 = reverb mix, 3 = decay */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
@@ -247,6 +265,27 @@ static volatile bool wheel_vibrato_mode_ = false;
 /** Per-pipe encoder pages: 0 = level, 1 = Character, 2 = attack time,
  *  3 = release time; cycled per pipe by that pipe's encoder push-switch. */
 static volatile int pipe_page_[OrganEngine::kNumPipes];
+
+/** Modulation Mode: the hardware toggle switch next to SHIFT/CHOMPI
+ *  selects Normal Mode (DOWN) or Modulation Mode (UP). Polarity
+ *  verified against CHOMPI-Tape: Tape's recording/input monitoring is
+ *  active when switch_state == false (NormalPage.h
+ *  SetInputMonitor(!switch_state)) and Tape records only with the
+ *  switch UP, so UP == hw.GetToggleState() == false. Uses the debounced
+ *  GetToggleState() (tog_state hysteresis in ProcessAllControls). */
+static bool ModModeSwitchUp() { return !hw.GetToggleState(); }
+
+/** mod_mode_: sampled from the toggle in PollControls (volatile:
+ *  ISR-written, main-loop-read for the knob LEDs and bars).
+ *  mod_page_[pipe]: Modulation Mode page, 0 = volume-modulation amount
+ *  (white knob LED), 1 = Character-modulation amount (blue knob LED) -
+ *  separate state from the Normal Mode pipe_page_, which is preserved. */
+static volatile bool mod_mode_ = false;
+static bool          prev_mod_mode_ = false; /* ISR-only edge tracking */
+static volatile int  mod_page_[OrganEngine::kNumPipes];
+/** bar_page_ sub-states for pipe bars in Modulation Mode. */
+static const int kModBarVolume    = 4;
+static const int kModBarCharacter = 5;
 
 /** ENC_6 (volume encoder) pages: master volume -> overdrive -> plate
  *  reverb mix, cycled by the encoder push-switch. */
@@ -311,11 +350,25 @@ static void PollControls()
     /* shift key (CHOMPI key) */
     shift_held_ = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_26));
 
-    /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3): press cycles
-     * that pipe's encoder through page 1 (level) -> 2 (Character) -> 3
-     * (attack) -> 4 (release); show the newly active page's value bar as
-     * confirmation. SHIFT+press instead toggles that pipe's mute (the
-     * press is fully consumed: no page cycle). */
+    /* Modulation Mode toggle (UP = modulation). Flipping the switch
+     * mid-bar cancels the old mode's bar; the knob LEDs follow
+     * mod_mode_ directly on the next UpdateLeds pass. */
+    mod_mode_ = ModModeSwitchUp();
+    if(mod_mode_ != prev_mod_mode_)
+    {
+        prev_mod_mode_ = mod_mode_;
+        bar_pipe_      = -1; /* cancel the other mode's bar */
+        bar_until_     = 0;
+    }
+
+    /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3). Normal Mode:
+     * press cycles that pipe's encoder through page 1 (level) -> 2
+     * (Character) -> 3 (attack) -> 4 (release); Modulation Mode: press
+     * toggles that pipe between mod page 1 (volume modulation) and mod
+     * page 2 (Character modulation); either way the newly active page's
+     * value bar shows as confirmation. SHIFT+press instead toggles that
+     * pipe's mute in both modes (the press is fully consumed: no page
+     * cycle). */
     for(int i = 0; i < 4; i++)
     {
         const bool down = hw.button_sr.State(i);
@@ -331,6 +384,15 @@ static void PollControls()
                          * red knob LED is the feedback, so no value bar
                          * is re-armed here */
                         engine.TogglePipeMuted(p);
+                    }
+                    else if(mod_mode_)
+                    {
+                        mod_page_[p] = mod_page_[p] == 0 ? 1 : 0;
+                        bar_pipe_    = p;
+                        bar_page_    = mod_page_[p] == 0
+                                           ? kModBarVolume
+                                           : kModBarCharacter;
+                        bar_until_   = System::GetNow() + 500;
                     }
                     else
                     {
@@ -582,6 +644,43 @@ static void PollControls()
             {
                 if(pipe_encoder[p] != i)
                     continue;
+                if(mod_mode_)
+                {
+                    /* Modulation Mode turn: set this pipe's modulation
+                     * amount for its mod page (32 steps, 0..100%,
+                     * clamped, no wrap). SHIFT+turn applies the delta
+                     * to the turned pipe, reads back its clamped value
+                     * and broadcasts it to all 4 pipes (the same
+                     * absolute-broadcast pattern as Normal Mode). No
+                     * MIDI CCs: modulation amounts are session-only. */
+                    if(mod_page_[p] == 0)
+                    {
+                        engine.SetPipeVolModStep(
+                            p, engine.GetPipeVolModStep(p) + delta);
+                        if(shift_held_)
+                        {
+                            const int v = engine.GetPipeVolModStep(p);
+                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
+                                engine.SetPipeVolModStep(q, v);
+                        }
+                    }
+                    else
+                    {
+                        engine.SetPipeCharModStep(
+                            p, engine.GetPipeCharModStep(p) + delta);
+                        if(shift_held_)
+                        {
+                            const int v = engine.GetPipeCharModStep(p);
+                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
+                                engine.SetPipeCharModStep(q, v);
+                        }
+                    }
+                    bar_pipe_  = p;
+                    bar_page_  = mod_page_[p] == 0 ? kModBarVolume
+                                                   : kModBarCharacter;
+                    bar_until_ = System::GetNow() + 500;
+                    continue;
+                }
                 if(shift_held_)
                 {
                     /* SHIFT+turn: apply the delta to the turned pipe,
@@ -700,7 +799,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
     midi.ProcessMidiIn();
     hw.ProcessAllControls();
     PollControls();
-    engine.Prepare();
+    engine.Prepare(size);
     engine.Process(out, size); /* audio input ignored */
 #ifdef ORGAN_CPU_METER
     cpu_meter.OnBlockEnd();
@@ -789,6 +888,20 @@ static void UpdateLeds()
                 kind = kBarRotary;
             }
         }
+        else if(bar_page_ == kModBarVolume)
+        {
+            /* Modulation Mode mod-page 1: pipe volume-modulation amount */
+            lit  = (engine.GetPipeVolModStep(p) * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxModSteps;
+            kind = kBarModVolume;
+        }
+        else if(bar_page_ == kModBarCharacter)
+        {
+            /* Modulation Mode mod-page 2: pipe Character-modulation amt */
+            lit  = (engine.GetPipeCharModStep(p) * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxModSteps;
+            kind = kBarModCharacter;
+        }
         else if(bar_page_ == 1)
         {
             lit  = (engine.GetPipeCharacterStep(p) * kNumWhiteKeys + 32)
@@ -853,15 +966,36 @@ static void UpdateLeds()
     }
 
     /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
-     * Page 2 pipes glow blue, page 3 (attack) purple and page 4
-     * (release) yellow - each with a brightness floor so the page stays
-     * visible at step 0; page 1 is white. A muted pipe's knob LED is
-     * solid red, overriding the page color. */
+     * Normal Mode: page 2 pipes glow blue, page 3 (attack) purple and
+     * page 4 (release) yellow - each with a brightness floor so the
+     * page stays visible at step 0; page 1 is white. Modulation Mode:
+     * mod page 1 (volume modulation) is white and mod page 2
+     * (Character modulation) is blue, brightness = 0.2 + 0.8 x amount.
+     * A muted pipe's knob LED is solid red in both modes, overriding
+     * the page color. */
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
         if(engine.GetPipeMuted(p))
         {
             SetPthLedFloat(p + 1, 1.f, 0.f, 0.f); /* solid red: muted */
+            continue;
+        }
+        if(mod_mode_)
+        {
+            if(mod_page_[p] == 0)
+            {
+                const float s = .2f
+                                + .8f * engine.GetPipeVolModStep(p)
+                                      * (1.f / OrganEngine::kMaxModSteps);
+                SetPthLedFloat(p + 1, s, s, s); /* white: volume mod */
+            }
+            else
+            {
+                const float s = .2f
+                                + .8f * engine.GetPipeCharModStep(p)
+                                      * (1.f / OrganEngine::kMaxModSteps);
+                SetPthLedFloat(p + 1, 0.f, 0.f, s); /* blue: Character mod */
+            }
             continue;
         }
         switch(pipe_page_[p])
@@ -1093,10 +1227,13 @@ int main(void)
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
         pipe_page_[p]     = 0;
+        mod_page_[p]      = 0; /* boot on mod page 1 (volume modulation) */
         prev_enc_sw_[p]   = hw.button_sr.State(p);
     }
     vol_page_            = kVolPageMaster;
     wheel_vibrato_mode_  = false; /* boot with the wheel on rotary */
+    mod_mode_            = ModModeSwitchUp(); /* settled toggle baseline */
+    prev_mod_mode_       = mod_mode_;
 
     hw.StartAudio(AudioCallback);
 

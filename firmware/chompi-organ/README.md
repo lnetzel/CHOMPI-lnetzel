@@ -4,11 +4,18 @@ Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
 tonewheel-style Character, fuzz distortion with a tone control,
 a rotary-speaker stage, a compact vintage-1960s-inspired plate
-reverb, and global 6 Hz pitch vibrato.
+reverb, global 6 Hz pitch vibrato, and a Modulation Mode that drifts
+each pipe's volume and Character slowly and independently.
 
 ## Controls
 
-### Pipe encoders (physical knobs 1-4, left to right)
+The hardware toggle switch next to the SHIFT (CHOMPI) key selects the
+mode: **DOWN = Normal Mode** (all controls below), **UP = Modulation
+Mode** (per-pipe drift amounts, see the Modulation Mode section). The
+switch only changes what the four pipe encoders turn/push and their
+knob LEDs show; everything else behaves the same in both modes.
+
+### Pipe encoders - Normal Mode (physical knobs 1-4, left to right)
 
 Each pipe encoder has four independent pages; press the encoder's push
 switch to cycle that pipe through them 1 -> 2 -> 3 -> 4 -> 1 (pages are
@@ -61,6 +68,50 @@ SHIFT adds two pipe-control gestures on the pipe encoders:
   value, page 2 all four Character amounts, page 3 all four attack
   times, page 4 all four release times. The white-key bar shows the
   value all four pipes now share.
+
+### Pipe encoders - Modulation Mode (toggle switch UP)
+
+In Modulation Mode the organ drifts on its own: each pipe's volume and
+Character slowly and independently wander around their Normal Mode
+settings, giving the organ a living, organic movement. The four pipe
+encoders set the per-pipe modulation AMOUNTS on two pages; press the
+encoder's push switch to toggle that pipe between them (per-pipe,
+separate from the Normal Mode pages, which are preserved):
+
+- **Mod page 1 - volume modulation amount** (white knob LED): 32
+  steps, 0-100% (~3% per click), clamped, no wrap. The white-key bar is
+  uniformly white.
+- **Mod page 2 - Character modulation amount** (blue knob LED): 32
+  steps, same mapping. The white-key bar is uniformly blue.
+
+Knob LED brightness = 0.2 + 0.8 x amount (the floor keeps the page
+visible at 0%); a muted pipe's knob LED stays solid red. SHIFT + turn
+applies the delta to the turned pipe and broadcasts the resulting
+value to all four pipes, like in Normal Mode. SHIFT + press still
+toggles the pipe's mute in both modes.
+
+The modulation works in each parameter's normalized domain: volume
+x = level/32 (the squared gain curve is applied to the modulated
+value), Character a = step/64 (before its smoothstep easing). The
+amount scales a window around the user value: at 100% the window is
++/-20% (40% total); the window slides - never clips - to stay inside
+0-100%, so a 95% center swings 60-100% and a 0% center swings 0-40%
+(a silent pipe becomes audible). A muted pipe stays silent. Amount 0
+is exactly the unmodulated sound.
+
+Each of the eight modulators (4 pipes x volume/Character) is a slow,
+free-running raised-cosine swing: every half-cycle draws its own
+random 2.5-10 s duration, so a full bottom-to-top-to-bottom cycle
+takes 5-20 s, is asymmetric, and never repeats in lockstep with the
+other pipes. The modulators run continuously regardless of mode or
+amount - flipping the switch or turning an amount never restarts
+them; the modulation amounts only scale how much of the ongoing drift
+reaches the sound.
+
+All modulation amounts boot at 0 (the organ sounds exactly like Normal
+Mode until amounts are raised) and are session-only: no SD-card
+persistence, no MIDI CC. The Normal Mode bars and MIDI CCs keep
+showing the un-modulated center values.
 
 ### Transport wheel (ENC_5)
 
@@ -200,4 +251,8 @@ stability. The distortion tests cover the fuzz's tone control (endpoints,
 monotonic darkening, click-free ramps), a bit-exact regression against
 the previous Fuzz at tone 100%, exact dry bypass at every tone, and the
 input-referenced fuzz output leveling (dry-matched loudness, -30 dB
-floor).
+floor). The drift-modulator tests cover the sliding-window math
+(including the amount-0 exact-center guarantee), the 2.5-10 s random
+half durations and 5-20 s cycles, per-block continuity, modulator
+independence across the 8 seeds, and fixed-seed determinism at 48 kHz
+and 32 kHz.

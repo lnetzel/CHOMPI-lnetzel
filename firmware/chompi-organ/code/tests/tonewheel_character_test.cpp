@@ -355,6 +355,75 @@ static void test_frequency_sweep()
     printf("ok: frequency sweep\n");
 }
 
+static void test_modulated_target()
+{
+    /* SetModulatedTarget (Modulation Mode): the ramp follows the
+     * modulated target while GetStep keeps reporting the user center;
+     * restoring the exact center settles bit-exactly. */
+    TonewheelCharacter tc, ref;
+    tc.Init(48000.f);
+    ref.Init(48000.f);
+    tc.SetStep(2, 32);
+    ref.SetStep(2, 32);
+    for(int i = 0; i < 600; i++)
+    {
+        tc.Advance();
+        ref.Advance();
+    }
+    assert(tc.Amount(2) == ref.Amount(2));
+
+    /* retarget to a modulated value: the ramp moves, the step is
+     * unchanged, and the ramp snaps to the exact target */
+    tc.SetModulatedTarget(2, .9f);
+    tc.Advance();
+    assert(tc.Amount(2) > .5f && tc.Amount(2) < .9f); /* ramping */
+    assert(tc.GetStep(2) == 32);
+    for(int i = 0; i < 600; i++)
+        tc.Advance();
+    assert(tc.Amount(2) == .9f); /* exact endpoint snap */
+    assert(tc.GetStep(2) == 32);
+
+    /* restore the exact center expression used by OrganEngine
+     * (step * 1/64): settles bit-exactly on the unmodulated amount */
+    tc.SetModulatedTarget(2, 32.f * (1.f / 64.f));
+    for(int i = 0; i < 600; i++)
+        tc.Advance();
+    assert(tc.Amount(2) == ref.Amount(2));
+
+    /* clamps and guards */
+    tc.SetModulatedTarget(1, 2.f);
+    tc.SetModulatedTarget(-1, .5f); /* no-op, no crash */
+    tc.SetModulatedTarget(4, .5f);  /* no-op, no crash */
+    for(int i = 0; i < 600; i++)
+        tc.Advance();
+    assert(tc.Amount(1) == 1.f);
+    tc.SetModulatedTarget(1, -1.f);
+    for(int i = 0; i < 600; i++)
+        tc.Advance();
+    assert(tc.Amount(1) == 0.f);
+
+    /* block-rate retargeting like OrganEngine::Prepare(): the amount
+     * tracks smoothly and never overshoots the target band */
+    tc.SetModulatedTarget(0, .2f);
+    for(int i = 0; i < 600; i++)
+        tc.Advance();
+    float lo = 1.f, hi = 0.f;
+    for(int b = 0; b < 200; b++)
+    {
+        const float t = .2f + .6f * fabsf(sinf(.13f * b));
+        tc.SetModulatedTarget(0, t);
+        for(int i = 0; i < 24; i++)
+            tc.Advance();
+        const float a = tc.Amount(0);
+        if(a < lo)
+            lo = a;
+        if(a > hi)
+            hi = a;
+    }
+    assert(lo >= .2f - 1e-6f && hi <= .8f + 1e-6f);
+    printf("ok: modulated target\n");
+}
+
 int main()
 {
     test_independence();
@@ -368,6 +437,7 @@ int main()
     test_amplitude_bounds();
     test_antialias_masks();
     test_frequency_sweep();
+    test_modulated_target();
     printf("ALL TONEWHEEL CHARACTER TESTS PASSED\n");
     return 0;
 }

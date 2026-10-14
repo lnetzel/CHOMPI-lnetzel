@@ -105,6 +105,20 @@ class TonewheelCharacter
         return steps_[pipe];
     }
 
+    /** Modulation Mode: set the ramp destination directly (0..1,
+     *  clamped), keeping steps_ as the user-facing center. The existing
+     *  ~10 ms linear ramp smooths the block-rate updates from
+     *  OrganEngine::Prepare(), so per-block target steps are click-free.
+     *  Passing the exact center value restores the unmodulated behavior
+     *  bit-exactly. SetStep behavior is unchanged. */
+    void SetModulatedTarget(int pipe, float target)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        target_[pipe]
+            = target < 0.f ? 0.f : (target > 1.f ? 1.f : target);
+    }
+
     /** Advance all four pipe amounts by one sample. Call once per sample
      *  (not once per voice), even while voices are idle, so controls keep
      *  settling. */

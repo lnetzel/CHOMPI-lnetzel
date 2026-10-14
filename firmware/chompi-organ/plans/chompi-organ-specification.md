@@ -89,6 +89,19 @@ Each of the four pipe encoders shall have four pages, cycled per pipe by pressin
 - **SHIFT + pipe-encoder press** shall toggle that pipe's mute instead of cycling its page (the press is fully consumed). While muted the pipe shall be silent — click-free, via the existing ~1 ms level-gain slew, with the level step preserved and restored on unmute — and the pipe's knob LED shall be solid red, overriding the page color. Mute is session-only: it boots unmuted, is not saved, and has no MIDI CC (level CC 70–73 still edits a muted pipe's step, which stays silent until unmuted). Muted pipes keep their oscillators running at gain 0.
 - **SHIFT + pipe-encoder turn** shall set the value for all four pipes at once, per the turned pipe's current page: page 1 sets all four levels, page 2 all four Character amounts, page 3 all four attack times and page 4 all four release times to the turned pipe's new clamped value (an absolute broadcast, not a relative delta). The white-key bar shall show the turned pipe's page value, which all four pipes then share; global level and Character sets shall emit the corresponding MIDI CCs for all four pipes.
 
+### FR-2c — Modulation Mode (per-pipe drift amounts)
+
+The hardware toggle switch next to SHIFT/CHOMPI shall select the UI mode: **DOWN = Normal Mode** (the behavior specified in FR-2 through FR-5), **UP = Modulation Mode**. The switch shall be read through the existing debounced toggle state.
+
+In Modulation Mode only the four pipe encoders' turn/push behavior and their knob LEDs change; the volume encoder and its pages, the transport wheel, the keys, octave shift, the latch, SHIFT + pipe-encoder press (mute) and all other LED indicators shall behave as in Normal Mode.
+
+- Each pipe encoder push shall toggle that pipe between modulation page 1 and modulation page 2 (per-pipe state, separate from the Normal Mode pages, which are preserved).
+- **Modulation page 1 — volume-modulation amount:** the knob LED shall be white. **Modulation page 2 — Character-modulation amount:** the knob LED shall be blue. Brightness shall be 0.2 + 0.8 × amount so the page stays visible at 0; a muted pipe's knob LED shall stay solid red.
+- Turning a pipe encoder shall set that pipe's amount for its modulation page: 32 steps, 0–100 % (~3 % per click), clamped, no wrap. **SHIFT + turn** shall apply the delta to the turned pipe and broadcast the resulting clamped value to all four pipes (same absolute-broadcast pattern as Normal Mode).
+- While a pipe encoder is being turned (or its page toggled), the white-key value bar shall show the amount for ~0.5 s with the same rounding as the other 32-step bars: uniformly white on page 1, uniformly blue on page 2.
+- Flipping the switch mid-bar shall cancel the old mode's bar; the knob LEDs shall immediately show the active mode's pages.
+- All modulation amounts shall boot at 0 (the sound is then identical to Normal Mode), are session-only, and shall have no MIDI CCs. User/MIDI-facing values (pipe steps, Character steps, CCs, Normal Mode bars) shall remain the un-modulated centers. The drift itself is specified in DSP-8.
+
 ### FR-3 — Default pipe levels
 
 At instrument initialization (when no saved levels are loaded), all four pipe registrations shall be set to step 24 of 32 (gain 0.5625).
@@ -281,6 +294,16 @@ The vibrato is a global pitch-modulation stage applied at the oscillators, befor
 - The multiplier shall be applied to each voice's stored base frequencies every sample: oscillator phase shall never be reset and frequency shall never accumulate, so pitch neither clicks nor drifts and the base tuning is preserved.
 - The LFO phase shall advance continuously regardless of note or depth state; changing depth mid-cycle only rescales the deviation.
 
+### DSP-8 — Modulation drift (Modulation Mode)
+
+Eight independent, free-running drift modulators (4 pipes × {volume, Character}) shall run continuously in the engine, once per audio block, regardless of mode or modulation amount (changing an amount shall never restart a modulator).
+
+- **Waveform:** a smooth raised-cosine swing between the window edges, u = (1 − cos(π·phase)) / 2, alternating rising and falling halves; the slope is zero at both edges so direction changes have no corners.
+- **Timing:** each half shall draw its own random duration from 2.5–10 s, so every full cycle (bottom→top→bottom) takes 5–20 s and is asymmetric. Each modulator has its own xorshift32 PRNG state (distinct seeds) and a randomized start phase/direction, so the pipes are desynchronized from boot.
+- **Depth and window:** the modulation works in each parameter's normalized domain — volume x = level_step/32 (the squared gain curve applies to the modulated value), Character a = char_step/64 (before the smoothstep easing). The amount scales the window half-width: d = 0.20 × amount (40 % total window at 100 %). The window [center−d, center+d] shall be slid (not clipped) to stay inside [0,1]: lo < 0 → [0, 2d]; hi > 1 → [1−2d, 1]. The modulated value is lo + (hi−lo) × u.
+- **Exactness:** amount 0 shall return the unmodulated center bit-exactly; mute shall still force silence.
+- **Smoothing:** modulated gain and Character targets are recomputed per block; the existing ~1 ms per-sample gain slew and the Character ~10 ms linear ramp shall smooth the block-rate steps.
+
 ## 4. User interaction requirements
 
 - The six encoders shall retain the control assignments specified in FR-2, FR-4, FR-4b and FR-4c while the organ instrument is active.
@@ -291,6 +314,7 @@ The vibrato is a global pitch-modulation stage applied at the oscillators, befor
   - While a pipe encoder, the main-volume encoder or the transport wheel is being turned, the key LEDs shall show the value as a bar on the white keys only (leftmost white key = 0 %, rightmost white key = 100 %). Volume bars (page-1 pipes and main volume) shall color the lit keys by position: green for the first 50 %, orange 50–75 %, red above 75 %. The page-2 waveform bar is uniformly blue; the distortion-amount bar is uniformly red; the rotary bar (FR-4c) is uniformly purple; the vibrato bar (FR-4d) is uniformly pink. The bar disappears about 0.5 s after the last click.
   - While SHIFT is held on volume-encoder page 2, the key LEDs shall instead show the distortion tone (FR-4b) as the highest-priority keyboard display: a red bar across the 15 white keys (rounded percentage mapping: no keys lit at 0 %, eight at 50 %, all fifteen at 100 %) with all other key LEDs off, including the octave hints. Other encoder or MIDI value bars shall not replace the tone bar. On SHIFT release the distortion-amount bar shall reappear for ~0.5 s. Keys, octave controls and the latch shall remain functional underneath the overlay.
   - Pipe knob LEDs shall show the pipe's value: white for page 1 (volume), blue for page 2 (Character), purple for page 3 (attack) and yellow for page 4 (release). A muted pipe's knob LED shall instead be solid red, overriding the page color (FR-2b). The `ENC_6` knob LED follows the position-gradient colors on page 1 (volume) and is red on page 2 (distortion, FR-4b), also while the tone bar is shown.
+  - In Modulation Mode (FR-2c), the pipe knob LEDs shall instead show the modulation amounts: white for modulation page 1 (volume modulation), blue for modulation page 2 (Character modulation), brightness 0.2 + 0.8 × amount; a muted pipe stays solid red. Modulation value bars are uniformly white (page 1) or blue (page 2).
   - Otherwise, key LEDs shall light up for currently held notes.
   - The two LEDs at the transport-wheel column shall steadily indicate the wheel's selection (FR-4d): left purple for rotary, right pink for vibrato, until the next toggle.
   - The LOOP key LED shall be solid red while the note latch is active (FR-5d); latched notes' key LEDs stay lit like held notes.
@@ -315,6 +339,10 @@ The vibrato is a global pitch-modulation stage applied at the oscillators, befor
 | Rotary speaker | 0 % (step 0, not saved) |
 | Vibrato depth | 0 cents (not saved) |
 | Wheel selection | Rotary (not saved) |
+| Mode switch | Normal Mode (toggle down; not saved) |
+| Pipe volume-modulation amounts | 0 % (step 0 / 32, session-only, no MIDI CC) |
+| Pipe Character-modulation amounts | 0 % (step 0 / 32, session-only, no MIDI CC) |
+| Modulation Mode encoder page | Modulation page 1 (volume modulation) for all pipes (not saved) |
 
 Saved levels from the SD card (FR-0a) override these defaults at boot.
 
@@ -332,6 +360,7 @@ The initial implementation is acceptable when:
 8. Playing a seventh note follows the documented voice-stealing policy.
 9. Note-on, note-off, and encoder changes do not produce unacceptable clicks or audio dropouts.
 10. The instrument runs in real time on CHOMPI hardware without audio underruns under normal operation.
+11. With the toggle switch up (Modulation Mode), the pipe encoders set the per-pipe volume/Character modulation amounts; at 0 % the sound is identical to Normal Mode, and with amounts raised each pipe's volume and Character drift slowly and independently within the documented windows without clicks.
 
 ## 7. Out of scope for the first implementation
 
