@@ -2,7 +2,7 @@
 
 Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
-tonewheel-style Character, selectable distortion (Tape Saturation/Fuzz/BrokenSpeaker),
+tonewheel-style Character, fuzz distortion with a tone control,
 a rotary-speaker stage, a compact vintage-1960s-inspired plate
 reverb, and global 6 Hz pitch vibrato.
 
@@ -84,17 +84,32 @@ bypass) -> plate-reverb mix (page 3, blue LED with brightness floor).
 Turning or pressing the encoder shows the current page's white-key value
 bar for 500 ms.
 
-Page 2's distortion has three selectable characters: Tape Saturation (an
-exact port of the CHOMPI-TAPE page-2 tape saturation), Fuzz (aggressive
-symmetric saturation), and BrokenSpeaker (harsh speaker-like breakup
-with narrow presence, plus stereo one-channel tape dropouts, torn-cone
-crackle and per-channel filter skew after the rotary). SHIFT + turn on
-page 2 moves Tape Saturation -> Fuzz -> BrokenSpeaker (clamped at the
-ends, no wrap); the amount is not changed. While SHIFT is held on page
-2, exactly five red white-keys show the selection (KEY_1-5 Tape
-Saturation, KEY_6-10 Fuzz, KEY_11-15 BrokenSpeaker) and all other key
-LEDs are off; releasing SHIFT restores the amount bar for 500 ms. The
-type boots to Tape Saturation and is not saved.
+Page 2's distortion is a fuzz with a tone control. SHIFT + turn on
+page 2 changes the tone by 1 percentage point per click, clamped to
+0-100% (no wrap); the amount is not changed. The tone sweeps the fuzz's
+post low-pass logarithmically from 500 Hz (0%, dark) to the original
+10 kHz (100%, boot default - no additional darkening, the historical
+fuzz sound); counterclockwise darkens, and 0% is not a mute. Tone
+changes are smoothed click-free (~10 ms). While SHIFT is held on page 2
+the tone shows immediately as a red bar across the 15 white keys (none
+lit at 0%, eight at 50%, all fifteen at 100%) and all other key LEDs
+are off; releasing SHIFT restores the amount bar for 500 ms. The tone
+boots to 100% and is kept for the session only (no SD-card persistence,
+no MIDI CC).
+
+To keep the perceived loudness even at any distortion amount, an
+automatic output leveling trims the fuzzed signal after the rotary and
+before the plate reverb, so the leveled level also feeds the reverb. The
+fuzz is a hard limiter - its output level is nearly constant at high
+drive - so a fixed trim cannot match every registration: instead, the
+dry and fuzzed signal levels are measured per audio block, smoothed over
+~50 ms, and the fuzzed level is matched down to the dry level (never
+boosted, never more than -30 dB, exactly unity for the clean sound).
+Quiet single notes get a deep trim, loud full chords get barely any;
+clean and distorted sounds keep the same power. The trim is folded
+through the fuzz's own wet/bypass fade, so it ramps click-free and is
+exactly unity at settled bypass; it introduces no user control, and the
+main-volume value and display are unaffected.
 
 Page 3 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
 exact dry and 100% is wet only (a linear complementary crossfade with a
@@ -118,8 +133,8 @@ the master gain).
 The mix and decay boot at 0% / 0.5 s and are kept for the session only
 (no SD-card persistence, no MIDI CC).
 
-SHIFT + turn = fine tune (+/-50 cents) on page 1 only (page 2 selects
-the distortion type, page 3 adjusts decay). Boot default volume is 25%.
+SHIFT + turn = fine tune (+/-50 cents) on page 1 only (page 2 adjusts
+the distortion tone, page 3 adjusts decay). Boot default volume is 25%.
 
 ### Keys
 
@@ -146,8 +161,9 @@ Character 0 is unchanged.
 
 pitch vibrato (shared 6 Hz LFO at the oscillators) -> sine -> Character
 shaping (per pipe) -> pipe gain -> voice envelope/velocity -> voice mix
--> distortion (Warm/Fuzz/BrokenSpeaker) -> rotary
-speaker -> plate reverb -> master gain -> headphone + master stereo
+-> fuzz distortion (tone-controlled) -> rotary
+speaker -> plate reverb -> master gain (with the automatic fixed fuzz
+output trim) -> headphone + master stereo
 output pairs. Character 0 exactly bypasses shaping; the clean-sine
 engine is bit-identical to the previous firmware's sine-only sound.
 Reverb 0% is bit-exact dry; vibrato depth 0 is an exact bypass.
@@ -180,4 +196,8 @@ anti-alias suppression. The reverb tests cover deterministic
 initialization (garbage-prefilled delay buffer), bounded decaying
 impulse response, mix clamping, ramp convergence/retargeting, bit-exact
 dry at 0%, wet-only 100% against a reference instance, and long-silence
-stability.
+stability. The distortion tests cover the fuzz's tone control (endpoints,
+monotonic darkening, click-free ramps), a bit-exact regression against
+the previous Fuzz at tone 100%, exact dry bypass at every tone, and the
+input-referenced fuzz output leveling (dry-matched loudness, -30 dB
+floor).

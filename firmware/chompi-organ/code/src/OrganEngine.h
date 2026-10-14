@@ -18,25 +18,22 @@
  *  - Oldest-first voice stealing; same-note retrigger reuses its voice
  *  - Fixed 1/24 output scale so 6 voices x 4 pipes cannot clip
  *  - Pipe levels in 32 steps, gain = (step/32)^2, smoothed per sample
- *  - Distortion: 32-step selectable-character saturation stage on the
- *    mix (Distortion.h), placed before the master gain so the drive
+ *  - Distortion: 32-step fuzz saturation stage on the mix
+ *    (Distortion.h), placed before the master gain so the drive
  *    character is level-independent; 0% is an exact bypass (DSP-5).
- *    Three types - Tape Saturation (exact port of the CHOMPI-TAPE
- *    page-2 saturation: log-mapped 1-13.9x pre-gain into the stmlib
- *    SoftClip curve with output compensation gain), Fuzz (aggressive
- *    saturation), and BrokenSpeaker (harsh speaker-like breakup with
- *    narrow presence) - selected by SHIFT + volume-encoder turn on
- *    page 2 with a ~10 ms click-free crossfade; the type boots to Tape
- *    Saturation and is not saved (FR-4b)
+ *    SHIFT + volume-encoder turn on page 2 is a tone control sweeping
+ *    the fuzz's post low-pass logarithmically from 500 Hz (0%, dark)
+ *    to the original 10 kHz (100%, boot default = the historical Fuzz
+ *    sound, no additional darkening), smoothed click-free; the tone is
+ *    session-only (FR-4b). An input-referenced output leveling (per-
+ *  block RMS measurement, ~50 ms smoothing, trim = dry level / fuzzed
+ *  level, clamped <= 1 and floored at -30 dB), folded through the
+ *    live wet amount, is applied after the rotary and before the plate
+ *    reverb, so the reverb also receives the leveled level (no user
+ *    control)
  *  - Rotary speaker: 60s Leslie-style mono->stereo stage after the
  *    distortion (800 Hz crossover, Doppler horn + AM drum, two virtual
  *    mics 180 deg apart); 0% is an exact bypass (DSP-6)
- *  - Stereo dropout: BrokenSpeaker-only lo-fi stage between the rotary
- *    and the plate reverb (Dropout.h, DSP-8): random one-channel
- *    tape-style dropouts (rate/depth scale with drive), torn-cone
- *    crackle and per-channel filter skew (4 kHz L / 3.2 kHz R). Gated
- *    per sample by the live BrokenSpeaker weight x wet amount, so it
- *    is an exact bypass for the other types and at zero drive.
  *  - Plate reverb: compact vintage-1960s-inspired plate after the
  *    rotary (PlateReverb.h; Griesinger/Dattorro tank adapted from
  *    chompi-wave's reverb). Linear complementary dry/wet crossfade with
@@ -54,7 +51,6 @@
 #pragma once
 #include "daisysp.h"
 #include "Distortion.h"
-#include "Dropout.h"
 #include "RotarySpeaker.h"
 #include "TonewheelCharacter.h"
 #include "PlateReverb.h"
@@ -150,9 +146,7 @@ class OrganEngine
         drive_step_ = kDefaultDriveStep;
         drive_ = drive_target_
             = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
-        distortion_.Init(sample_rate);
-        distortion_.SetType(Distortion::kTapeSat); /* boot default (FR-4b) */
-        dropout_.Init(sample_rate);
+        distortion_.Init(sample_rate); /* fuzz; tone boots at 100% */
 
         rotary_.Init(sample_rate);
         SetRotaryStep(kDefaultRotaryStep);
@@ -269,13 +263,17 @@ class OrganEngine
 
     int GetDriveStep() const { return drive_step_; }
 
-    /** Select the distortion type (Distortion::kTapeSat/kFuzz/
- *      kBrokenSpeaker, clamped, no wrap). Never changes the amount,
- *      tuning or note state; the ~10 ms crossfade is click-free.
- *      Boots as Tape Saturation. */
-    void SetDriveType(int type) { distortion_.SetType(type); }
+    /** Set the distortion tone (0..100 percent, clamped, no wrap):
+ *      0 = 500 Hz low-pass (dark), 100 = the original 10 kHz (boot
+ *      default, no additional darkening). Never changes the amount,
+ *      tuning or note state; the filter coefficient ramps ~10 ms,
+ *      click-free. Session-only. */
+    void SetDriveTonePercent(int percent)
+    {
+        distortion_.SetTonePercent(percent);
+    }
 
-    int GetDriveType() const { return distortion_.GetType(); }
+    int GetDriveTonePercent() const { return distortion_.GetTonePercent(); }
 
     /** Apply one encoder click to the rotary-speaker amount (0..kMaxSteps).
  *      Step 0 is an exact bypass; higher steps deepen the modulation and
@@ -451,12 +449,11 @@ class OrganEngine
     /** Called once per audio block, before Process(). */
     void Prepare()
     {
-        /* B4: the distortion gains/normalization only depend on the
+        /* B4: the distortion gain/normalization only depend on the
          * drive target, so compute them once per block instead of a
-         * tanhf + divide per sample. drive_ still slews per sample for
+         * divide per sample. drive_ still slews per sample for
          * a click-free bypass. */
         distortion_.PrepareBlock(drive_target_);
-        dropout_.PrepareBlock(drive_target_);
 
         if(freqs_dirty_)
         {
@@ -588,11 +585,10 @@ class OrganEngine
                 mix += sig * voice.velocity;
             }
 
-            /* Distortion (DSP-5): selectable-character saturation stage
-             * (Tape Saturation/Fuzz/BrokenSpeaker) on the mix. Runs
-             * before the master gain so the drive character does not
-             * depend on the listening level; step 0 is an exact bypass
-             * for every type. */
+            /* Distortion (DSP-5): fuzz saturation stage with a tone
+             * control on the mix. Runs before the master gain so the
+             * drive character does not depend on the listening level;
+             * step 0 is an exact bypass at every tone. */
             float out_sig = distortion_.Process(mix * kMixScale, drive_);
             /* Rotary speaker (DSP-6): mono mix -> stereo Leslie, placed
              * after the distortion (the drive is the preamp, the Leslie
@@ -601,14 +597,18 @@ class OrganEngine
              * an exact bypass (both channels = out_sig). */
             float out_l, out_r;
             rotary_.Process(out_sig, out_l, out_r);
-            /* Stereo dropout (DSP-8): BrokenSpeaker-only lo-fi stage
-             * (one-channel tape dropouts, torn-cone crackle, per-channel
-             * filter skew) between the rotary and the plate. Gated per
-             * sample by the live BrokenSpeaker weight x wet amount, so
-             * it is an exact bypass for the other types and at zero
-             * drive, and the ~10 ms crossfades can't click. */
-            dropout_.Process(out_l, out_r,
-                             distortion_.GetBrokenWetAmount());
+            /* Input-referenced FUZZ output leveling: servo-matches the
+             * fuzzed level down to the measured dry level (per-block
+             * RMS, ~50 ms smoothing, clamped <= 1, floored at -30 dB),
+             * so the fuzzed sound keeps the dry sound's power at any
+             * registration or polyphony - dry signal and reverb send
+             * alike, no user control. Folded through the live wet
+             * amount, it ramps click-free with the distortion's own
+             * ~10 ms wet/bypass crossfade and is exactly unity at
+             * settled bypass or zero drive. */
+            const float fuzz_out_gain = distortion_.GetOutputGain();
+            out_l *= fuzz_out_gain;
+            out_r *= fuzz_out_gain;
             /* Plate reverb: stereo in/out between the rotary (speaker
              * cabinet) and the master gain, so the volume knob scales
              * dry and wet equally and 0% master mutes the tail. The tank
@@ -710,7 +710,6 @@ class OrganEngine
     float    drive_target_;
     Distortion distortion_;
     uint8_t  drive_step_;
-    Dropout  dropout_;
     RotarySpeaker rotary_;
     uint8_t  rotary_step_;
     uint8_t  pipe_attack_step_[kNumPipes];

@@ -2,22 +2,33 @@
  *  @brief Native assert-based numerical tests for Distortion.h.
  *
  *  Pure host C++: no MCU/Daisy dependencies. Covers:
- *   - init defaults, type setter clamping (no wrap), immediate getter
- *   - tape saturation: SoftClip curve spot values (incl. the |x|>3
- *     clamp), log-mapping endpoints amt(0)=1 / amt(1)~13.9, comp gain
- *     floor 0.3, exact zero-drive bypass
- *   - exact dry bypass at settled zero amount for every type
- *   - silent input -> silence after filter settling (all types)
- *   - type crossfade: weights stay nonnegative and sum to 1, converge
- *     to the exact one-hot in ~10 ms, retarget mid-ramp from the
- *     current weights without a jump (48 kHz and 32 kHz)
- *   - amount retention: SetType alone never disturbs the drive path
- *   - voicing distinction: Tape Saturation is symmetric with strong odd
- *     harmonics and no DC, Fuzz is symmetric and bounded, BrokenSpeaker
- *     is harsh and narrow-banded (200 Hz high-pass)
- *   - bounded output across the full amount range
- *   - no discontinuities during rapid type retargeting (checked
- *     relative to the local input slope)
+ *   - init defaults (tone boots at 100%) and tone setter clamping
+ *     (0..100, no wrap); changing the tone never disturbs the drive path
+ *   - tone mapping: cutoff endpoints (500 Hz at 0%, the original 10 kHz
+ *     coefficient expression at 100%) and strict monotonicity
+ *   - reference regression: at tone 100 the fuzz matches the previous
+ *     settled Fuzz DSP sample-for-sample across all nonzero drive steps
+ *     and representative signals at 48 kHz and 32 kHz (the removed
+ *     type-selection fade is excluded by settling first)
+ *   - exact dry bypass at settled zero amount for every tone setting,
+ *     including transitions to zero with residual filter state and a
+ *     nonzero smoothed drive value
+ *   - silent input -> silence after filter settling at several tones
+ *   - darkening: a steady 6 kHz sine's fundamental is attenuated by at
+ *     least 12 dB at tone 0 relative to tone 100, monotonic at
+ *     intermediate settings, and low-frequency output stays nonzero at
+ *     tone 0 (0% is not a mute)
+ *   - tone coefficient ramp: finite ~10 ms settlement with exact
+ *     endpoint snap, bounded per-sample movement, and mid-ramp
+ *     retargeting continuing from the live coefficient (48 kHz/32 kHz)
+ *   - fuzz symmetry/harmonic content and bounded output across amount
+ *     and tone sweeps
+ *   - input-referenced FUZZ output leveling: exactly unity at boot, at
+ *     drive 0 and at settled bypass; servo-matches the fuzzed level
+ *     down to the measured dry level (per-block RMS, ~50 ms smoothing),
+ *     never boosts, floors at -30 dB; deep trim on quiet material,
+ *     mild trim on loud material; bounded click-free transitions at
+ *     48 kHz and 32 kHz
  *
  *  Run: make -C firmware/chompi-organ/code/tests test
  */
@@ -43,81 +54,219 @@ static float BinMag(const float *buf, int nsamp, int h)
     return static_cast<float>(2.0 * sqrt(re * re + im * im) / nsamp);
 }
 
+/** Independent reference of the previous settled Fuzz DSP (before the
+ *  tone control), replicating its exact arithmetic: quadratic pre-gain
+ *  g = 1 + 127 d^2, soft-knee clipper t - t^3/3 bounded to +/-2/3,
+ *  0.33/FuzzClip(0.33 g) post normalization, fixed ~10 kHz one-pole
+ *  low-pass, ~10 ms target-driven wet ramp with exact-endpoint snap.
+ *  Used to prove the tone-100 fuzz is unchanged bit-for-bit. */
+class OriginalFuzz
+{
+  public:
+    void Init(float sample_rate)
+    {
+        sample_rate_  = sample_rate;
+        wet_ramp_inc_ = 1.f / (.010f * sample_rate);
+        fuzz_lp_c_    = 1.f - expf(-kTwoPi * 10000.f / sample_rate);
+        wet_fuzz_     = 0.f;
+        drive_target_ = 0.f;
+        fuzz_lp_      = 0.f;
+        PrepareBlock(0.f);
+    }
+
+    void PrepareBlock(float drive_target)
+    {
+        drive_target_ = drive_target < 0.f ? 0.f
+                                           : (drive_target > 1.f ? 1.f
+                                                                 : drive_target);
+        const float d = drive_target_;
+        g_fuzz_    = 1.f + d * d * 127.f;
+        post_fuzz_ = .33f / FuzzClip(.33f * g_fuzz_);
+    }
+
+    float Process(float in)
+    {
+        const float wet_target = drive_target_ > 0.f ? 1.f : 0.f;
+        wet_fuzz_ = RampToward(wet_fuzz_, wet_target, wet_ramp_inc_);
+        const float wet = FuzzFiltered(FuzzShaped(in));
+        return in + wet_fuzz_ * (wet - in);
+    }
+
+  private:
+    static constexpr float kTwoPi = 6.283185307179586f;
+
+    static float RampToward(float cur, float target, float inc)
+    {
+        if(cur < target)
+        {
+            cur += inc;
+            return cur > target ? target : cur;
+        }
+        if(cur > target)
+        {
+            cur -= inc;
+            return cur < target ? target : cur;
+        }
+        return cur;
+    }
+
+    static float FuzzClip(float t)
+    {
+        if(t > 1.f)
+            return .666666666666667f;
+        if(t < -1.f)
+            return -.666666666666667f;
+        return t - t * t * t * .333333333333333f;
+    }
+
+    float FuzzShaped(float x) const
+    {
+        return FuzzClip(g_fuzz_ * x) * post_fuzz_;
+    }
+
+    float FuzzFiltered(float s)
+    {
+        fuzz_lp_ += fuzz_lp_c_ * (s - fuzz_lp_);
+        return fuzz_lp_;
+    }
+
+    float sample_rate_, wet_ramp_inc_, fuzz_lp_c_;
+    float wet_fuzz_, drive_target_, g_fuzz_, post_fuzz_, fuzz_lp_;
+};
+
 static void test_init_and_clamp()
 {
     Distortion d;
     d.Init(48000.f);
-    assert(d.GetType() == Distortion::kTapeSat); /* boot default */
-    assert(d.Weight(0) == 1.f && d.Weight(1) == 0.f && d.Weight(2) == 0.f);
+    assert(d.GetTonePercent() == 100); /* boot default */
 
-    d.SetType(Distortion::kFuzz);
-    assert(d.GetType() == Distortion::kFuzz); /* immediate, pre-ramp */
-    d.SetType(Distortion::kBrokenSpeaker);
-    assert(d.GetType() == Distortion::kBrokenSpeaker);
-    d.SetType(99); /* clamped at the top end, no wrap */
-    assert(d.GetType() == Distortion::kBrokenSpeaker);
-    d.SetType(-4); /* clamped at the bottom end */
-    assert(d.GetType() == Distortion::kTapeSat);
+    d.SetTonePercent(40);
+    assert(d.GetTonePercent() == 40);
+    d.SetTonePercent(137); /* clamped at the top end, no wrap */
+    assert(d.GetTonePercent() == 100);
+    d.SetTonePercent(-25); /* clamped at the bottom end */
+    assert(d.GetTonePercent() == 0);
 }
 
-static void test_tape_saturation()
+static void test_tone_mapping(float sr)
 {
-    /* stmlib SoftClip curve spot values: the rational x(27+x^2)/(27+9x^2)
-     * waveshaper, clamped to +/-1 beyond |x| > 3 */
-    assert(Distortion::SoftClip(0.f) == 0.f);
-    assert(fabsf(Distortion::SoftClip(1.f) - 28.f / 36.f) < 1e-6f);
-    assert(fabsf(Distortion::SoftClip(2.f) - 62.f / 63.f) < 1e-6f);
-    assert(fabsf(Distortion::SoftClip(3.f) - 1.f) < 1e-6f);
-    assert(Distortion::SoftClip(3.5f) == 1.f);   /* beyond the clamp */
-    assert(Distortion::SoftClip(-3.5f) == -1.f); /* beyond the clamp */
-    assert(Distortion::SoftClip(-1.f) == -Distortion::SoftClip(1.f));
-
-    /* log-mapped pre-gain endpoints: amt(0) = 1, amt(1) ~= 13.9 */
     Distortion d;
-    d.Init(48000.f);
-    d.PrepareBlock(0.f);
-    assert(d.TapeAmt() == 1.f);
-    assert(d.TapeComp() == 1.f); /* no compensation at zero drive */
-    d.PrepareBlock(1.f);
-    assert(fabsf(d.TapeAmt() - 13.9f) < .02f); /* logf(2.7)*13+1 */
-    /* comp floor: SoftClip(.4*(13.9-1)) is beyond |x|>3 -> clamps to 1 */
-    assert(fabsf(d.TapeComp() - .3f) < 1e-6f);
+    d.Init(sr);
 
-    /* exact zero-drive bypass for the tape branch */
-    d.PrepareBlock(0.f);
-    for(int i = 0; i < 480; i++)
-        d.Process(.3f, 0.f);
-    assert(d.Process(-.42f, 0.f) == -.42f);
-    assert(d.Process(.17f, 0.f) == .17f);
+    /* endpoints: 0% = 500 Hz, 100% = the original 10 kHz coefficient
+     * expression (bit-identical) */
+    d.SetTonePercent(0);
+    const float c0 = 1.f - expf(-6.283185307179586f * 500.f / sr);
+    assert(d.FuzzLpCoeffTarget() == c0);
+    d.SetTonePercent(100);
+    const float c100 = 1.f - expf(-6.283185307179586f * 10000.f / sr);
+    assert(d.FuzzLpCoeffTarget() == c100);
+    assert(c0 < c100);
+
+    /* strictly monotonic: higher tone = brighter (larger coefficient) */
+    float prev = -1.f;
+    for(int p = 0; p <= 100; p++)
+    {
+        d.SetTonePercent(p);
+        const float c = d.FuzzLpCoeffTarget();
+        assert(c > prev);
+        prev = c;
+    }
+}
+
+static void test_reference_equality(float sr)
+{
+    /* Tone 100 must reproduce the previous settled Fuzz sample-for-
+     * sample across all nonzero drive steps and representative signals;
+     * the removed type-selection fade is excluded by settling before
+     * comparing. */
+    for(int step = 1; step <= 32; step++)
+    {
+        const float drv = static_cast<float>(step) * (1.f / 32.f);
+        for(int sig = 0; sig < 3; sig++)
+        {
+            Distortion d;
+            d.Init(sr);
+            d.SetTonePercent(100);
+            OriginalFuzz r;
+            r.Init(sr);
+            d.PrepareBlock(drv);
+            r.PrepareBlock(drv);
+            unsigned rng = 12345u + sig;
+            const int  total = static_cast<int>(.2f * sr); /* 200 ms */
+            for(int i = 0; i < total; i++)
+            {
+                float in;
+                if(sig == 0)
+                    in = .3f * sinf(2.f * kPi * 100.f * i / sr);
+                else if(sig == 1)
+                    in = .3f * sinf(2.f * kPi * 1000.f * i / sr);
+                else
+                {
+                    rng = rng * 1664525u + 1013904223u;
+                    in  = (rng >> 8) * (1.f / 8388608.f) - 1.f;
+                }
+                const float a = d.Process(in, drv);
+                const float b = r.Process(in);
+                if(i > total / 2) /* settled: compare bit-for-bit */
+                    assert(a == b);
+            }
+        }
+    }
 }
 
 static void test_zero_bypass_exact()
 {
-    for(int t = 0; t < Distortion::kNumTypes; t++)
+    /* exact dry bypass at settled zero amount for EVERY tone setting */
+    for(int tone = 0; tone <= 100; tone++)
     {
         Distortion d;
         d.Init(48000.f);
-        d.SetType(t);
+        d.SetTonePercent(tone);
         d.PrepareBlock(0.f);
-        /* settle the ~10 ms weight + wet ramps (30 ms of signal) */
+        /* settle the ~10 ms coefficient ramp (30 ms of signal) */
         for(int i = 0; i < 1440; i++)
             d.Process(.3f * sinf(2.f * kPi * i * .01f), 0.f);
-        assert(d.Weight(t) == 1.f);
         static const float xs[] = {-.9f, -.33f, -.02f, 0.f, .02f, .33f, .9f};
         for(int xi = 0; xi < 7; xi++)
             assert(d.Process(xs[xi], 0.f) == xs[xi]); /* bit-exact dry */
     }
 }
 
-static void test_silence_settles()
+static void test_transition_to_zero_bypass()
 {
-    for(int t = 0; t < Distortion::kNumTypes; t++)
+    /* drive target -> 0 with residual filter state and a NONZERO
+     * smoothed drive value: the wet ramp must settle to bit-exact dry
+     * in finite ~10 ms at representative tones */
+    static const int tones[] = {0, 25, 50, 75, 100};
+    for(int ti = 0; ti < 5; ti++)
     {
         Distortion d;
         d.Init(48000.f);
-        d.SetType(t);
+        d.SetTonePercent(tones[ti]);
         d.PrepareBlock(1.f);
-        /* warm up with signal so the filters hold state, then go silent */
+        /* warm up fully wet so the filter holds state */
+        for(int i = 0; i < 4800; i++)
+            d.Process(.5f * sinf(2.f * kPi * 1000.f * i / 48000.f), 1.f);
+        d.PrepareBlock(0.f);
+        const int ramp = static_cast<int>(.010f * 48000.f) + 2;
+        for(int i = 0; i < ramp + 480; i++)
+            d.Process(.3f * sinf(2.f * kPi * 440.f * i / 48000.f), .5f);
+        assert(d.Process(-.42f, .5f) == -.42f); /* bit-exact dry */
+        assert(d.Process(.17f, .5f) == .17f);
+    }
+}
+
+static void test_silence_settles()
+{
+    static const int tones[] = {0, 50, 100};
+    for(int ti = 0; ti < 3; ti++)
+    {
+        Distortion d;
+        d.Init(48000.f);
+        d.SetTonePercent(tones[ti]);
+        d.PrepareBlock(1.f);
+        /* warm up with signal so the filter holds state, then go silent */
         for(int i = 0; i < 480; i++)
             d.Process(.5f, 1.f);
         float out = 1.f;
@@ -132,189 +281,126 @@ static void test_silence_settles()
     }
 }
 
-static void test_weight_transitions(float sr)
+/** Steady-state fundamental magnitude of a coherent sine (bin `bin` of
+ *  nsamp at 48 kHz) through the fuzz at full drive and the given tone. */
+static float SteadyFundMag(int tone, int bin, int nsamp)
+{
+    static float buf[4096];
+    Distortion d;
+    d.Init(48000.f);
+    d.SetTonePercent(tone);
+    d.PrepareBlock(1.f);
+    for(int i = 0; i < 9600; i++) /* 200 ms: ramps + filter settle */
+        d.Process(.3f * sinf(2.f * kPi * bin * i / nsamp), 1.f);
+    for(int i = 0; i < nsamp; i++)
+        buf[i] = d.Process(.3f * sinf(2.f * kPi * bin * i / nsamp), 1.f);
+    return BinMag(buf, nsamp, bin);
+}
+
+static void test_tone_darkening()
+{
+    /* 6 kHz sine (bin 512 of 4096 at 48 kHz): at tone 0 (500 Hz
+     * one-pole) the fundamental must be attenuated by >= 12 dB relative
+     * to tone 100, with monotonic attenuation at intermediate tones */
+    const float m100 = SteadyFundMag(100, 512, 4096);
+    const float m75  = SteadyFundMag(75, 512, 4096);
+    const float m50  = SteadyFundMag(50, 512, 4096);
+    const float m25  = SteadyFundMag(25, 512, 4096);
+    const float m0   = SteadyFundMag(0, 512, 4096);
+    assert(m100 > m75 && m75 > m50 && m50 > m25 && m25 > m0);
+    const float atten_db = 20.f * log10f(m100 / m0);
+    assert(atten_db >= 12.f);
+
+    /* tone 0 is not a mute: a 93.75 Hz sine (bin 8) still passes */
+    const float lo = SteadyFundMag(0, 8, 4096);
+    assert(lo > .1f);
+}
+
+static void test_tone_ramp(float sr)
 {
     Distortion d;
     d.Init(sr);
     d.PrepareBlock(.5f);
+    const int   ramp_samples = static_cast<int>(.010f * sr + .5f);
+    const float inc          = 1.f / (.010f * sr);
 
-    const int ramp_samples = static_cast<int>(.010f * sr + .5f);
-
-    /* Tape (boot default) -> Fuzz: monotone target weight, sum 1, exact one-hot */
-    d.SetType(Distortion::kFuzz);
-    float prev_w = d.Weight(Distortion::kFuzz);
-    int    n     = 0;
+    /* 100 -> 0: bounded per-sample coefficient movement, exact
+     * endpoint snap in finite ~10 ms time */
+    d.SetTonePercent(0);
+    const float target0 = d.FuzzLpCoeffTarget();
+    assert(d.FuzzLpCoeff() != target0); /* genuinely needs to ramp */
+    int n = 0;
     for(; n < ramp_samples + 2; n++)
     {
+        const float prev = d.FuzzLpCoeff();
         d.Process(.2f, .5f);
-        const float w0 = d.Weight(0), w1 = d.Weight(1), w2 = d.Weight(2);
-        assert(w0 >= 0.f && w1 >= 0.f && w2 >= 0.f);
-        assert(fabsf((w0 + w1 + w2) - 1.f) < 1e-5f);
-        assert(w1 >= prev_w);
-        prev_w = w1;
-        if(w1 == 1.f)
+        const float cur = d.FuzzLpCoeff();
+        assert(fabsf(cur - prev) <= inc + 1e-6f);
+        if(cur == target0)
             break;
     }
-    assert(n <= ramp_samples); /* finite ~10 ms convergence */
-    assert(d.Weight(0) == 0.f && d.Weight(2) == 0.f);
+    assert(n <= ramp_samples);
+    assert(d.FuzzLpCoeff() == target0);
 
-    /* mid-ramp retarget Fuzz -> BrokenSpeaker: weights continue from their
-     * current values (no jump larger than one increment per sample) */
-    Distortion e;
-    e.Init(sr);
-    e.SetType(Distortion::kFuzz);
+    /* rapid mid-ramp retarget 0 -> 100 -> 35: the ramp continues from
+     * the LIVE coefficient (no jump larger than one increment) */
+    d.SetTonePercent(100);
     const int half = ramp_samples / 2;
     for(int i = 0; i < half; i++)
-        e.Process(.2f, .5f);
-    const float b0 = e.Weight(0), b1 = e.Weight(1), b2 = e.Weight(2);
-    assert(b1 > 0.f && b1 < 1.f); /* genuinely mid-ramp */
-    e.SetType(Distortion::kBrokenSpeaker);
-    assert(e.GetType() == Distortion::kBrokenSpeaker); /* target immediately */
-    const float inc = 1.f / (.010f * sr);
-    for(int n2 = 0; n2 < ramp_samples + 2; n2++)
+        d.Process(.2f, .5f);
+    d.SetTonePercent(35);
+    const float live  = d.FuzzLpCoeff();
+    const float t35   = d.FuzzLpCoeffTarget();
+    assert(live != t35); /* genuinely mid-ramp */
+    int n2 = 0;
+    for(; n2 < ramp_samples + 2; n2++)
     {
-        const float p0 = e.Weight(0), p1 = e.Weight(1), p2 = e.Weight(2);
-        e.Process(.2f, .5f);
-        const float q0 = e.Weight(0), q1 = e.Weight(1), q2 = e.Weight(2);
-        assert(fabsf(q0 - p0) <= inc + 1e-6f);
-        assert(fabsf(q1 - p1) <= inc + 1e-6f);
-        assert(fabsf(q2 - p2) <= inc + 1e-6f);
-        assert(fabsf((q0 + q1 + q2) - 1.f) < 1e-5f);
-        if(q2 == 1.f)
+        const float prev = d.FuzzLpCoeff();
+        d.Process(.2f, .5f);
+        const float cur = d.FuzzLpCoeff();
+        assert(fabsf(cur - prev) <= inc + 1e-6f);
+        if(cur == t35)
             break;
     }
-    assert(e.Weight(2) == 1.f && e.Weight(0) == 0.f && e.Weight(1) == 0.f);
-    (void)b0;
-    (void)b1;
+    assert(n2 <= ramp_samples);
+    assert(d.FuzzLpCoeff() == t35); /* exact endpoint */
 }
 
-static void test_amount_retention()
+static void test_fuzz_voicing()
 {
-    /* SetType alone (no Process calls) must not disturb the drive path:
-     * the crossfade continues from the current weights, never jumping.
-     * Verify weights stay consistent and ProcessBlock is called. */
-    Distortion d;
-    d.Init(48000.f);
-    d.PrepareBlock(.5f);
-    assert(d.GetType() == Distortion::kTapeSat); /* boot default */
-    assert(d.Weight(0) == 1.f);
-    
-    d.SetType(Distortion::kFuzz);
-    /* weights haven't changed yet because Process hasn't been called */
-    assert(d.Weight(0) == 1.f);
-    
-    d.SetType(Distortion::kBrokenSpeaker);
-    /* weights still unchanged */
-    assert(d.Weight(0) == 1.f);
-    
-    /* Only after Process calls do weights start moving toward BrokenSpeaker */
-    d.Process(.25f, .5f);
-    assert(d.Weight(2) > 0.f); /* Broken has nonzero weight now */
-    assert(d.Weight(2) < 1.f); /* but hasn't reached it yet */
-}
-
-/** Run a coherent sine (bin `bin` of `nsamp` at 48 kHz) through one
- *  type at full amount; fill buf with the steady-state last nsamp. */
-static void SteadySine(int type, int bin, float *buf, int nsamp)
-{
-    Distortion d;
-    d.Init(48000.f);
-    d.SetType(type);
-    d.PrepareBlock(1.f);
-    for(int i = 0; i < 4800; i++) /* 100 ms settle: ramps + filters */
-        d.Process(.3f * sinf(2.f * kPi * bin * i / nsamp), 1.f);
-    for(int i = 0; i < nsamp; i++)
-        buf[i] = d.Process(.3f * sinf(2.f * kPi * bin * i / nsamp), 1.f);
-}
-
-static void test_voicing_distinction()
-{
+    /* symmetric clip -> even harmonics ~0, strong odd content (tone
+     * 100, coherent 468.75 Hz sine = bin 40 of 4096 at 48 kHz) */
     static float buf[4096];
-
-    /* Tape Saturation: symmetric SoftClip curve -> odd harmonics only,
-     * no DC; at full drive the 0.3 sine x 13.9 pre-gain clips deep into
-     * the +/-1 bounds (near-square), so the 3rd harmonic is strong */
-    SteadySine(Distortion::kTapeSat, 40, buf, 4096);
+    Distortion d;
+    d.Init(48000.f);
+    d.PrepareBlock(1.f);
+    for(int i = 0; i < 4800; i++)
+        d.Process(.3f * sinf(2.f * kPi * 40 * i / 4096), 1.f);
+    for(int i = 0; i < 4096; i++)
+        buf[i] = d.Process(.3f * sinf(2.f * kPi * 40 * i / 4096), 1.f);
     double mean = 0.0;
     for(int i = 0; i < 4096; i++)
         mean += buf[i];
     mean /= 4096;
     assert(fabs(mean) < 2e-3); /* symmetric curve: no DC */
-    const float t1 = BinMag(buf, 4096, 40);
-    const float t2 = BinMag(buf, 4096, 80);
-    const float t3 = BinMag(buf, 4096, 120);
-    assert(t2 < .01f * t1); /* even harmonics ~0 */
-    assert(t3 > .05f * t1); /* strong 3rd harmonic */
-
-    /* Tape Saturation and Fuzz are different curves (rational SoftClip
-     * vs soft-knee t-t^3/3 with a different gain map) */
-    {
-        static float fbuf0[4096];
-        SteadySine(Distortion::kFuzz, 40, fbuf0, 4096);
-        double maxdiff = 0.0;
-        for(int i = 0; i < 4096; i++)
-        {
-            const double df = fabs(static_cast<double>(buf[i]) - fbuf0[i]);
-            if(df > maxdiff)
-                maxdiff = df;
-        }
-        assert(maxdiff > .01);
-    }
-
-    /* Fuzz: symmetric clip -> even harmonics ~0, strong odd content */
-    SteadySine(Distortion::kFuzz, 40, buf, 4096);
     const float f1 = BinMag(buf, 4096, 40);
     const float f2 = BinMag(buf, 4096, 80);
     const float f3 = BinMag(buf, 4096, 120);
     assert(f2 < .005f * f1);
     assert(f3 > .02f * f1);
     for(int i = 0; i < 4096; i++)
-        assert(fabsf(buf[i]) <= .8f); /* bounded by hard clip */
-
-    /* BrokenSpeaker: harsh hard clipping -> strong harmonics with
-     * narrow bandpass coloration (200 Hz HP to ~4 kHz LP creates
-     * the presence band). Noticeably different from both Tape and Fuzz. */
-    SteadySine(Distortion::kBrokenSpeaker, 40, buf, 4096);
-    const float b1 = BinMag(buf, 4096, 40);
-    const float b3 = BinMag(buf, 4096, 120);
-    assert(b3 > .02f * b1); /* hard clip: strong odd harmonics */
-    for(int i = 0; i < 4096; i++)
-        assert(fabsf(buf[i]) <= .8f); /* bounded by hard clip */
-
-    /* BrokenSpeaker should be distinctly different from Fuzz's symmetric
-     * clipping due to the narrow bandpass filtering. */
-    double maxdiff = 0.0;
-    for(int i = 0; i < 4096; i++)
-    {
-        static float fbuf[4096];
-        SteadySine(Distortion::kFuzz, 40, fbuf, 4096);
-        const double df = fabs(static_cast<double>(buf[i]) - fbuf[i]);
-        if(df > maxdiff)
-            maxdiff = df;
-    }
-    assert(maxdiff > .01); /* BrokenSpeaker and Fuzz are not the same sound */
-
-    /* BrokenSpeaker high-pass at 200 Hz: the fundamental of a 93.75 Hz
-     * sine (bin 8) is attenuated far more than a 468.75 Hz one (bin 40)
-     * at the same input level and drive. */
-    {
-        static float lobuf[4096];
-        SteadySine(Distortion::kBrokenSpeaker, 8, lobuf, 4096);
-        const float lo1 = BinMag(lobuf, 4096, 8);
-        SteadySine(Distortion::kBrokenSpeaker, 40, buf, 4096);
-        const float hi1 = BinMag(buf, 4096, 40);
-        assert(lo1 < .7f * hi1);
-    }
+        assert(fabsf(buf[i]) <= .8f); /* bounded by the clip */
 }
 
 static void test_bounded_output()
 {
     unsigned rng = 12345u;
-    for(int t = 0; t < Distortion::kNumTypes; t++)
+    static const int tones[] = {0, 25, 50, 75, 100};
+    for(int ti = 0; ti < 5; ti++)
     {
         Distortion d;
         d.Init(48000.f);
-        d.SetType(t);
+        d.SetTonePercent(tones[ti]);
         for(int s = 0; s <= 32; s++)
         {
             const float drv = static_cast<float>(s) * (1.f / 32.f);
@@ -324,47 +410,189 @@ static void test_bounded_output()
                 rng           = rng * 1664525u + 1013904223u;
                 const float x = (rng >> 8) * (1.f / 8388608.f) - 1.f;
                 const float y = d.Process(x, drv);
+                assert(isfinite(y));
                 assert(fabsf(y) <= 1.05f);
             }
         }
     }
-}
 
-static void test_no_discontinuity_on_retarget()
-{
+    /* continuous tone + drive sweeps: finite, bounded output through
+     * every transition */
     Distortion d;
     d.Init(48000.f);
-    d.PrepareBlock(.5f);
-    const int steps = 48000; /* 1 s */
-    float     prev_in = 0.f, prev_out = 0.f;
-    for(int i = 0; i < steps; i++)
+    for(int i = 0; i < 48000; i++)
     {
-        if(i > 0 && i % 240 == 0) /* retarget every 5 ms: all directions */
-            d.SetType((i / 240) % Distortion::kNumTypes);
-        const float in  = .3f * sinf(2.f * kPi * 1000.f * i / 48000.f);
-        const float out = d.Process(in, .5f);
-        if(i > 0)
+        if(i % 240 == 0) /* retarget every 5 ms: all directions */
         {
-            const float din = fabsf(in - prev_in);
-            assert(fabsf(out - prev_out) <= 8.f * din + 2e-3f);
+            d.SetTonePercent((i / 240) % 101);
+            d.PrepareBlock(static_cast<float>((i / 240) % 33)
+                           * (1.f / 32.f));
         }
-        prev_in  = in;
-        prev_out = out;
+        const float x = .3f * sinf(2.f * kPi * 1000.f * i / 48000.f);
+        const float y = d.Process(x, .5f);
+        assert(isfinite(y));
+        assert(fabsf(y) <= 1.05f);
     }
+}
+
+static void test_output_gain()
+{
+    const int kBlock = 48; /* engine block cadence for the followers */
+
+    /* initial gain is exactly unity */
+    Distortion d;
+    d.Init(48000.f);
+    assert(d.GetOutputGain() == 1.f);
+    assert(d.TrimGain() == 1.f);
+
+    /* drive 0 with signal: the output IS the input, so the measured
+     * levels match exactly and the trim stays exactly 1 (the clean
+     * sound is never trimmed) */
+    {
+        Distortion e;
+        e.Init(48000.f);
+        for(int b = 0; b < 200; b++)
+        {
+            e.PrepareBlock(0.f);
+            for(int i = 0; i < kBlock; i++)
+                e.Process(.3f * sinf(2.f * kPi * 200.f * (b * kBlock + i)
+                                     / 48000.f),
+                          0.f);
+        }
+        assert(e.TrimGain() == 1.f);
+        assert(e.GetOutputGain() == 1.f);
+    }
+
+    /* quiet input at full drive: deep trim that servo-matches the
+     * fuzzed level down to the dry level */
+    {
+        Distortion e;
+        e.Init(48000.f);
+        for(int b = 0; b < 600; b++) /* ~0.6 s: ramps + followers settle */
+        {
+            e.PrepareBlock(1.f);
+            for(int i = 0; i < kBlock; i++)
+                e.Process(.02f * sinf(2.f * kPi * 200.f * (b * kBlock + i)
+                                      / 48000.f),
+                          1.f);
+        }
+        assert(e.TrimGain() < .2f); /* deep trim on quiet material */
+        assert(e.TrimGain() >= Distortion::kLevelFloor);
+        /* servo accuracy: trim x fuzzed level == dry level */
+        assert(fabsf(e.TrimGain() * e.OutLevel() - e.InLevel())
+               < .05f * e.InLevel());
+    }
+
+    /* loud input at full drive: only the excess over dry is trimmed,
+     * never more (no power lost on loud material) */
+    {
+        Distortion e;
+        e.Init(48000.f);
+        for(int b = 0; b < 600; b++)
+        {
+            e.PrepareBlock(1.f);
+            for(int i = 0; i < kBlock; i++)
+                e.Process(.3f * sinf(2.f * kPi * 200.f * (b * kBlock + i)
+                                     / 48000.f),
+                          1.f);
+        }
+        assert(e.TrimGain() > .5f && e.TrimGain() < 1.f);
+        assert(fabsf(e.TrimGain() * e.OutLevel() - e.InLevel())
+               < .05f * e.InLevel());
+    }
+
+    /* same quiet input at increasing drive: the fuzz gets louder with
+     * drive, so the leveling trims deeper - exactly 1 at drive 0,
+     * deepest at full drive */
+    float trims[3];
+    for(int s = 0; s < 3; s++)
+    {
+        Distortion e;
+        e.Init(48000.f);
+        const float drv = s == 0 ? 0.f : (s == 1 ? .5f : 1.f);
+        for(int b = 0; b < 600; b++)
+        {
+            e.PrepareBlock(drv);
+            for(int i = 0; i < kBlock; i++)
+                e.Process(.02f * sinf(2.f * kPi * 200.f * (b * kBlock + i)
+                                      / 48000.f),
+                          1.f);
+        }
+        trims[s] = e.TrimGain();
+    }
+    assert(trims[0] == 1.f);
+    assert(trims[1] < 1.f);
+    assert(trims[2] < trims[1]);
+
+    /* extremely quiet input: the trim clamps at the -30 dB floor */
+    {
+        Distortion e;
+        e.Init(48000.f);
+        for(int b = 0; b < 600; b++)
+        {
+            e.PrepareBlock(1.f);
+            for(int i = 0; i < kBlock; i++)
+                e.Process(.001f * sinf(2.f * kPi * 200.f * (b * kBlock + i)
+                                       / 48000.f),
+                          1.f);
+        }
+        assert(e.TrimGain() == Distortion::kLevelFloor);
+    }
+
+    /* with the leveling engaged, returning the drive target to zero
+     * restores EXACT unity in finite ~10 ms time through the wet fade
+     * (nonzero smoothed drive), at both sample rates; the gain stays
+     * bounded between the trim and unity throughout */
+    for(int si = 0; si < 2; si++)
+    {
+        const float sr = si == 0 ? 48000.f : 32000.f;
+        Distortion  e;
+        e.Init(sr);
+        for(int b = 0; b < 100; b++) /* leveling engages */
+        {
+            e.PrepareBlock(1.f);
+            for(int i = 0; i < 48; i++)
+                e.Process(.2f * sinf(2.f * kPi * 200.f * (b * 48 + i) / sr),
+                          .5f);
+        }
+        assert(e.TrimGain() < 1.f);
+        const float trim = e.TrimGain();
+        const int   ramp = static_cast<int>(.010f * sr) + 2;
+        e.PrepareBlock(0.f);
+        int n = 0;
+        for(; n < ramp + 480; n++)
+        {
+            e.Process(.2f, .5f); /* nonzero smoothed drive */
+            const float og = e.GetOutputGain();
+            assert(og >= trim - 1e-4f && og <= 1.f);
+            if(og == 1.f)
+                break;
+        }
+        assert(n <= ramp); /* finite ~10 ms restore */
+        assert(e.GetOutputGain() == 1.f);
+    }
+
+    /* adding the leveling must not change the shaping: Process output
+     * is unchanged by the followers (covered exhaustively by the
+     * tone-100 reference regression above) */
 }
 
 int main()
 {
     test_init_and_clamp();
-    test_tape_saturation();
+    test_tone_mapping(48000.f);
+    test_tone_mapping(32000.f);
+    test_reference_equality(48000.f);
+    test_reference_equality(32000.f);
     test_zero_bypass_exact();
+    test_transition_to_zero_bypass();
     test_silence_settles();
-    test_weight_transitions(48000.f);
-    test_weight_transitions(32000.f); /* ramps scale with the sample rate */
-    test_amount_retention();
-    test_voicing_distinction();
+    test_tone_darkening();
+    test_tone_ramp(48000.f);
+    test_tone_ramp(32000.f); /* ramps scale with the sample rate */
+    test_fuzz_voicing();
     test_bounded_output();
-    test_no_discontinuity_on_retarget();
+    test_output_gain();
     printf("distortion_test: all checks passed\n");
     return 0;
 }

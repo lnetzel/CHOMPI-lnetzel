@@ -1,54 +1,42 @@
 /** @file Distortion.h
- *  @brief Selectable-character distortion stage for ORGAN (DSP-5).
+ *  @brief Fuzz distortion with tone control for ORGAN (DSP-5).
  *
- *  Three types share OrganEngine's existing 32-step drive amount and its
- *  per-sample smoothed drive value; step 0 is an exact dry bypass for
- *  every type:
+ *  A single fuzz character shares OrganEngine's existing 32-step drive
+ *  amount and its per-sample smoothed drive value; step 0 is an exact
+ *  dry bypass at every tone setting:
  *
- *  - Tape Saturation: exact port of the CHOMPI-TAPE page-2 saturation
- *    (firmware/chompi-tape/code/src/DSPEngine.h): log-mapped pre-gain
- *    amt = logf(1.7*d + 1) * 13 + 1 (1..13.9x) into the stmlib
- *    SoftClip rational waveshaper x*(27+x^2)/(27+9*x^2) (clamped to
- *    +/-1 beyond |x| > 3), with output compensation gain
- *    1 - SoftClip(.4*(amt-1)) * .7 (floor 0.3) so loudness stays
- *    anchored near the 0.33 reference level. Memoryless: no filters,
- *    no priming, no intentional DC (the curve is symmetric).
  *  - Fuzz: strong quadratic pre-gain g = 1 + 127 d^2 (1..128x) into a
  *    symmetric bounded soft-knee clipper (near-hard saturation), then a
- *    ~10 kHz one-pole low-pass to moderate harsh highs. Same 0.33
- *    normalization. Symmetric curve: no intentional DC, no bit reduction.
- *  - BrokenSpeaker: aggressive harsh breakup with narrow speaker-like
- *    bandpass filtering and resonant coloration. Nonlinear hard clipping
- *    produces rich harmonics; high-pass and low-pass filtering (derived
- *    from sample rate) create a narrow vocal-like ~200 Hz-4 kHz presence
- *    band and suppress extreme lows/highs. Resonant state priming from
- *    the live signal prevents audible tails when switching in. Fully wet
- *    while amount is > 0, exact bypass at settled zero. The stereo
- *    dropout/crackle/skew part of the BrokenSpeaker character lives in
- *    the post-rotary Dropout stage (Dropout.h, DSP-8), gated by
- *    GetBrokenWetAmount().
+ *    one-pole post low-pass. Same 0.33 normalization. Symmetric curve:
+ *    no intentional DC, no bit reduction.
+ *  - Tone: SHIFT + volume-encoder turn on page 2 sweeps the low-pass
+ *    cutoff logarithmically from 500 Hz (tone 0, dark) to the original
+ *    10 kHz (tone 100, boot default). Tone 100 preserves the historical
+ *    Fuzz exactly - the original coefficient expression, clipping
+ *    curve, gain mapping and normalization are unchanged, so there is
+ *    no additional darkening and the settled sound matches bit-for-bit.
+ *    Counterclockwise darkens; 0% is not a mute.
  *
- *  Tape/Fuzz/BrokenSpeaker run fully wet while the amount is up, but
- *  crossfade wet->dry over ~10 ms when the amount target reaches zero
- *  (and dry->wet when it rises again). The smoothed amount tails toward
- *  zero exponentially (~2 s) and filtering at unity gain is audible
- *  colour, so bypass must not wait for the smoothed value to settle: the
- *  finite target-driven transition is the "settle, then snap" path that
- *  makes settled zero an exact dry bypass with no residual filtered tail
- *  and no abrupt step.
+ *  Fuzz runs fully wet while the amount is up, but crossfades wet->dry
+ *  over ~10 ms when the amount target reaches zero (and dry->wet when
+ *  it rises again). The smoothed amount tails toward zero exponentially
+ *  (~2 s) and filtering at unity gain is audible colour, so bypass must
+ *  not wait for the smoothed value to settle: the finite target-driven
+ *  transition is the "settle, then snap" path that makes settled zero
+ *  an exact dry bypass with no residual filtered tail and no abrupt
+ *  step.
  *
- *  Type switching crossfades the per-type outputs with a three-element
- *  nonnegative weight vector that ramps linearly (~10 ms, sample-rate
- *  derived) toward the selected one-hot target while always summing to
- *  one; retargeting mid-fade continues from the current weights, never
- *  from a stale mode. GetType() returns the selected target immediately
- *  for the LED overlay. In stable mode only the selected branch is
- *  computed; the inactive branches' filter histories are primed from the
- *  live signal so activating Fuzz/BrokenSpeaker exposes no stale tails.
+ *  Tone changes compute the log-mapped target coefficient once per
+ *  setter call (no per-sample transcendental work, no heap); the live
+ *  coefficient ramps linearly toward the target over ~10 ms
+ *  (sample-rate derived), snapping to the exact endpoint, and
+ *  retargeting during rapid turns continues from the live coefficient.
+ *  The filter history is retained across tone changes, so darkening
+ *  never clicks or drops out.
  *
- *  Per-block gains and normalization are computed in PrepareBlock()
+ *  Per-block gain and normalization are computed in PrepareBlock()
  *  (called once per audio block from OrganEngine::Prepare, B4-style) -
- *  no expensive coefficient work inside the sample loop, no heap.
+ *  no expensive coefficient work inside the sample loop.
  *
  *  Header-only, no MCU/Daisy dependencies: native-testable.
  */
@@ -62,75 +50,71 @@ namespace chompi
 class Distortion
 {
   public:
-    /** Distortion characters in SHIFT+turn order: clockwise moves
-     *  Tape Saturation -> Fuzz -> BrokenSpeaker (clamped at the ends,
-     *  no wrap). */
-    enum Type : uint8_t
-    {
-        kTapeSat       = 0,
-        kFuzz          = 1,
-        kBrokenSpeaker = 2
-    };
-    static constexpr int kNumTypes = 3;
-
     /** Finite linear ramp lengths, sample-rate derived (~10 ms). */
-    static constexpr float kTypeRampSeconds = .010f;
     static constexpr float kWetRampSeconds  = .010f;
+    static constexpr float kToneRampSeconds = .010f;
 
-    /** Tape Saturation voicing (exact CHOMPI-TAPE port): log-mapped
-     *  pre-gain 1..13.9x and output compensation gain. */
-    static constexpr float kTapeLogCoef   = 1.7f;
-    static constexpr float kTapeGainScale = 13.f;
-    static constexpr float kTapeCompDrive = .4f;
-    static constexpr float kTapeCompDepth = .7f;
-
-    /** Fuzz voicing (initial values): pre-gain 1..128, ~10 kHz post
-     *  low-pass. */
+    /** Fuzz voicing (initial values): pre-gain 1..128; the post
+     *  low-pass cutoff is swept by the tone control from 500 Hz (dark)
+     *  to the original 10 kHz (tone 100, boot default). */
     static constexpr float kFuzzGainSpan = 127.f;
     static constexpr float kFuzzLpHz     = 10000.f;
+    static constexpr float kToneMinLpHz  = 500.f;
 
-    /** BrokenSpeaker voicing (initial values): aggressive pre-gain 1..200,
-     *  harsh hard clipping, ~200 Hz high-pass (keeps the low octave's
-     *  body), ~4 kHz low-pass (narrow presence peak around vocal
-     *  formants), and resonant state priming. */
-    static constexpr float kBrokenGainSpan = 199.f;
-    static constexpr float kBrokenHpHz     = 200.f;
-    static constexpr float kBrokenLpHz     = 4000.f;
-    static constexpr float kBrokenClipPeak = 0.7f; /* hard clip bound */
+    /** Input-referenced FUZZ output leveling (proper gain leveling).
+     *  The fuzz is a hard limiter: its settled output level at high
+     *  drive is ~0.33 RMS regardless of how loud the organ mix is, so
+     *  any fixed trim under- or over-compensates depending on the
+     *  registration and polyphony. Instead, the per-block RMS of the
+     *  dry distortion input and of the untrimmed fuzz output is
+     *  measured, smoothed ~50 ms, and the trim servo-matches the fuzzed
+     *  level down to the dry level: trim = in_rms / out_rms, clamped
+     *  to <= 1 (never boosts, never touches the clean sound) and
+     *  floored at -30 dB. At drive 0 the output IS the input, so the
+     *  ratio is exactly 1: exact unity, exact bypass. Applied by
+     *  OrganEngine after the rotary and before the plate reverb, so
+     *  the leveled level also feeds the reverb; Process() output and
+     *  all shaping/filtering are unchanged, and there is no user
+     *  control. */
+    static constexpr float kLevelFloor         = 0.0316f; /* -30 dB */
+    static constexpr float kLevelSmoothSeconds = .050f;
 
     void Init(float sample_rate)
     {
-        sample_rate_    = sample_rate;
-        type_ramp_inc_  = 1.f / (kTypeRampSeconds * sample_rate);
-        wet_ramp_inc_   = 1.f / (kWetRampSeconds * sample_rate);
-        fuzz_lp_c_      = 1.f - expf(-kTwoPi * kFuzzLpHz / sample_rate);
-        broken_hp_c_    = 1.f - expf(-kTwoPi * kBrokenHpHz / sample_rate);
-        broken_lp_c_    = 1.f - expf(-kTwoPi * kBrokenLpHz / sample_rate);
-
-        type_ = kTapeSat;
-        for(int t = 0; t < kNumTypes; t++)
-            weight_[t] = (t == kTapeSat) ? 1.f : 0.f;
-        wet_tape_ = wet_fuzz_ = wet_broken_ = 0.f;
-        drive_target_           = 0.f;
-        fuzz_lp_ = 0.f;
-        broken_hp_x1_ = broken_hp_y1_ = broken_lp_ = 0.f;
-        PrepareBlock(0.f); /* unity gains + normalized posts */
+        sample_rate_      = sample_rate;
+        wet_ramp_inc_     = 1.f / (kWetRampSeconds * sample_rate);
+        tone_ramp_inc_    = 1.f / (kToneRampSeconds * sample_rate);
+        tone_percent_     = 100; /* boot default: the original Fuzz */
+        fuzz_lp_c_        = ToneCoeff(100); /* original 10 kHz expression */
+        fuzz_lp_c_target_ = fuzz_lp_c_;
+        wet_fuzz_         = 0.f;
+        drive_target_     = 0.f;
+        fuzz_lp_          = 0.f;
+        level_in_acc_ = level_out_acc_ = 0.f;
+        level_count_                   = 0;
+        in_level_     = out_level_     = 0.f;
+        level_trim_                    = 1.f; /* no trim until measured */
+        PrepareBlock(0.f); /* unity gain + normalized post */
     }
 
-    /** Select the distortion type (0..kNumTypes-1, clamped at the ends,
-     *  no wrap). The crossfade retargets from the CURRENT weights; the
-     *  getter reflects the new target immediately (LED overlay). */
-    void SetType(int type)
+    /** Set the tone (0..100 percent, clamped, no wrap): 0 = 500 Hz
+     *  low-pass (dark), 100 = the original 10 kHz (no additional
+     *  darkening). Only the log-mapped target coefficient is computed
+     *  here (outside the sample loop); the live coefficient ramps
+     *  toward it over ~10 ms inside Process(). Never changes the drive
+     *  amount. */
+    void SetTonePercent(int percent)
     {
-        type  = type < 0 ? 0
-                         : (type > kNumTypes - 1 ? kNumTypes - 1 : type);
-        type_ = static_cast<Type>(type);
+        percent           = percent < 0 ? 0
+                                        : (percent > 100 ? 100 : percent);
+        tone_percent_     = percent;
+        fuzz_lp_c_target_ = ToneCoeff(percent);
     }
 
-    int GetType() const { return static_cast<int>(type_); }
+    int GetTonePercent() const { return tone_percent_; }
 
-    /** Per-block gains/normalization from the drive TARGET (B4: once per
-     *  block, not a tanhf + divide per sample). Call from
+    /** Per-block gain/normalization from the drive TARGET (B4: once per
+     *  block, not a divide per sample). Call from
      *  OrganEngine::Prepare() before each block's Process() run. */
     void PrepareBlock(float drive_target)
     {
@@ -138,94 +122,84 @@ class Distortion
                                            : (drive_target > 1.f ? 1.f
                                                                  : drive_target);
         const float d = drive_target_;
-        /* Tape Saturation: exact CHOMPI-TAPE mapping - log-spaced
-         * 1..13.9x pre-gain, then output compensation so the level
-         * stays anchored as the clip depth grows (floor 0.3). */
-        tape_amt_  = logf(kTapeLogCoef * d + 1.f) * kTapeGainScale + 1.f;
-        tape_comp_ = 1.f - SoftClip(kTapeCompDrive * (tape_amt_ - 1.f))
-                             * kTapeCompDepth;
         g_fuzz_    = 1.f + d * d * kFuzzGainSpan;
         post_fuzz_ = kRefLevel / FuzzClip(kRefLevel * g_fuzz_);
-        g_broken_  = 1.f + d * d * kBrokenGainSpan;
-        post_broken_ = kRefLevel / kBrokenClipPeak; /* normalized to peak */
+
+        /* Input-referenced output leveling, once per block (no per-
+         * sample transcendental work): convert the accumulated squares
+         * to block RMS, smooth ~50 ms with a per-block one-pole (about
+         * four cycles of the lowest organ fundamental - stable, no
+         * pumping), then servo the trim toward in_rms / out_rms,
+         * clamped to [kLevelFloor, 1]. Near silence the fuzz output is
+         * near-silent too - hold the current trim rather than dividing
+         * noise by noise. */
+        if(level_count_ > 0)
+        {
+            const float inv_n   = 1.f / static_cast<float>(level_count_);
+            const float in_rms  = sqrtf(level_in_acc_ * inv_n);
+            const float out_rms = sqrtf(level_out_acc_ * inv_n);
+            level_in_acc_ = level_out_acc_ = 0.f;
+            float a = static_cast<float>(level_count_)
+                      * (1.f / (kLevelSmoothSeconds * sample_rate_));
+            a            = a > 1.f ? 1.f : a;
+            level_count_ = 0;
+            in_level_  += a * (in_rms - in_level_);
+            out_level_ += a * (out_rms - out_level_);
+            if(out_level_ > 1e-5f)
+            {
+                float ratio = in_level_ / out_level_;
+                ratio       = ratio > 1.f ? 1.f : ratio;
+                level_trim_ = ratio < kLevelFloor ? kLevelFloor : ratio;
+            }
+        }
     }
 
     /** Process one mono sample. `drive` is OrganEngine's per-sample
-     *  smoothed amount; gates full wet while > 0, exact bypass at settled 0. */
+     *  smoothed amount; the wet gate follows the drive TARGET, so
+     *  settled zero is a bit-exact dry bypass even while the smoothed
+     *  amount is still tailing off. */
     float Process(float in, float drive)
     {
-        AdvanceWeights();
+        (void)drive; /* gating follows the target, not the smoothed value */
         const float wet_target = drive_target_ > 0.f ? 1.f : 0.f;
-        wet_tape_   = RampToward(wet_tape_, wet_target, wet_ramp_inc_);
-        wet_fuzz_   = RampToward(wet_fuzz_, wet_target, wet_ramp_inc_);
-        wet_broken_ = RampToward(wet_broken_, wet_target, wet_ramp_inc_);
-
-        float out = 0.f;
-        if(weight_[kTapeSat] > 0.f)
-        {
-            /* Tape Saturation is memoryless: no filter histories to
-             * prime, nothing to do while the branch is inactive. */
-            const float wet = SoftClip(tape_amt_ * in) * tape_comp_;
-            out += weight_[kTapeSat] * (in + wet_tape_ * (wet - in));
-        }
-        if(weight_[kFuzz] > 0.f)
-        {
-            const float wet = FuzzFiltered(FuzzShaped(in));
-            out += weight_[kFuzz] * (in + wet_fuzz_ * (wet - in));
-        }
-        else
-        {
-            FuzzPrime(in);
-        }
-        if(weight_[kBrokenSpeaker] > 0.f)
-        {
-            const float wet = BrokenFiltered(BrokenShaped(in));
-            out += weight_[kBrokenSpeaker] * (in + wet_broken_ * (wet - in));
-        }
-        else
-        {
-            BrokenPrime(in);
-        }
+        wet_fuzz_  = RampToward(wet_fuzz_, wet_target, wet_ramp_inc_);
+        fuzz_lp_c_ = RampToward(fuzz_lp_c_, fuzz_lp_c_target_,
+                                tone_ramp_inc_);
+        const float wet = FuzzFiltered(FuzzShaped(in));
+        const float out = in + wet_fuzz_ * (wet - in);
+        /* leveling followers: accumulate dry-in and UNTRIMMED fuzz-out
+         * energy for the per-block RMS pair in PrepareBlock() (the trim
+         * itself is applied by OrganEngine, so this cannot hunt) */
+        level_in_acc_  += in * in;
+        level_out_acc_ += out * out;
+        level_count_++;
         return out;
     }
 
-    /** Current crossfade weights (always summing to 1); diagnostics and
+    /** Live and target one-pole low-pass coefficients; diagnostics and
      *  native tests. */
-    float Weight(int t) const
+    float FuzzLpCoeff()       const { return fuzz_lp_c_; }
+    float FuzzLpCoeffTarget() const { return fuzz_lp_c_target_; }
+
+    /** FUZZ activity-scaled output trim for OrganEngine: exactly 1 at
+     *  settled bypass (wet == 0) and exactly 1 whenever the fuzz is as
+     *  quiet as the dry signal (level_trim_ == 1, incl. drive 0, where
+     *  output equals input exactly), ramping click-free with the ~10 ms
+     *  wet crossfade (the wet fade follows the drive target and reaches
+     *  exact bypass in finite time, even while the smoothed drive value
+     *  is still nonzero). Folded through the live wet amount - no extra
+     *  smoother state. */
+    float GetOutputGain() const
     {
-        return (t < 0 || t >= kNumTypes) ? 0.f : weight_[t];
+        return 1.f - (1.f - level_trim_) * wet_fuzz_;
     }
 
-    /** Live BrokenSpeaker activity (type weight x wet amount): the exact
-     *  per-sample drive of the post-rotary stereo Dropout stage (DSP-8),
-     *  so that stage is an exact bypass for other types and at zero
-     *  drive and ramps click-free through the ~10 ms crossfades. */
-    float GetBrokenWetAmount() const
-    {
-        return weight_[kBrokenSpeaker] * wet_broken_;
-    }
-
-    /** Per-block tape-saturation parameters; diagnostics and native
+    /** Per-block leveling trim (1 = no trim) and the smoothed dry/wet
+     *  RMS estimates it is computed from; diagnostics and native
      *  tests. */
-    float TapeAmt()  const { return tape_amt_; }
-    float TapeComp() const { return tape_comp_; }
-
-    /** Soft limiting/clipping ported from pichenettes/stmlib (MIT), via
-     *  DaisySP's Utility/dsp.h - the exact curve CHOMPI-TAPE's tape
-     *  saturation uses. NOTE: not the same curve as FuzzClip. */
-    static float SoftLimit(float x)
-    {
-        return x * (27.f + x * x) / (27.f + 9.f * x * x);
-    }
-
-    static float SoftClip(float x)
-    {
-        if(x < -3.f)
-            return -1.f;
-        if(x > 3.f)
-            return 1.f;
-        return SoftLimit(x);
-    }
+    float TrimGain()  const { return level_trim_; }
+    float InLevel()   const { return in_level_; }
+    float OutLevel()  const { return out_level_; }
 
   private:
     static constexpr float kTwoPi    = 6.283185307179586f;
@@ -248,29 +222,6 @@ class Distortion
         return cur;
     }
 
-    /** Linear ~10 ms ramp of the weight vector toward the selected
-     *  one-hot: move one increment of mass to the selected weight per
-     *  sample and scale the others down proportionally, so the vector
-     *  always sums to one and reaches the exact one-hot in finite time.
-     *  Retargeting mid-ramp just changes type_: the ramp continues from
-     *  the current weights. */
-    void AdvanceWeights()
-    {
-        const int   sel  = static_cast<int>(type_);
-        float      &ws   = weight_[sel];
-        const float need = 1.f - ws;
-        if(need <= 0.f)
-            return; /* already one-hot */
-        const float mass  = need < type_ramp_inc_ ? need : type_ramp_inc_;
-        const float scale = (1.f - (ws + mass)) / need; /* need > 0 */
-        ws += mass;
-        for(int t = 0; t < kNumTypes; t++)
-        {
-            if(t != sel)
-                weight_[t] *= scale;
-        }
-    }
-
     /** Symmetric bounded soft-knee clipper: y = t - t^3/3 inside the
      *  knee, clamped to +/-2/3 outside (C1-continuous at the knee,
      *  |y| <= 2/3). Near-hard saturation at fuzz gains. */
@@ -288,63 +239,45 @@ class Distortion
         return FuzzClip(g_fuzz_ * x) * post_fuzz_;
     }
 
-    /** Fuzz filter: ~10 kHz one-pole low-pass (no DC blocker needed -
-     *  the clipper is symmetric and produces no intentional DC). */
+    /** Fuzz filter: one-pole low-pass with the tone-controlled cutoff
+     *  (no DC blocker needed - the clipper is symmetric and produces no
+     *  intentional DC). */
     float FuzzFiltered(float s)
     {
         fuzz_lp_ += fuzz_lp_c_ * (s - fuzz_lp_);
         return fuzz_lp_;
     }
 
-    void FuzzPrime(float in) { FuzzFiltered(in); }
-
-    /** BrokenSpeaker: aggressive hard clipping for rich harmonics. */
-    static float BrokenClip(float t)
+    /** Log-mapped tone -> one-pole coefficient: cutoff =
+     *  500 * (10000/500)^(percent/100) Hz, so 0% is 500 Hz and 100% is
+     *  the original 10 kHz. The 100% endpoint keeps the original
+     *  coefficient expression verbatim so the settled Fuzz matches the
+     *  historical sound bit-for-bit. Called only from Init() and
+     *  SetTonePercent() - never per sample. */
+    float ToneCoeff(int percent) const
     {
-        /* Hard clip at ±kBrokenClipPeak for harsh breakup. */
-        if(t > kBrokenClipPeak)
-            return kBrokenClipPeak;
-        if(t < -kBrokenClipPeak)
-            return -kBrokenClipPeak;
-        return t;
+        if(percent >= 100)
+            return 1.f - expf(-kTwoPi * kFuzzLpHz / sample_rate_);
+        const float hz = kToneMinLpHz
+                         * powf(kFuzzLpHz / kToneMinLpHz,
+                                static_cast<float>(percent) * .01f);
+        return 1.f - expf(-kTwoPi * hz / sample_rate_);
     }
-
-    float BrokenShaped(float x) const
-    {
-        return BrokenClip(g_broken_ * x) * post_broken_;
-    }
-
-    /** BrokenSpeaker filters: ~200 Hz high-pass (keeps the low end's
-     *  body), then ~4 kHz low-pass (creates narrow vocal-like
-     *  presence). */
-    float BrokenFiltered(float s)
-    {
-        /* High-pass filter (DC blocker, ~200 Hz cutoff). */
-        const float y = s - broken_hp_x1_ + (1.f - broken_hp_c_) * broken_hp_y1_;
-        broken_hp_x1_ = s;
-        broken_hp_y1_ = y;
-        
-        /* Low-pass filter (~4 kHz, creates presence peak). */
-        broken_lp_ += broken_lp_c_ * (y - broken_lp_);
-        return broken_lp_;
-    }
-
-    void BrokenPrime(float in) { BrokenFiltered(in); }
 
     float        sample_rate_;
-    float        type_ramp_inc_; /* mass per sample for a 0..1 transfer */
     float        wet_ramp_inc_;  /* wet<->dry crossfade per sample */
-    float        fuzz_lp_c_;
-    float        broken_hp_c_, broken_lp_c_; /* BrokenSpeaker filter coeffs */
-    volatile Type type_; /* ISR-written, main-loop read (LED overlay) */
-    float        weight_[kNumTypes];
-    float        wet_tape_, wet_fuzz_, wet_broken_; /* crossfade states */
+    float        tone_ramp_inc_; /* coefficient ramp per sample */
+    volatile int tone_percent_;  /* ISR-written, main-loop read (LEDs) */
+    float        fuzz_lp_c_, fuzz_lp_c_target_;
+    float        wet_fuzz_;      /* wet<->dry crossfade state */
     float        drive_target_;
-    float        tape_amt_, tape_comp_; /* per-block tape params (B4) */
     float        g_fuzz_, post_fuzz_;
-    float        g_broken_, post_broken_;
-    float        fuzz_lp_; /* Fuzz filter state */
-    float        broken_hp_x1_, broken_hp_y1_, broken_lp_; /* Broken filter state */
+    float        fuzz_lp_; /* Fuzz filter state (retained across tone) */
+    /* input-referenced leveling state */
+    float        level_in_acc_, level_out_acc_; /* per-block x^2 sums */
+    int          level_count_;
+    float        in_level_, out_level_; /* ~50 ms smoothed RMS pair */
+    float        level_trim_;         /* servo-matched trim, <= 1 */
 };
 
 } // namespace chompi

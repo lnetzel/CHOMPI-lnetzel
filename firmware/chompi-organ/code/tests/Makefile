@@ -4,13 +4,12 @@
 CXX      ?= g++
 CXXFLAGS ?= -std=c++14 -O2 -Wall -Wextra -I../src
 
-test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test envelope_map_test dropout_test
+test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test envelope_map_test
 	./tonewheel_character_test
 	./plate_reverb_test
 	./distortion_test
 	./vibrato_test
 	./envelope_map_test
-	./dropout_test
 
 tonewheel_character_test: tonewheel_character_test.cpp ../src/TonewheelCharacter.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
@@ -27,8 +26,6 @@ vibrato_test: vibrato_test.cpp ../src/Vibrato.h
 envelope_map_test: envelope_map_test.cpp ../src/EnvelopeMap.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
-dropout_test: dropout_test.cpp ../src/Dropout.h
-	$(CXX) $(CXXFLAGS) -o $@ $<
 # The vendored fx_engine.h triggers -Wunused-parameter from its DelayLine
 # template parameters; keep the test output readable without editing it.
 plate_reverb_test: CXXFLAGS += -Wno-unused-parameter
@@ -38,7 +35,6 @@ clean:
 		plate_reverb_test plate_reverb_test.exe \
 		distortion_test distortion_test.exe \
 		vibrato_test vibrato_test.exe \
-		envelope_map_test envelope_map_test.exe \
-		dropout_test dropout_test.exe
+		envelope_map_test envelope_map_test.exe
 
 .PHONY: test clean
