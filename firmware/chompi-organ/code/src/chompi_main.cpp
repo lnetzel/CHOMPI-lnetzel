@@ -253,7 +253,8 @@ static volatile int      bar_page_  = 0;      /* pipes: 0 = level,
                                                * 4/5 = mod-mode volume/
                                                * Character bars; volume bar:
                                                * 0 = master, 1 = drive,
-                                               * 2 = reverb mix, 3 = decay */
+                                               * 2 = reverb mix, 3 = decay,
+                                               * 4 = drive tone */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
 static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: wheel (rotary/vibrato) */
@@ -298,13 +299,10 @@ static volatile int vol_page_ = kVolPageMaster; /* ENC_6 page */
 /** bar_page_ sub-state (not a vol_page_ value): on the reverb page a
  *  SHIFT+turn edits the decay, and the bar shows it instead of the mix. */
 static const int kVolBarDecay = 3;
-
-/** Distortion tone overlay (FR-4b): active while SHIFT is held on the
- *  volume-encoder drive page; the tone shows as a red white-key bar.
- *  Written by PollControls (audio ISR), read by UpdateLeds (main loop) -
- *  same volatile cross-context convention as the bar state above. */
-static volatile bool tone_overlay_active_ = false;
-static bool          prev_tone_overlay_   = false; /* ISR-only edge tracking */
+/** bar_page_ sub-state (not a vol_page_ value): on the drive page a
+ *  SHIFT+turn edits the distortion tone, and the bar shows the tone
+ *  instead of the amount (same 500 ms timeout as the decay bar). */
+static const int kVolBarTone = 4;
 
 /* ---- key/encoder edge tracking (audio ISR only) ---- */
 static volatile bool prev_key_[40];
@@ -806,12 +804,16 @@ static void PollControls()
                 {
                     /* SHIFT+turn on page 2: distortion tone, 1
                      * percentage point per click, clamped 0..100
-                     * without wrapping (FR-4b): 0% = 500 Hz dark,
-                     * 100% = the original 10 kHz. No value bar: the
-                     * tone overlay bar shows while SHIFT is held. The
-                     * amount is not touched. */
+                     * without wrapping (FR-4b): 0% = 500 Hz per stage
+                     * (dark), 100% = 10 kHz per stage (two cascaded
+                     * one-pole stages, ~12 dB/octave). The tone shows
+                     * as a red value bar for 500 ms like page 3's
+                     * decay bar; the amount is not touched. */
                     engine.SetDriveTonePercent(engine.GetDriveTonePercent()
                                                + delta);
+                    bar_pipe_  = kVolBar;
+                    bar_page_  = kVolBarTone;
+                    bar_until_ = System::GetNow() + 500;
                 }
                 else if(vol_page_ == kVolPageReverb)
                 {
@@ -1010,21 +1012,6 @@ static void PollControls()
             }
         }
     }
-
-    /* Distortion tone overlay state (FR-4b), published after SHIFT
-     * sampling and any page toggles above. On overlay exit, re-arm
-     * the drive amount bar for 500 ms - but only when still on the drive
-     * page: a page change already showed the new page's bar, and showing
-     * a stale drive bar on page 1 would be wrong. */
-    tone_overlay_active_ = shift_held_ && vol_page_ == kVolPageDrive;
-    if(prev_tone_overlay_ && !tone_overlay_active_
-       && vol_page_ == kVolPageDrive)
-    {
-        bar_pipe_  = kVolBar;
-        bar_page_  = kVolPageDrive;
-        bar_until_ = System::GetNow() + 500;
-    }
-    prev_tone_overlay_ = tone_overlay_active_;
 }
 
 void AudioCallback(AudioHandle::InputBuffer in,
@@ -1063,17 +1050,24 @@ static void UpdateLeds()
     if(preset_mode_ != kPresetNone)
     {
         /* A preset selection mode (or animation) takes over the white
-         * keys: filled slots blink at 0.4x purple in the selection
-         * modes; the selected slot is blue (save / copy destination) or
-         * red (erase target); the copy source is green; selectable
-         * empty slots are dim grey in SAVE_SEL/COPY_DEST, off
-         * otherwise. During the SAVING/COPYING/ERASING animations the
-         * slots show their new state steadily. */
+         * keys; first match wins: during the SAVING/COPYING/ERASING
+         * animations the slots show their new state steadily; in
+         * copy-destination select the copy source is green; the
+         * selected slot is blue (save / copy destination) or red
+         * (erase target); the current slot (last loaded/saved) is
+         * white when filled. The rest depends on the mode: in SAVE
+         * select / copy-destination select filled slots are solid
+         * purple, the current slot solid white and empty slots blink
+         * dim grey; in ERASE select / copy-source select filled slots
+         * blink dim purple, the current slot blinks white and empty
+         * slots stay off. */
         for(int i = 0; i < 25; i++)
             SetSmtLedFloat(i, 0.f, 0.f, 0.f);
         const bool anim = preset_mode_ == kPresetSaving
                           || preset_mode_ == kPresetCopying
                           || preset_mode_ == kPresetErasing;
+        const bool save_like = preset_mode_ == kPresetSaveSel
+                               || preset_mode_ == kPresetCopyDest;
         for(int w = 0; w < kNumWhiteKeys; w++)
         {
             float      r = 0.f, g = 0.f, b = 0.f;
@@ -1097,41 +1091,32 @@ static void UpdateLeds()
                 else
                     b = 1.f; /* save / copy destination: blue */
             }
+            else if(filled && w == preset_current_)
+            {
+                if(save_like || pre_blink)
+                    r = g = b = 1.f; /* current: solid white (save /
+                                      * copy dest), blinking white
+                                      * (erase / copy source) */
+            }
             else if(filled)
             {
-                if(pre_blink)
+                if(save_like)
+                {
+                    r = .55f;
+                    b = 1.f; /* solid purple */
+                }
+                else if(pre_blink)
                 {
                     r = .22f;
                     b = .4f; /* 0.4x purple, blinking */
                 }
             }
-            else if(preset_mode_ == kPresetSaveSel
-                    || preset_mode_ == kPresetCopyDest)
+            else if(save_like && pre_blink)
             {
-                r = g = b = .4f; /* selectable empty slots: dim grey */
+                r = g = b = .4f; /* selectable empty slots: blinking grey */
             }
             SetSmtLedFloat(white_key_led[w], r, g, b);
         }
-    }
-    else if(tone_overlay_active_)
-    {
-        /* Distortion tone overlay (FR-4b): while SHIFT is held on the
-         * drive page the tone shows immediately and continuously as a
-         * red bar across the 15 white keys (rounded percentage mapping:
-         * none lit at 0%, eight at 50%, all fifteen at 100%); every
-         * other keyboard LED is off, including the octave hints (the
-         * erase/copy/save operation LEDs below still render). Only an
-         * active preset mode ranks higher, so the tone bar keeps its
-         * feedback while tuning; on the other volume pages the SHIFT
-         * slot view shows instead. The dedicated SHIFT/latch and knob
-         * LEDs below are unaffected; notes and octave keys keep working
-         * underneath the overlay. */
-        const int lit = (engine.GetDriveTonePercent() * kNumWhiteKeys + 50)
-                        / 100;
-        for(int i = 0; i < 25; i++)
-            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
-        for(int w = 0; w < lit && w < kNumWhiteKeys; w++)
-            SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
     }
     else if(bar_pipe_ >= 0 && now < bar_until_)
     {
@@ -1146,7 +1131,16 @@ static void UpdateLeds()
         BarKind kind = kBarVolume;
         if(p == kVolBar)
         {
-            if(bar_page_ == kVolBarDecay)
+            if(bar_page_ == kVolBarTone)
+            {
+                /* volume-knob page 2, SHIFT+turn: distortion tone
+                 * percent across the 15 white keys, same red as the
+                 * overdrive bar */
+                lit  = (engine.GetDriveTonePercent() * kNumWhiteKeys + 50)
+                       / 100;
+                kind = kBarDrive;
+            }
+            else if(bar_page_ == kVolBarDecay)
             {
                 /* volume-knob page 3, SHIFT+turn: reverb decay step
                  * (log-spaced 0.5..20 s) */

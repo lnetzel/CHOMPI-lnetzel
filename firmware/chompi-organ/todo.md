@@ -4,8 +4,8 @@
 * 
 
 ## Presets
-* Fix LED bugs on pg 2 of volume control
-* Fix blinking bugs
+* DONE - Fix LED bugs on pg 2 of volume control
+* DONE - Fix blinking bugs
 
 ## Tweaks
 * 

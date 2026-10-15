@@ -23,9 +23,12 @@
  *    character is level-independent; 0% is an exact bypass (DSP-5).
  *    SHIFT + volume-encoder turn on page 2 is a tone control sweeping
  *    the fuzz's post low-pass logarithmically from 500 Hz (0%, dark)
- *    to the original 10 kHz (100%, boot default = the historical Fuzz
- *    sound, no additional darkening), smoothed click-free; the tone is
- *    saved in the SD-card presets (FR-4b). An input-referenced output leveling (per-
+ *    to 10 kHz (100%, boot default), smoothed click-free. The filter
+ *    is two identical cascaded one-pole stages (approximately
+ *    12 dB/octave stopband roll-off); the mapped frequency is the
+ *    PER-STAGE cutoff, so the combined -3 dB point sits lower, and
+ *    tone 100 is intentionally darker than the historical single-pole
+ *    Fuzz. The tone is saved in the SD-card presets (FR-4b). An input-referenced output leveling (per-
  *  block RMS measurement, ~50 ms smoothing, trim = dry level / fuzzed
  *  level, clamped <= 1 and floored at -30 dB), folded through the
  *    live wet amount, is applied after the rotary and before the plate
@@ -327,10 +330,11 @@ class OrganEngine
     int GetDriveStep() const { return drive_step_; }
 
     /** Set the distortion tone (0..100 percent, clamped, no wrap):
- *      0 = 500 Hz low-pass (dark), 100 = the original 10 kHz (boot
- *      default, no additional darkening). Never changes the amount,
- *      tuning or note state; the filter coefficient ramps ~10 ms,
- *      click-free. Saved in the SD-card presets. */
+ *      0 = 500 Hz low-pass per stage (dark), 100 = 10 kHz per stage
+ *      (boot default; the two-stage cascade makes this intentionally
+ *      darker than the historical single-pole Fuzz). Never changes the
+ *      amount, tuning or note state; the filter coefficient ramps
+ *      ~10 ms, click-free. Saved in the SD-card presets. */
     void SetDriveTonePercent(int percent)
     {
         distortion_.SetTonePercent(percent);

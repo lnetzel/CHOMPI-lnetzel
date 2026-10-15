@@ -363,7 +363,9 @@ static void test_capture_apply()
     assert(chompi::Parse(buf, n, q));
     e.SetDefaults();
     chompi::ApplyToEngine(q, e);
-    assert(e.GetDriveTonePercent() == 70 && e.GetPipeStep(2) == 32);
+    /* pipe 2 was never changed: it round-trips at its 50% default */
+    assert(e.GetDriveTonePercent() == 70
+           && e.GetPipeStep(2) == OrganPreset::kDefaultLevel);
     assert(e.GetReverbDecayStep() == 55);
 }
 

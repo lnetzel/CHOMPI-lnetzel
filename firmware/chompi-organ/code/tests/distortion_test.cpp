@@ -4,20 +4,26 @@
  *  Pure host C++: no MCU/Daisy dependencies. Covers:
  *   - init defaults (tone boots at 100%) and tone setter clamping
  *     (0..100, no wrap); changing the tone never disturbs the drive path
- *   - tone mapping: cutoff endpoints (500 Hz at 0%, the original 10 kHz
+ *   - tone mapping: cutoff endpoints (500 Hz at 0%, the 10 kHz
  *     coefficient expression at 100%) and strict monotonicity
- *   - reference regression: at tone 100 the fuzz matches the previous
- *     settled Fuzz DSP sample-for-sample across all nonzero drive steps
- *     and representative signals at 48 kHz and 32 kHz (the removed
- *     type-selection fade is excluded by settling first)
+ *   - cascade reference regression: an independent reimplementation of
+ *     the two-stage low-pass DSP matches the fuzz sample-for-sample at
+ *     tone 100 across all nonzero drive steps and representative
+ *     signals at 48 kHz and 32 kHz (settled first)
+ *   - measured frequency response against the analytical digital
+ *     cascade magnitude (H1 = c/sqrt(1+(1-c)^2-2(1-c)cos w),
+ *     Hcascade = H1^2): the 2 kHz -> 4 kHz roll-off at tone 0 sits in
+ *     a justified ~10..13 dB interval and within 0.5 dB of the
+ *     analytical response at 48 kHz and 32 kHz
  *   - exact dry bypass at settled zero amount for every tone setting,
  *     including transitions to zero with residual filter state and a
  *     nonzero smoothed drive value
  *   - silent input -> silence after filter settling at several tones
  *   - darkening: a steady 6 kHz sine's fundamental is attenuated by at
- *     least 12 dB at tone 0 relative to tone 100, monotonic at
+ *     least 30 dB at tone 0 relative to tone 100, monotonic at
  *     intermediate settings, and low-frequency output stays nonzero at
  *     tone 0 (0% is not a mute)
+ *   - deterministic reinitialization clears both filter histories
  *   - tone coefficient ramp: finite ~10 ms settlement with exact
  *     endpoint snap, bounded per-sample movement, and mid-ramp
  *     retargeting continuing from the live coefficient (48 kHz/32 kHz)
@@ -54,13 +60,16 @@ static float BinMag(const float *buf, int nsamp, int h)
     return static_cast<float>(2.0 * sqrt(re * re + im * im) / nsamp);
 }
 
-/** Independent reference of the previous settled Fuzz DSP (before the
- *  tone control), replicating its exact arithmetic: quadratic pre-gain
+/** Independent reference of the current settled two-stage Fuzz DSP,
+ *  replicating its exact arithmetic: quadratic pre-gain
  *  g = 1 + 127 d^2, soft-knee clipper t - t^3/3 bounded to +/-2/3,
- *  0.33/FuzzClip(0.33 g) post normalization, fixed ~10 kHz one-pole
- *  low-pass, ~10 ms target-driven wet ramp with exact-endpoint snap.
- *  Used to prove the tone-100 fuzz is unchanged bit-for-bit. */
-class OriginalFuzz
+ *  0.33/FuzzClip(0.33 g) post normalization, two identical cascaded
+ *  one-pole low-pass stages sharing one coefficient, ~10 ms
+ *  target-driven wet ramp with exact-endpoint snap. Guards the cascade
+ *  arithmetic against accidental changes; intentionally says nothing
+ *  about the pre-cascade single-pole sound (tone 100 is now darker by
+ *  design). */
+class CascadeFuzzReference
 {
   public:
     void Init(float sample_rate)
@@ -71,6 +80,7 @@ class OriginalFuzz
         wet_fuzz_     = 0.f;
         drive_target_ = 0.f;
         fuzz_lp_      = 0.f;
+        fuzz_lp2_     = 0.f;
         PrepareBlock(0.f);
     }
 
@@ -124,14 +134,17 @@ class OriginalFuzz
         return FuzzClip(g_fuzz_ * x) * post_fuzz_;
     }
 
+    /* two identical cascaded one-pole stages, shared coefficient */
     float FuzzFiltered(float s)
     {
         fuzz_lp_ += fuzz_lp_c_ * (s - fuzz_lp_);
-        return fuzz_lp_;
+        fuzz_lp2_ += fuzz_lp_c_ * (fuzz_lp_ - fuzz_lp2_);
+        return fuzz_lp2_;
     }
 
     float sample_rate_, wet_ramp_inc_, fuzz_lp_c_;
-    float wet_fuzz_, drive_target_, g_fuzz_, post_fuzz_, fuzz_lp_;
+    float wet_fuzz_, drive_target_, g_fuzz_, post_fuzz_;
+    float fuzz_lp_, fuzz_lp2_;
 };
 
 static void test_init_and_clamp()
@@ -176,10 +189,10 @@ static void test_tone_mapping(float sr)
 
 static void test_reference_equality(float sr)
 {
-    /* Tone 100 must reproduce the previous settled Fuzz sample-for-
-     * sample across all nonzero drive steps and representative signals;
-     * the removed type-selection fade is excluded by settling before
-     * comparing. */
+    /* Tone 100 must reproduce the independent two-stage cascade
+     * reference sample-for-sample across all nonzero drive steps and
+     * representative signals; the removed type-selection fade is
+     * excluded by settling before comparing. */
     for(int step = 1; step <= 32; step++)
     {
         const float drv = static_cast<float>(step) * (1.f / 32.f);
@@ -188,7 +201,7 @@ static void test_reference_equality(float sr)
             Distortion d;
             d.Init(sr);
             d.SetTonePercent(100);
-            OriginalFuzz r;
+            CascadeFuzzReference r;
             r.Init(sr);
             d.PrepareBlock(drv);
             r.PrepareBlock(drv);
@@ -300,8 +313,9 @@ static float SteadyFundMag(int tone, int bin, int nsamp)
 static void test_tone_darkening()
 {
     /* 6 kHz sine (bin 512 of 4096 at 48 kHz): at tone 0 (500 Hz
-     * one-pole) the fundamental must be attenuated by >= 12 dB relative
-     * to tone 100, with monotonic attenuation at intermediate tones */
+     * per stage, two cascaded poles) the fundamental must be attenuated
+     * by >= 30 dB relative to tone 100, with monotonic attenuation at
+     * intermediate tones */
     const float m100 = SteadyFundMag(100, 512, 4096);
     const float m75  = SteadyFundMag(75, 512, 4096);
     const float m50  = SteadyFundMag(50, 512, 4096);
@@ -309,7 +323,7 @@ static void test_tone_darkening()
     const float m0   = SteadyFundMag(0, 512, 4096);
     assert(m100 > m75 && m75 > m50 && m50 > m25 && m25 > m0);
     const float atten_db = 20.f * log10f(m100 / m0);
-    assert(atten_db >= 12.f);
+    assert(atten_db >= 30.f);
 
     /* tone 0 is not a mute: a 93.75 Hz sine (bin 8) still passes */
     const float lo = SteadyFundMag(0, 8, 4096);
@@ -573,8 +587,121 @@ static void test_output_gain()
     }
 
     /* adding the leveling must not change the shaping: Process output
-     * is unchanged by the followers (covered exhaustively by the
-     * tone-100 reference regression above) */
+     * is unchanged by the followers (the cascade reference regression
+     * above covers the Process arithmetic exhaustively) */
+}
+
+/** Analytical digital cascade magnitude in dB at frequency f for two
+ *  identical one-pole low-pass stages sharing coefficient c:
+ *  H1 = c / sqrt(1 + (1-c)^2 - 2 (1-c) cos w); Hcascade = H1^2. */
+static float CascadeMagDb(float c, float f, float sr)
+{
+    const float w  = 2.f * kPi * f / sr;
+    const float om = 1.f - c;
+    const float h1 = c / sqrtf(1.f + om * om - 2.f * om * cosf(w));
+    return 20.f * log10f(h1 * h1);
+}
+
+/** Fundamental magnitude of the SHAPED (clipped, unfiltered) fuzz
+ *  signal alone; the memoryless clipper arithmetic is replicated here
+ *  so the filter measurement can normalize the clipper's fundamental
+ *  gain out instead of mistaking clipping for filter attenuation. */
+static float ShapedFundMag(float drv, int bin, int nsamp)
+{
+    const float g    = 1.f + drv * drv * 127.f;
+    const float t    = .33f * g;
+    const float post = .33f / (t > 1.f ? .666666666666667f
+                                       : t - t * t * t * .333333333333333f);
+    static float buf[4608];
+    for(int i = 0; i < nsamp; i++)
+    {
+        const float x = .3f * sinf(2.f * kPi * bin * i / nsamp);
+        const float u = g * x;
+        buf[i] = (u > 1.f ? .666666666666667f
+                          : (u < -1.f ? -.666666666666667f
+                                      : u - u * u * u * .333333333333333f))
+                 * post;
+    }
+    return BinMag(buf, nsamp, bin);
+}
+
+/** Settled filter magnitude in dB at one coherent bin: the measured
+ *  output fundamental normalized by the shaped input fundamental. At
+ *  settled full drive the wet crossfade is exactly 1, so the output is
+ *  exactly the filtered shaped signal. */
+static float MeasuredMagDb(int tone, int bin, int nsamp, float sr)
+{
+    static float buf[4608];
+    Distortion d;
+    d.Init(sr);
+    d.SetTonePercent(tone);
+    d.PrepareBlock(1.f);
+    const int settle = static_cast<int>(.2f * sr); /* ramps + filter settle */
+    for(int i = 0; i < settle; i++)
+        d.Process(.3f * sinf(2.f * kPi * bin * i / nsamp), 1.f);
+    for(int i = 0; i < nsamp; i++)
+        buf[i] = d.Process(.3f * sinf(2.f * kPi * bin * i / nsamp), 1.f);
+    return 20.f * log10f(BinMag(buf, nsamp, bin)
+                         / ShapedFundMag(1.f, bin, nsamp));
+}
+
+static void test_filter_response(float sr)
+{
+    /* Tone 0 (500 Hz per stage): measure the 2 kHz -> 4 kHz roll-off
+     * against the analytical digital cascade. These frequencies probe
+     * the stopband away from both the knee and Nyquist, where the
+     * cascade's roll-off is close to - but not exactly - the nominal
+     * 12 dB/octave; nsamp 4608 makes 2 kHz and 4 kHz exact coherent
+     * bins at both 48 kHz (192/384) and 32 kHz (288/576). */
+    const int   nsamp = 4608;
+    const int   b2k   = static_cast<int>(2000.f * nsamp / sr + .5f);
+    const int   b4k   = static_cast<int>(4000.f * nsamp / sr + .5f);
+    assert(fabsf(2000.f * nsamp / sr - b2k) < 1e-3f);
+    assert(fabsf(4000.f * nsamp / sr - b4k) < 1e-3f);
+    const float c0 = 1.f - expf(-2.f * kPi * 500.f / sr);
+    const float m2 = MeasuredMagDb(0, b2k, nsamp, sr);
+    const float m4 = MeasuredMagDb(0, b4k, nsamp, sr);
+    /* each point matches the analytical cascade within 0.5 dB */
+    assert(fabsf(m2 - CascadeMagDb(c0, 2000.f, sr)) <= .5f);
+    assert(fabsf(m4 - CascadeMagDb(c0, 4000.f, sr)) <= .5f);
+    /* and the measured roll-off is the expected ~11.5 dB (justified
+     * interval: clearly stronger than the old single pole's ~6 dB,
+     * clearly below an idealized exact-12 Butterworth promise) */
+    const float rolloff_db = m2 - m4;
+    assert(rolloff_db >= 10.f && rolloff_db <= 13.f);
+}
+
+static void test_reinit_clears_state()
+{
+    /* deterministic reinitialization: after a warmup that charges BOTH
+     * filter histories (and the leveling followers), Init() restores
+     * the exact boot state - a re-initialized instance matches a fresh
+     * one bit-for-bit */
+    Distortion d;
+    d.Init(48000.f);
+    d.SetTonePercent(20);
+    for(int b = 0; b < 50; b++)
+    {
+        d.PrepareBlock(1.f);
+        for(int i = 0; i < 48; i++)
+            d.Process(.4f * sinf(2.f * kPi * 300.f * (b * 48 + i) / 48000.f),
+                      1.f);
+    }
+    d.Init(48000.f);
+    Distortion fresh;
+    fresh.Init(48000.f);
+    for(int b = 0; b < 50; b++)
+    {
+        const float drv = static_cast<float>(b % 33) * (1.f / 32.f);
+        d.PrepareBlock(drv);
+        fresh.PrepareBlock(drv);
+        for(int i = 0; i < 48; i++)
+        {
+            const float in = .4f * sinf(2.f * kPi * 300.f * (b * 48 + i)
+                                        / 48000.f);
+            assert(d.Process(in, drv) == fresh.Process(in, drv));
+        }
+    }
 }
 
 int main()
@@ -588,6 +715,9 @@ int main()
     test_transition_to_zero_bypass();
     test_silence_settles();
     test_tone_darkening();
+    test_filter_response(48000.f);
+    test_filter_response(32000.f);
+    test_reinit_clears_state();
     test_tone_ramp(48000.f);
     test_tone_ramp(32000.f); /* ramps scale with the sample rate */
     test_fuzz_voicing();

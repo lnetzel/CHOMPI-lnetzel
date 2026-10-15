@@ -46,7 +46,10 @@ static void test_independence()
     tc.SetStep(2, 33);
     tc.SetStep(3, 64);
     for(int p = 0; p < 4; p++)
-        assert(tc.GetStep(p) == 10 * (p + 1) || (p == 2 && tc.GetStep(2) == 33));
+    {
+        const int expect = p == 0 ? 10 : (p == 1 ? 20 : (p == 2 ? 33 : 64));
+        assert(tc.GetStep(p) == expect);
+    }
 
     /* advancing/settling pipe 0 must not move the others' amounts */
     tc.SetStep(0, 64);

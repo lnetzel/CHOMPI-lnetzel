@@ -138,15 +138,19 @@ bar for 500 ms.
 
 Page 2's distortion is a fuzz with a tone control. SHIFT + turn on
 page 2 changes the tone by 1 percentage point per click, clamped to
-0-100% (no wrap); the amount is not changed. The tone sweeps the fuzz's
-post low-pass logarithmically from 500 Hz (0%, dark) to the original
-10 kHz (100%, boot default - no additional darkening, the historical
-fuzz sound); counterclockwise darkens, and 0% is not a mute. Tone
-changes are smoothed click-free (~10 ms). While SHIFT is held on page 2
-the tone shows immediately as a red bar across the 15 white keys (none
-lit at 0%, eight at 50%, all fifteen at 100%) and all other key LEDs
-are off; releasing SHIFT restores the amount bar for 500 ms. The tone
-boots to 100% and is stored in the SD-card presets; it has no MIDI CC.
+0-100% (no wrap); the amount is not changed. The tone sweeps the
+cutoff of the fuzz's post low-pass - two identical cascaded one-pole
+stages with an approximately 12 dB/octave stopband roll-off -
+logarithmically from 500 Hz (0%, dark) to 10 kHz (100%, boot default).
+The mapped frequency is the per-stage cutoff; the combined response's
+-3 dB point sits lower, and 100% is intentionally a little darker than
+the previous single-pole fuzz. Counterclockwise darkens, and 0% is not
+a mute. Tone changes are smoothed click-free (~10 ms). While SHIFT +
+turning, and for 500 ms after the last click, the tone shows as a red
+bar across the 15 white keys (none lit at 0%, eight at 50%, all
+fifteen at 100%); holding SHIFT on page 2 shows the preset slot
+overview like on any other page. The tone boots to 100% and is stored
+in the SD-card presets; it has no MIDI CC.
 
 To keep the perceived loudness even at any distortion amount, an
 automatic output leveling trims the fuzzed signal after the rotary and
@@ -230,19 +234,20 @@ normally, and the encoders, wheel and MIDI keep working throughout.
 
 LEDs, while SHIFT is held or a selection mode is active:
 
-- The 15 white keys are the 15 slots: filled = purple (blinking dim in
-  the selection modes), the current slot = white, the selected slot =
-  blue (save / copy destination) or red (erase target), the copy source
-  = green, selectable empty slots = dim grey (save / copy destination).
+- The 15 white keys are the 15 slots: filled = purple (solid in save
+  select / copy-destination select, blinking dim in erase select /
+  copy-source select), the current slot = white (solid in save /
+  copy-destination select, blinking in erase / copy-source select),
+  empty slots blink dim grey in save select / copy-destination select
+  and stay off in erase select / copy-source select, the selected slot
+  = blue (save / copy destination) or red (erase target), the copy
+  source = green.
 - The three top black keys show the operations: delete (KEY_23) = red,
   copy (KEY_24) = green, save (KEY_25) = blue; during an operation only
   that operation's LED is lit.
 - The CHOMPI key LED is purple while SHIFT is held, blinks red once a
   slot is selected, and blinks white during the ~1 s SAVING / COPYING /
   ERASING animations.
-- Exception: on the distortion page (volume-encoder page 2), holding
-  SHIFT keeps showing the red tone bar on the white keys instead of the
-  slot overview; loads still work.
 
 With no SD card the white keys show red while SHIFT is held and all
 preset gestures are inert; the organ stays fully playable. Removing the
@@ -311,10 +316,12 @@ initialization (garbage-prefilled delay buffer), bounded decaying
 impulse response, mix clamping, ramp convergence/retargeting, bit-exact
 dry at 0%, wet-only 100% against a reference instance, and long-silence
 stability. The distortion tests cover the fuzz's tone control (endpoints,
-monotonic darkening, click-free ramps), a bit-exact regression against
-the previous Fuzz at tone 100%, exact dry bypass at every tone, and the
-input-referenced fuzz output leveling (dry-matched loudness, -30 dB
-floor). The drift-modulator tests cover the sliding-window math
+monotonic darkening, click-free ramps), a bit-exact regression of the
+two-stage low-pass cascade against an independent reference
+implementation, the measured frequency response against the analytical
+digital cascade magnitude (2-4 kHz roll-off at 48 kHz and 32 kHz),
+exact dry bypass at every tone, and the input-referenced fuzz output
+leveling (dry-matched loudness, -30 dB floor). The drift-modulator tests cover the sliding-window math
 (including the amount-0 exact-center guarantee), the 2.5-10 s random
 half durations and 5-20 s cycles, per-block continuity, modulator
 independence across the 8 seeds, and fixed-seed determinism at 48 kHz
