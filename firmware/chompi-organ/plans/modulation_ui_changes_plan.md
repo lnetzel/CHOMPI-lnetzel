@@ -196,5 +196,14 @@ Final verification depends on todos 1-4.
 
 ## Status
 
-Design choices are confirmed. This document is an implementation plan;
-firmware changes have not been made as part of saving it.
+Implemented 2026-10-15: the per-pipe modulation pages were replaced by
+the shared SHIFT + black-key destination (the new host-tested
+[ModDest.h](../code/src/ModDest.h) holds the key mapping, colors,
+intensities, press-action and broadcast/clamp rules used by
+[chompi_main.cpp](../code/src/chompi_main.cpp)), preset and octave
+gestures are Normal-mode-only with the mode switch sampled before
+preset confirmation, and the persistent destination LEDs render after
+all keyboard overlays. Host tests (`mod_dest_test`,
+`organ_preset_test`, envelope/drift/distortion regressions) pass and
+the firmware builds clean (SRAM_EXEC 69.26%). The hardware acceptance
+checks above are pending.

@@ -1,9 +1,9 @@
-# Plan: Init patch on SHIFT + OVERDUB held for 4 s
+# Plan: Init patch on SHIFT + OVERDUB held for 2.5 s
 
-**Gesture:** hold SHIFT, then press OVERDUB (`KEY_28`, the organ's LOOP/latch key) and keep both held for 4 s.
+**Gesture:** hold SHIFT, then press OVERDUB (`KEY_28`, the organ's LOOP/latch key) and keep both held for 2.5 s.
 - **Progress:** a red bar fills the 15 white keys while you hold.
-- **Cancel:** letting go of either key before 4 s cancels.
-- **Done:** at 4 s the init sound is applied and the CHOMPI key LED blinks white for about 1 s.
+- **Cancel:** letting go of either key before 2.5 s cancels.
+- **Done:** at 2.5 s the init sound is applied and the CHOMPI key LED blinks white for about 1 s.
 - **Latch:** with SHIFT held, OVERDUB no longer toggles the latch.
 - **Play key:** `KEY_27` stays untouched.
 
@@ -38,12 +38,12 @@ These all change `code/src/chompi_main.cpp`.
 5. Add the state next to the preset state:
    - `volatile bool init_holding_`
    - `volatile uint32_t init_hold_t_` and `init_done_t_`
-   - `kInitHoldMs = 4000`
+   - `kInitHoldMs = 2500`
 6. Change the `KEY_28` block in `PollControls()` (~L654-680):
    - **On a fresh press with SHIFT held:** don't toggle the latch. If `preset_mode_ == kPresetNone`, start the hold (`init_holding_ = true`, `init_hold_t_ = now`).
    - **On a press without SHIFT:** toggle the latch exactly as today.
    - **While holding:** cancel if `KEY_28` is released, SHIFT is released, or a preset mode becomes active.
-   - **At 4000 ms:**
+   - **At 2500 ms:**
      - Build an `OrganPreset`, call `SetInit()`, then `ApplyPresetLive()`.
      - Set `preset_current_ = -1`, `init_done_t_ = now` and `init_holding_ = false`.
      - A new press is needed to fire again.
@@ -65,8 +65,8 @@ These all change `code/src/chompi_main.cpp`.
 1. Host tests: run `make` in `code/tests`. The new `SetInit` test and the existing preset tests should pass.
 2. Firmware: run `make` in `code/src` and check it builds.
 3. On the device:
-   - **Partial hold:** hold SHIFT + OVERDUB for 2 s and let go. The bar stops partway, the sound is unchanged and the latch is unchanged.
-   - **Full hold:** after 4 s the bar is full, the CHOMPI LED blinks white and the sound is a plain 4-pipe sine at 50% with no rotary, drive or reverb. Held notes keep sounding with no click. This matches the boot sound.
+   - **Partial hold:** hold SHIFT + OVERDUB for 1 s and let go. The bar stops partway, the sound is unchanged and the latch is unchanged.
+   - **Full hold:** after 2.5 s the bar is full, the CHOMPI LED blinks white and the sound is a plain 4-pipe sine at 50% with no rotary, drive or reverb. Held notes keep sounding with no click. This matches the boot sound.
    - **After init:** in the SHIFT slot view, no slot is white. Master volume, octave and fine tune are unchanged.
    - **Latch:** OVERDUB without SHIFT still toggles it.
    - **Preset mode:** the gesture does nothing while one is active.
@@ -77,3 +77,13 @@ These all change `code/src/chompi_main.cpp`.
 - Init is kept separate from `preset_mode_`, so it doesn't need the SD card and the main loop's no-card cancel doesn't affect it.
 - No undo.
 - Boot and Init use the same preset-saved sound defaults: Character 0 and rotary 0. Init remains a deliberate live reset gesture; master volume, fine tune and octave are preserved rather than reset.
+
+## Status
+
+Implemented 2026-10-15 (Phases A-D): boot/Init defaults Character 0
+and rotary 0 in `OrganEngine.h`/`OrganPreset.h`,
+`OrganPreset::SetInit()`, `ApplyPresetLive()` extracted from
+`PresetLoadSlot()`, the 2.5 s SHIFT + OVERDUB hold with the red
+white-key progress bar and the ~1 s white CHOMPI blink, and the README
+updates. Host tests pass (including the new `SetInit` test); firmware
+builds clean. The on-device verification steps above are pending.

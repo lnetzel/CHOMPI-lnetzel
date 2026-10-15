@@ -12,15 +12,17 @@ SD-card preset slots.
 
 The hardware toggle switch next to the SHIFT (CHOMPI) key selects the
 mode: **DOWN = Normal Mode** (all controls below), **UP = Modulation
-Mode** (per-pipe drift amounts, see the Modulation Mode section). The
-switch only changes what the four pipe encoders turn/push and their
-knob LEDs show; everything else behaves the same in both modes.
+Mode** (shared drift-amount destination, see the Modulation Mode
+section). The switch changes what the four pipe encoders turn/push and
+what their knob LEDs show, and Modulation Mode adds its own SHIFT key
+gestures; preset management and octave selection are Normal-Mode-only.
+Everything else behaves the same in both modes.
 
 ### Pipe encoders - Normal Mode (physical knobs 1-4, left to right)
 
-Each pipe encoder has four independent pages; press the encoder's push
-switch to cycle that pipe through them 1 -> 2 -> 3 -> 4 -> 1 (pages are
-per-pipe, not global):
+Each pipe encoder has two independent pages; press the encoder's push
+switch to toggle that pipe between them 1 -> 2 -> 1 (pages are
+per-pipe, not global, and are preserved across mode changes):
 
 - **Page 1 - pipe level** (white knob LED): 32 steps, gain = (step/32)^2.
   Boot default is step 16 (50%). The white-key bar shows the level with a
@@ -29,13 +31,13 @@ per-pipe, not global):
   a floor so the page stays visible at 0): 64 steps of tonewheel-inspired
   harmonic coloration. Step 0 is the exact clean sine; step 64 is clearly
   aged but still organ-like. The white-key bar is uniformly blue.
-- **Page 3 - attack time** (purple knob LED with brightness floor): 32
-  log-spaced steps from 5 ms (step 0, boot default - the original fixed
-  timing) to 10 s (step 32). The white-key bar is uniformly purple.
-- **Page 4 - release time** (yellow knob LED with brightness floor): the
-  same 32-step 5 ms..10 s log mapping, applied to the fade-out after the
-  key is released. The 5 ms floor keeps the release click-free. The
-  white-key bar is uniformly yellow.
+
+The attack and release times are edited in Modulation Mode: select the
+attack or release destination there (see the Modulation Mode section)
+and the pipe encoders edit the actual envelope times - 32 log-spaced
+steps from 5 ms (step 0, boot default - the original fixed timing) to
+10 s (step 32); the 5 ms release floor keeps the release click-free.
+The white-key bars are uniformly purple (attack) / yellow (release).
 
 Each pipe has its own gate envelope, so pipes fade in and out at
 different rates - e.g. let the 2' pipe swell up seconds after the 8'
@@ -53,8 +55,8 @@ tonewheel-*inspired* coloration - it is not an accurate physical Hammond
 model and does not simulate neighboring-tonewheel leakage. Muted pipes
 and finished envelopes stay silent; there is no idle background tone.
 
-Character amounts boot at step 32 (50%) and are stored in the SD-card
-presets (see the Presets section).
+Character amounts boot at step 0 (the exact clean sine) and are stored
+in the SD-card presets (see the Presets section).
 
 SHIFT adds two pipe-control gestures on the pipe encoders:
 
@@ -66,8 +68,7 @@ SHIFT adds two pipe-control gestures on the pipe encoders:
   stays silent until unmuted.
 - **SHIFT + turn** sets the value for all four pipes at once, per the
   turned pipe's current page: page 1 sets all four levels to the same
-  value, page 2 all four Character amounts, page 3 all four attack
-  times, page 4 all four release times. The white-key bar shows the
+  value, page 2 all four Character amounts. The white-key bar shows the
   value all four pipes now share.
 
 ### Pipe encoders - Modulation Mode (toggle switch UP)
@@ -75,21 +76,39 @@ SHIFT adds two pipe-control gestures on the pipe encoders:
 In Modulation Mode the organ drifts on its own: each pipe's volume and
 Character slowly and independently wander around their Normal Mode
 settings, giving the organ a living, organic movement. The four pipe
-encoders set the per-pipe modulation AMOUNTS on two pages; press the
-encoder's push switch to toggle that pipe between them (per-pipe,
-separate from the Normal Mode pages, which are preserved):
+encoders all edit ONE shared destination, selected with SHIFT + a
+physical black key (the black keys are numbered left to right):
 
-- **Mod page 1 - volume modulation amount** (white knob LED): 32
-  steps, 0-100% (~3% per click), clamped, no wrap. The white-key bar is
-  uniformly white.
-- **Mod page 2 - Character modulation amount** (blue knob LED): 32
-  steps, same mapping. The white-key bar is uniformly blue.
+- **Black key 1 (C#3) - attack time** (purple): the actual pipe attack
+  envelope time, 32 log-spaced steps from 5 ms to 10 s.
+- **Black key 2 (D#3) - release time** (yellow): the actual pipe
+  release envelope time, the same 32-step 5 ms..10 s log mapping.
+- **Black key 3 (F#3) - volume modulation amount** (white): 32 steps,
+  0-100% (~3% per click), clamped, no wrap.
+- **Black key 4 (G#3) - Character modulation amount** (blue): 32
+  steps, same mapping.
 
-Knob LED brightness = 0.2 + 0.8 x amount (the floor keeps the page
-visible at 0%); a muted pipe's knob LED stays solid red. SHIFT + turn
-applies the delta to the turned pipe and broadcasts the resulting
-value to all four pipes, like in Normal Mode. SHIFT + press still
-toggles the pipe's mute in both modes.
+Black key 5 onward selects nothing. Volume modulation is selected at
+boot; the selection is remembered across mode changes until reboot and
+is not stored in the presets.
+
+The four destination keys are always lit in Modulation Mode - the
+selected key at 100% of its destination color, the other three at
+exactly 75% - with or without SHIFT held, during value bars and during
+the distortion-tone display; every other black key stays dark, even
+while its key plays a note. A turn adjusts the selected parameter for
+that pipe and shows the matching white-key value bar (purple, yellow,
+white or blue) for 500 ms. The knob LEDs use the selected destination's
+color with brightness = 0.2 + 0.8 x that pipe's value (the floor keeps
+the encoder visible at 0%); a muted pipe's knob LED stays solid red.
+Unshifted encoder presses do nothing in Modulation Mode. SHIFT + turn
+applies the delta to the turned pipe and broadcasts the resulting value
+to all four pipes, like in Normal Mode. SHIFT + press still toggles the
+pipe's mute in both modes.
+
+With SHIFT held in Modulation Mode the white keys still play notes
+(preset load/save and octave changes are Normal-Mode-only); without
+SHIFT all 25 keys play as usual.
 
 The modulation works in each parameter's normalized domain: volume
 x = level/32 (the squared gain curve is applied to the modulated
@@ -122,7 +141,8 @@ selection steadily until the next toggle: left LED purple = rotary,
 right LED pink = vibrato. Turning the wheel changes only the selected
 effect and shows its white-key value bar for 500 ms.
 
-- Rotary-speaker amount: 32 steps; 0 is an exact bypass. Purple bar.
+- Rotary-speaker amount: 32 steps; 0 is an exact bypass and boots at
+  0. Purple bar.
 - Vibrato depth: 0-50 cents peak deviation in one-cent steps from one
   shared, free-running 6 Hz LFO across all voices (depth 50 = one
   semitone peak-to-peak); 0 is an exact bypass and boots at 0. Pink bar.
@@ -148,9 +168,11 @@ the previous single-pole fuzz. Counterclockwise darkens, and 0% is not
 a mute. Tone changes are smoothed click-free (~10 ms). While SHIFT +
 turning, and for 500 ms after the last click, the tone shows as a red
 bar across the 15 white keys (none lit at 0%, eight at 50%, all
-fifteen at 100%); holding SHIFT on page 2 shows the preset slot
-overview like on any other page. The tone boots to 100% and is stored
-in the SD-card presets; it has no MIDI CC.
+fifteen at 100%); the tone bar takes priority over any pipe value bar
+while it is active, and in Modulation Mode the destination-key LEDs
+stay visible. Holding SHIFT on page 2 in Normal Mode shows the preset
+slot overview like on any other page. The tone boots to 100% and is
+stored in the SD-card presets; it has no MIDI CC.
 
 To keep the perceived loudness even at any distortion amount, an
 automatic output leveling trims the fuzzed signal after the rotary and
@@ -189,15 +211,23 @@ The mix and decay boot at 0% / 0.2 s and are stored in the SD-card
 presets; they have no MIDI CC.
 
 SHIFT + turn = fine tune (+/-50 cents) on page 1 only (page 2 adjusts
-the distortion tone, page 3 adjusts decay). Boot default volume is 25%.
+the distortion tone, page 3 adjusts decay). The fine-tune bar centers
+on white key 8: exactly centered is that key alone in green, and any
+offset spans red from the center toward the offset (left = down in
+pitch, right = up; all seven keys on that side at +/-50 cents). Boot
+default volume is 25%.
 
 ### Keys
 
-25 playable keys (C3-C5). SHIFT + C#3/D#3 = octave down/up (+/-2).
+25 playable keys (C3-C5). SHIFT + C#3/D#3 = octave down/up (+/-2,
+Normal Mode only - the octave never changes while the switch is UP).
 KEY_28 (LOOP) toggles the key latch; while latched, re-pressing a key
-releases its note. KEY_26+27+28 held at power-on enters shipping mode.
-With SHIFT held the white keys become the 15 preset slots (see the
-Presets section).
+releases its note. SHIFT + LOOP does not toggle the latch - it starts
+the init-patch hold (see the Presets section). KEY_26+27+28 held at
+power-on enters shipping mode. With SHIFT held in Normal Mode the
+white keys become the 15 preset slots (see the Presets section); in
+Modulation Mode SHIFT + a black key selects the modulation destination
+and the white keys keep playing.
 
 ## SD-card presets
 
@@ -211,7 +241,10 @@ is then renamed over the old file, so a power loss mid-save can corrupt
 at most the slot being written. The organ always boots on its factory
 defaults; a preset is only applied when you load it.
 
-Gestures (SHIFT = the CHOMPI key):
+Gestures (SHIFT = the CHOMPI key). Load, save, copy, delete and their
+confirmations are Normal-Mode-only: entering Modulation Mode cancels
+any unconfirmed selection, while an already-confirmed write finishes
+in the background without taking over the Modulation-mode LEDs.
 
 - **Load:** hold SHIFT and press a white key (C3-C5 = slots 1-15). A
   filled slot applies instantly and becomes the current slot; an empty
@@ -227,6 +260,17 @@ Gestures (SHIFT = the CHOMPI key):
 - **Delete:** SHIFT + KEY_23 enters erase select (pressing KEY_23 again
   cancels). Press a filled slot, then release and press SHIFT to
   confirm. Deleting the current slot clears "current".
+- **Init:** hold SHIFT, then press LOOP and keep both held for 2.5 s.
+  A red bar fills the 15 white keys while you hold; releasing either
+  key early cancels. At 2.5 s the init sound is applied live (held and
+  latched notes keep sounding) and the CHOMPI key LED blinks white for
+  ~1 s. Init needs no SD card. Init values: pipe levels 16 (50%),
+  Character 0 (clean sine), attack and release 0 (5 ms), mutes off,
+  volume/Character modulation 0, vibrato, rotary and drive 0,
+  distortion tone 100%, reverb mix 0, reverb decay 0 (0.2 s) - the
+  same sound as power-on. Not touched: master volume, fine tune,
+  octave, latch state, page selections and the wheel mode. After init
+  no slot is "current" (no white slot in the SHIFT slot view).
 
 While a selection mode is active the keys select slots only (no notes,
 no latch changes); notes held before entering keep sounding and release
@@ -258,8 +302,8 @@ mid-write can leave a stray `.tmp` file, which is ignored.
 Saved in every preset: per-pipe level, Character, attack, release, mute
 and volume/Character-modulation amounts, plus vibrato depth, rotary
 amount, fuzz amount and tone, and reverb mix and decay. NOT saved:
-master volume, fine tune, octave shift, latch, page selections and the
-wheel's rotary/vibrato selection.
+master volume, fine tune, octave shift, latch, page selections, the
+Modulation-mode destination and the wheel's rotary/vibrato selection.
 
 ## MIDI (channel 1, DIN and USB)
 
@@ -328,4 +372,9 @@ independence across the 8 seeds, and fixed-seed determinism at 48 kHz
 and 32 kHz. The preset tests cover the versioned JSON round-trip of
 every field, defaults for missing keys, clamping of out-of-range and
 garbage values, version tolerance, the 15-slot bank's save/copy/erase
-and dirty tracking, and engine capture/apply against a fake engine.
+and dirty tracking, engine capture/apply against a fake engine, and
+the init-patch values. The Modulation-mode UI tests cover the physical
+black-key destination mapping, the boot default and remembered
+selection, the exact 75%/100% destination-key intensities and colors,
+the two-page Normal-mode cycling, the encoder press behavior, and the
+SHIFT broadcast clamping.

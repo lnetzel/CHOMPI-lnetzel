@@ -41,10 +41,11 @@ struct OrganPreset
 
     /* boot defaults (mirror OrganEngine) */
     static constexpr int kDefaultLevel       = 16; /* 50% */
-    static constexpr int kDefaultCharacter   = 32; /* 50% */
+    static constexpr int kDefaultCharacter   = 0;  /* clean sine, shaping
+                                                    * bypassed */
     static constexpr int kDefaultEnv         = 0;  /* 5 ms */
     static constexpr int kDefaultVibrato     = 0;
-    static constexpr int kDefaultRotary      = 10; /* ~30% */
+    static constexpr int kDefaultRotary      = 0;  /* rotary off */
     static constexpr int kDefaultDrive       = 0;
     static constexpr int kDefaultTone        = 100;
     static constexpr int kDefaultReverbMix   = 0;
@@ -84,6 +85,12 @@ struct OrganPreset
         reverb_mix   = kDefaultReverbMix;
         reverb_decay = kDefaultReverbDecay;
     }
+
+    /** Init patch (SHIFT + OVERDUB held for 4 s): the same sound values
+     *  as the boot defaults, applied live. Master volume, fine tune,
+     *  octave, latch state, page selections and the wheel mode are NOT
+     *  touched (the same things presets don't save). */
+    void SetInit() { SetDefaults(); }
 };
 
 /** Serialize as compact versioned JSON. Returns the number of bytes

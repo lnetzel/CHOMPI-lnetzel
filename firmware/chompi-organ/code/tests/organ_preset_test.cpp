@@ -44,7 +44,7 @@ struct FakeEngine
         for(int p = 0; p < 4; p++)
         {
             level[p]     = 16;
-            character[p] = 32;
+            character[p] = 0;
             attack[p]    = 0;
             release[p]   = 0;
             muted[p]     = false;
@@ -52,7 +52,7 @@ struct FakeEngine
             char_mod[p]  = 0;
         }
         vibrato      = 0;
-        rotary       = 10;
+        rotary       = 0;
         drive        = 0;
         drive_tone   = 100;
         reverb_mix   = 0;
@@ -369,6 +369,36 @@ static void test_capture_apply()
     assert(e.GetReverbDecayStep() == 55);
 }
 
+static void test_set_init()
+{
+    /* SetInit on a fully dirtied preset restores the init sound */
+    OrganPreset p = MakeAssortedPreset();
+    p.SetInit();
+    for(int i = 0; i < OrganPreset::kNumPipes; i++)
+    {
+        assert(p.level[i] == 16);    /* 50% */
+        assert(p.character[i] == 0); /* clean sine, shaping bypassed */
+        assert(p.attack[i] == 0);    /* 5 ms, the fastest */
+        assert(p.release[i] == 0);
+        assert(p.mute[i] == 0);      /* mute off */
+        assert(p.vol_mod[i] == 0);
+        assert(p.char_mod[i] == 0);
+    }
+    assert(p.vibrato == 0);
+    assert(p.rotary == 0);
+    assert(p.drive == 0);
+    assert(p.drive_tone == 100); /* neutral */
+    assert(p.reverb_mix == 0);
+    assert(p.reverb_decay == 0); /* 0.2 s, the shortest */
+
+    /* the init sound IS the boot sound: Character and rotary boot at 0 */
+    assert(OrganPreset::kDefaultCharacter == 0);
+    assert(OrganPreset::kDefaultRotary == 0);
+    OrganPreset def;
+    def.SetDefaults();
+    assert(SamePreset(p, def));
+}
+
 int main()
 {
     test_roundtrip();
@@ -380,6 +410,7 @@ int main()
     test_unknown_keys_ignored();
     test_bank_ops();
     test_capture_apply();
+    test_set_init();
     printf("organ_preset_test: all tests passed\n");
     return 0;
 }

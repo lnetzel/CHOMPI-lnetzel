@@ -14,6 +14,7 @@
 #include "MidiHandler.h"
 #include "OrganPreset.h"
 #include "PresetStorage.h"
+#include "ModDest.h"
 #ifdef ORGAN_CPU_METER
 #include "util/CpuLoadMeter.h"
 #endif
@@ -135,6 +136,19 @@ static const uint8_t led_map[40] = {
 static const int pipe_encoder[OrganEngine::kNumPipes] = {3, 0, 1, 2};
 static const int kVolEnc = 5; /* ENC_6 */
 
+/* the Modulation-mode destination keys are the first four physical
+ * black keys from the left (ModDest.h keeps the values so the native
+ * tests can exercise the mapping; break the build, not the mapping, if
+ * the shift-register order ever changes) */
+static_assert(kModDestKeySw[0] == static_cast<int>(Hardware::SwId::KEY_16),
+              "mod destination key 1 is KEY_16 (C#3)");
+static_assert(kModDestKeySw[1] == static_cast<int>(Hardware::SwId::KEY_17),
+              "mod destination key 2 is KEY_17 (D#3)");
+static_assert(kModDestKeySw[2] == static_cast<int>(Hardware::SwId::KEY_18),
+              "mod destination key 3 is KEY_18 (F#3)");
+static_assert(kModDestKeySw[3] == static_cast<int>(Hardware::SwId::KEY_19),
+              "mod destination key 4 is KEY_19 (G#3)");
+
 /** SMT LED indices of the 15 white keys, left (C3) to right (C5). */
 static constexpr int     kNumWhiteKeys = 15;
 static const uint8_t white_key_led[kNumWhiteKeys] = {
@@ -153,7 +167,8 @@ enum BarKind
     kBarAttack,   /**< uniformly purple: pipe attack-time bar */
     kBarRelease,  /**< uniformly yellow: pipe release-time bar */
     kBarModVolume,   /**< uniformly white: pipe volume-modulation bar */
-    kBarModCharacter /**< uniformly blue: pipe Character-modulation bar */
+    kBarModCharacter, /**< uniformly blue: pipe Character-modulation bar */
+    kBarFineTune     /**< center-out red/green: fine-tune offset bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
@@ -248,10 +263,12 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
 /* ---- cross-context (ISR <-> main loop) UI state ---- */
 static volatile int      bar_pipe_  = -1;     /* pipe/volume bar showing */
 static volatile int      bar_page_  = 0;      /* pipes: 0 = level,
-                                               * 1 = Character, 2 = attack,
-                                               * 3 = release,
-                                               * 4/5 = mod-mode volume/
-                                               * Character bars; volume bar:
+                                               * 1 = Character; the
+                                               * Modulation-mode
+                                               * destinations: 2 = attack,
+                                               * 3 = release, 4 = volume
+                                               * modulation, 5 = Character
+                                               * modulation; volume bar:
                                                * 0 = master, 1 = drive,
                                                * 2 = reverb mix, 3 = decay,
                                                * 4 = drive tone */
@@ -265,8 +282,10 @@ static const int         kWheelBarVibrato = 1;
  *  vibrato. Toggled by the debounced wheel-press edge. Volatile: written
  *  by PollControls (audio ISR), read by UpdateLeds (main loop). */
 static volatile bool wheel_vibrato_mode_ = false;
-/** Per-pipe encoder pages: 0 = level, 1 = Character, 2 = attack time,
- *  3 = release time; cycled per pipe by that pipe's encoder push-switch. */
+/** Per-pipe Normal-mode encoder pages: 0 = Volume, 1 = Character;
+ *  cycled per pipe by that pipe's encoder push-switch (attack/release
+ *  are edited through the Modulation-mode destination instead).
+ *  Independent per pipe and preserved across mode changes. */
 static volatile int pipe_page_[OrganEngine::kNumPipes];
 
 /** Modulation Mode: the hardware toggle switch next to SHIFT/CHOMPI
@@ -280,15 +299,21 @@ static bool ModModeSwitchUp() { return !hw.GetToggleState(); }
 
 /** mod_mode_: sampled from the toggle in PollControls (volatile:
  *  ISR-written, main-loop-read for the knob LEDs and bars).
- *  mod_page_[pipe]: Modulation Mode page, 0 = volume-modulation amount
- *  (white knob LED), 1 = Character-modulation amount (blue knob LED) -
- *  separate state from the Normal Mode pipe_page_, which is preserved. */
+ *  mod_dest_: the ONE shared Modulation-mode destination (ModDest),
+ *  selected with SHIFT + a physical black key (see ModDest.h); boots on
+ *  volume modulation, is remembered across mode changes until reboot
+ *  and is never stored in the presets. The Normal Mode pipe_page_ is
+ *  separate state and is preserved across mode changes. */
 static volatile bool mod_mode_ = false;
 static bool          prev_mod_mode_ = false; /* ISR-only edge tracking */
-static volatile int  mod_page_[OrganEngine::kNumPipes];
+static volatile int  mod_dest_ = kModDestDefault;
 /** bar_page_ sub-states for pipe bars in Modulation Mode. */
 static const int kModBarVolume    = 4;
 static const int kModBarCharacter = 5;
+/** bar_page_ for a pipe-encoder turn, indexed by ModDest: attack and
+ *  release reuse the purple/yellow envelope bars. */
+static const int kModDestBarPage[kNumModDests]
+    = {2, 3, kModBarVolume, kModBarCharacter};
 
 /** ENC_6 (volume encoder) pages: master volume -> overdrive -> plate
  *  reverb mix, cycled by the encoder push-switch. */
@@ -303,6 +328,10 @@ static const int kVolBarDecay = 3;
  *  SHIFT+turn edits the distortion tone, and the bar shows the tone
  *  instead of the amount (same 500 ms timeout as the decay bar). */
 static const int kVolBarTone = 4;
+/** bar_page_ sub-state (not a vol_page_ value): on the master page a
+ *  SHIFT+turn edits the fine tune, and the bar shows the cents offset
+ *  around the center white key. */
+static const int kVolBarFineTune = 5;
 
 /* ---- key/encoder edge tracking (audio ISR only) ---- */
 static volatile bool prev_key_[40];
@@ -359,6 +388,14 @@ static volatile int      preset_copy_src_ = -1; /* copy source slot */
 static volatile int      preset_current_  = -1; /* last loaded/saved slot */
 static volatile uint32_t preset_anim_t_   = 0;  /* animation start (ms) */
 
+/* ---- init patch: SHIFT + OVERDUB (KEY_28) held for 2.5 s applies the
+ *  init sound live; separate from preset_mode_, so it works without an
+ *  SD card and the main loop's no-card cancel never touches it ---- */
+static volatile bool     init_holding_ = false; /* hold in progress */
+static volatile uint32_t init_hold_t_  = 0;     /* hold start (ms) */
+static volatile uint32_t init_done_t_  = 0;     /* last apply (ms; 0 = never) */
+static const uint32_t    kInitHoldMs   = 2500;
+
 /** White-key SwIds, slot 0 (C3, leftmost) .. slot 14 (C5, rightmost). */
 static const int kWhiteKeySw[kNumWhiteKeys] = {
     static_cast<int>(Hardware::SwId::KEY_1),
@@ -399,17 +436,15 @@ static int WhiteKeySlot(int swid)
     return -1;
 }
 
-/** Load a slot: apply the RAM-cached preset to the engine through the
- *  regular (ramped/phase-continuous) setters, so held and latched notes
- *  keep sounding click-free. Empty slots do nothing. */
-static void PresetLoadSlot(int slot)
+/** Apply a preset to the live engine: the regular (ramped/
+ *  phase-continuous) setters, so held and latched notes keep sounding
+ *  click-free. Resyncs the MIDI controllers with the applied values
+ *  (the coalesced CCs go out in MainLoop) and cancels any value bar.
+ *  Used by slot loads and by the init-patch gesture. */
+static void ApplyPresetLive(const OrganPreset &preset)
 {
-    if(!preset_bank_.IsValid(slot))
-        return;
-    ApplyToEngine(preset_bank_.Get(slot), engine);
-    preset_current_ = slot;
-    /* resync MIDI controllers with the loaded values (the coalesced CCs
-     * go out in MainLoop) */
+    ApplyToEngine(preset, engine);
+    /* resync MIDI controllers with the applied values */
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
         cc_pipe_step_[p]       = engine.GetPipeStep(p);
@@ -419,6 +454,16 @@ static void PresetLoadSlot(int slot)
     }
     bar_pipe_  = -1; /* cancel any active value bar */
     bar_until_ = 0;
+}
+
+/** Load a slot: apply the RAM-cached preset live. Empty slots do
+ *  nothing. */
+static void PresetLoadSlot(int slot)
+{
+    if(!preset_bank_.IsValid(slot))
+        return;
+    ApplyPresetLive(preset_bank_.Get(slot));
+    preset_current_ = slot;
 }
 
 static void PresetEnterMode(int mode)
@@ -473,9 +518,14 @@ static void PresetShiftConfirm()
 
 /** Preset gestures. Returns true when the key event is consumed (it never
  *  reaches the note/latch logic). Releases of notes started before a
- *  mode was entered fall through, so held notes cannot hang. */
+ *  mode was entered fall through, so held notes cannot hang. Preset
+ *  management is Normal-mode-only: while the switch is UP every event
+ *  falls through (white keys stay playable with SHIFT, and notes
+ *  release and latch normally, whatever the SD-card state). */
 static bool PresetKeyEvent(int swid, bool down)
 {
+    if(mod_mode_)
+        return false;
     if(preset_mode_ != kPresetNone)
     {
         if(!down)
@@ -568,33 +618,47 @@ static void PollControls()
     /* shift key (CHOMPI key) */
     shift_held_ = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_26));
 
-    /* a fresh SHIFT press confirms a pending preset selection */
-    {
-        static bool prev_shift_held_ = false;
-        if(shift_held_ && !prev_shift_held_)
-            PresetShiftConfirm();
-        prev_shift_held_ = shift_held_;
-    }
-
-    /* Modulation Mode toggle (UP = modulation). Flipping the switch
-     * mid-bar cancels the old mode's bar; the knob LEDs follow
-     * mod_mode_ directly on the next UpdateLeds pass. */
+    /* Modulation Mode toggle (UP = modulation) - sampled BEFORE the
+     * preset confirmation below, so a fresh SHIFT press on the same
+     * polling pass that enters Modulation Mode can never confirm a
+     * pending selection. Flipping the switch mid-bar cancels the old
+     * mode's bar; the knob LEDs follow mod_mode_ directly on the next
+     * UpdateLeds pass. Entering Modulation Mode cancels any unconfirmed
+     * preset selection and ends any preset animation (already-confirmed
+     * storage writes keep running in the background from the main
+     * loop); the shared destination and the Normal-mode pages are
+     * preserved. */
     mod_mode_ = ModModeSwitchUp();
     if(mod_mode_ != prev_mod_mode_)
     {
         prev_mod_mode_ = mod_mode_;
         bar_pipe_      = -1; /* cancel the other mode's bar */
         bar_until_     = 0;
+        if(mod_mode_)
+        {
+            preset_mode_     = kPresetNone;
+            preset_sel_slot_ = -1;
+            preset_copy_src_ = -1;
+        }
+    }
+
+    /* a fresh SHIFT press confirms a pending preset selection (preset
+     * management is Normal-mode-only: gated while the switch is UP) */
+    {
+        static bool prev_shift_held_ = false;
+        if(shift_held_ && !prev_shift_held_ && !mod_mode_)
+            PresetShiftConfirm();
+        prev_shift_held_ = shift_held_;
     }
 
     /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3). Normal Mode:
-     * press cycles that pipe's encoder through page 1 (level) -> 2
-     * (Character) -> 3 (attack) -> 4 (release); Modulation Mode: press
-     * toggles that pipe between mod page 1 (volume modulation) and mod
-     * page 2 (Character modulation); either way the newly active page's
-     * value bar shows as confirmation. SHIFT+press instead toggles that
-     * pipe's mute in both modes (the press is fully consumed: no page
-     * cycle). */
+     * press cycles that pipe's encoder between page 1 (Volume) and page
+     * 2 (Character) and the newly active page's value bar shows as
+     * confirmation. Modulation Mode: unshifted presses do nothing (the
+     * shared destination is selected with SHIFT + a black key). Either
+     * way SHIFT+press toggles that pipe's mute (the press is fully
+     * consumed: no page cycle); the persistent red knob LED is the mute
+     * feedback, so no value bar is re-armed for it. */
     for(int i = 0; i < 4; i++)
     {
         const bool down = hw.button_sr.State(i);
@@ -604,28 +668,18 @@ static void PollControls()
             {
                 if(pipe_encoder[p] == i)
                 {
-                    if(shift_held_)
+                    switch(PipeEncoderPress(mod_mode_, shift_held_))
                     {
-                        /* mute is a state, not a value: the persistent
-                         * red knob LED is the feedback, so no value bar
-                         * is re-armed here */
-                        engine.TogglePipeMuted(p);
-                    }
-                    else if(mod_mode_)
-                    {
-                        mod_page_[p] = mod_page_[p] == 0 ? 1 : 0;
-                        bar_pipe_    = p;
-                        bar_page_    = mod_page_[p] == 0
-                                           ? kModBarVolume
-                                           : kModBarCharacter;
-                        bar_until_   = System::GetNow() + 500;
-                    }
-                    else
-                    {
-                        pipe_page_[p] = (pipe_page_[p] + 1) % 4;
-                        bar_pipe_     = p;
-                        bar_page_     = pipe_page_[p];
-                        bar_until_    = System::GetNow() + 500;
+                        case kPipePressMute:
+                            engine.TogglePipeMuted(p);
+                            break;
+                        case kPipePressCyclePage:
+                            pipe_page_[p] = NextNormalPipePage(pipe_page_[p]);
+                            bar_pipe_     = p;
+                            bar_page_     = pipe_page_[p];
+                            bar_until_    = System::GetNow() + 500;
+                            break;
+                        default: break; /* kPipePressNothing */
                     }
                 }
             }
@@ -649,37 +703,74 @@ static void PollControls()
         prev_key_[vsw] = down;
     }
 
-    /* KEY_28 (LOOP) toggles the key latch. While latched, releasing a key
-     * keeps its note sounding; re-pressing a key whose note is latched
-     * releases that note (toggle-off) instead of retriggering it;
-     * unlatching releases every latched note whose key is not physically
-     * held down again (those keep sounding and release normally on key
-     * release). Applies to physical keys only, never MIDI. */
+    /* KEY_28 (LOOP). Without SHIFT: toggles the key latch. While
+     * latched, releasing a key keeps its note sounding; re-pressing a
+     * key whose note is latched releases that note (toggle-off) instead
+     * of retriggering it; unlatching releases every latched note whose
+     * key is not physically held down again (those keep sounding and
+     * release normally on key release). Applies to physical keys only,
+     * never MIDI. With SHIFT held a press does NOT toggle the latch -
+     * it starts the init-patch hold: keep both held for 2.5 s to apply
+     * the init sound. Releasing either key, or a preset mode becoming
+     * active, cancels the hold; at 2500 ms the init patch is applied
+     * live (a fresh press is needed to fire again). */
     {
-        const int  loop_sw = static_cast<int>(Hardware::SwId::KEY_28);
-        const bool down    = hw.button_sr.State(loop_sw);
+        const int      loop_sw = static_cast<int>(Hardware::SwId::KEY_28);
+        const bool     down    = hw.button_sr.State(loop_sw);
+        const uint32_t now     = System::GetNow();
         if(down && !prev_key_[loop_sw])
         {
-            latch_on_ = !latch_on_;
-            if(!latch_on_)
+            if(shift_held_)
             {
-                for(int swid = 7; swid < 32; swid++)
+                /* SHIFT + OVERDUB: init-patch hold, no latch toggle */
+                if(preset_mode_ == kPresetNone)
                 {
-                    if(latched_[swid] && active_note_[swid] != 0
-                       && !hw.button_sr.State(swid))
+                    init_holding_ = true;
+                    init_hold_t_  = now;
+                }
+            }
+            else
+            {
+                latch_on_ = !latch_on_;
+                if(!latch_on_)
+                {
+                    for(int swid = 7; swid < 32; swid++)
                     {
-                        const uint8_t note = active_note_[swid] - 1;
-                        engine.NoteOff(note);
-                        out_q.PushBack({1, note, 0});
+                        if(latched_[swid] && active_note_[swid] != 0
+                           && !hw.button_sr.State(swid))
+                        {
+                            const uint8_t note = active_note_[swid] - 1;
+                            engine.NoteOff(note);
+                            out_q.PushBack({1, note, 0});
+                        }
+                        latched_[swid] = false;
                     }
-                    latched_[swid] = false;
                 }
             }
         }
         prev_key_[loop_sw] = down;
+
+        if(init_holding_)
+        {
+            if(!down || !shift_held_ || preset_mode_ != kPresetNone)
+            {
+                init_holding_ = false; /* cancelled */
+            }
+            else if(now - init_hold_t_ >= kInitHoldMs)
+            {
+                OrganPreset p;
+                p.SetInit();
+                ApplyPresetLive(p);
+                preset_current_ = -1; /* no slot matches the sound now */
+                init_done_t_    = now;
+                init_holding_   = false;
+            }
+        }
     }
 
-    /* playable keys: SwId 7..31 (SHIFT+KEY_16/KEY_17 = octave down/up) */
+    /* playable keys: SwId 7..31 (SHIFT+KEY_16/KEY_17 = octave down/up,
+     * Normal Mode only; Modulation Mode routes SHIFT + black keys to
+     * the destination selection) */
     for(int swid = 7; swid < 32; swid++)
     {
         const bool down = hw.button_sr.State(swid);
@@ -702,6 +793,26 @@ static void PollControls()
                              || (swid == static_cast<int>(Hardware::SwId::KEY_17));
         if(down)
         {
+            /* Modulation Mode with SHIFT held, routed BEFORE the octave
+             * and musical note-on handling: the first four physical
+             * black keys select the shared destination (a stale value
+             * bar from the old destination is cancelled), the fifth and
+             * later black keys are inert - neither plays a note. White
+             * keys fall through and play normally, whatever the SD-card
+             * state. Octave changes stay Normal-mode-only (the octave
+             * keys are black keys 1-2, so they reach the octave branch
+             * only when the switch is DOWN). */
+            if(mod_mode_ && shift_held_ && WhiteKeySlot(swid) < 0)
+            {
+                const int prev_dest = mod_dest_;
+                mod_dest_           = ModDestAfterKey(mod_dest_, swid);
+                if(mod_dest_ != prev_dest)
+                {
+                    bar_pipe_  = -1; /* cancel the old destination's bar */
+                    bar_until_ = 0;
+                }
+                continue;
+            }
             if(shift_held_ && oct_key)
             {
                 int oct = octave_
@@ -828,8 +939,14 @@ static void PollControls()
                 }
                 else
                 {
-                    /* SHIFT+ENC_6 on page 1: fine tune */
+                    /* SHIFT+ENC_6 on page 1: fine tune, +/-50 cents.
+                     * The bar centers on white key 8: off-center spans
+                     * red toward the offset direction, exactly
+                     * centered is green */
                     engine.AddFineTuneCents(delta);
+                    bar_pipe_  = kVolBar;
+                    bar_page_  = kVolBarFineTune;
+                    bar_until_ = System::GetNow() + 500;
                 }
             }
             else if(vol_page_ == kVolPageDrive)
@@ -887,38 +1004,83 @@ static void PollControls()
                     continue;
                 if(mod_mode_)
                 {
-                    /* Modulation Mode turn: set this pipe's modulation
-                     * amount for its mod page (32 steps, 0..100%,
-                     * clamped, no wrap). SHIFT+turn applies the delta
-                     * to the turned pipe, reads back its clamped value
-                     * and broadcasts it to all 4 pipes (the same
-                     * absolute-broadcast pattern as Normal Mode). No
-                     * MIDI CCs for the modulation amounts. */
-                    if(mod_page_[p] == 0)
+                    /* Modulation Mode turn: adjust the SHARED
+                     * destination's parameter for this pipe - attack
+                     * and release edit the actual envelope times (the
+                     * existing 32-step logarithmic 5 ms..10 s mapping),
+                     * the modulation amounts keep their 32-step
+                     * 0..100% range, clamped, no wrap. SHIFT+turn
+                     * applies the delta to the turned pipe and
+                     * broadcasts the clamped result to all 4 pipes
+                     * (the same absolute-broadcast pattern as Normal
+                     * Mode). No MIDI CCs for any of these. */
+                    if(shift_held_)
                     {
-                        engine.SetPipeVolModStep(
-                            p, engine.GetPipeVolModStep(p) + delta);
-                        if(shift_held_)
+                        int v;
+                        switch(mod_dest_)
                         {
-                            const int v = engine.GetPipeVolModStep(p);
-                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
-                                engine.SetPipeVolModStep(q, v);
+                            case kModDestAttack:
+                                v = BroadcastStep(
+                                    engine.GetPipeAttackStep(p),
+                                    delta,
+                                    OrganEngine::kMaxEnvSteps);
+                                for(int q = 0; q < OrganEngine::kNumPipes;
+                                    q++)
+                                    engine.SetPipeAttackStep(q, v);
+                                break;
+                            case kModDestRelease:
+                                v = BroadcastStep(
+                                    engine.GetPipeReleaseStep(p),
+                                    delta,
+                                    OrganEngine::kMaxEnvSteps);
+                                for(int q = 0; q < OrganEngine::kNumPipes;
+                                    q++)
+                                    engine.SetPipeReleaseStep(q, v);
+                                break;
+                            case kModDestVolMod:
+                                v = BroadcastStep(
+                                    engine.GetPipeVolModStep(p),
+                                    delta,
+                                    OrganEngine::kMaxModSteps);
+                                for(int q = 0; q < OrganEngine::kNumPipes;
+                                    q++)
+                                    engine.SetPipeVolModStep(q, v);
+                                break;
+                            default: /* kModDestCharMod */
+                                v = BroadcastStep(
+                                    engine.GetPipeCharModStep(p),
+                                    delta,
+                                    OrganEngine::kMaxModSteps);
+                                for(int q = 0; q < OrganEngine::kNumPipes;
+                                    q++)
+                                    engine.SetPipeCharModStep(q, v);
+                                break;
                         }
                     }
                     else
                     {
-                        engine.SetPipeCharModStep(
-                            p, engine.GetPipeCharModStep(p) + delta);
-                        if(shift_held_)
+                        switch(mod_dest_)
                         {
-                            const int v = engine.GetPipeCharModStep(p);
-                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
-                                engine.SetPipeCharModStep(q, v);
+                            case kModDestAttack:
+                                engine.SetPipeAttackStep(
+                                    p, engine.GetPipeAttackStep(p) + delta);
+                                break;
+                            case kModDestRelease:
+                                engine.SetPipeReleaseStep(
+                                    p, engine.GetPipeReleaseStep(p) + delta);
+                                break;
+                            case kModDestVolMod:
+                                engine.SetPipeVolModStep(
+                                    p, engine.GetPipeVolModStep(p) + delta);
+                                break;
+                            default: /* kModDestCharMod */
+                                engine.SetPipeCharModStep(
+                                    p, engine.GetPipeCharModStep(p) + delta);
+                                break;
                         }
                     }
                     bar_pipe_  = p;
-                    bar_page_  = mod_page_[p] == 0 ? kModBarVolume
-                                                   : kModBarCharacter;
+                    bar_page_  = kModDestBarPage[mod_dest_];
                     bar_until_ = System::GetNow() + 500;
                     continue;
                 }
@@ -943,24 +1105,6 @@ static void PollControls()
                                 cc_character_dirty_[q]
                                     = true; /* coalesced, sent in MainLoop */
                             }
-                            break;
-                        }
-                        case 2: /* attack time (no MIDI CC) */
-                        {
-                            engine.SetPipeAttackStep(
-                                p, engine.GetPipeAttackStep(p) + delta);
-                            const int v = engine.GetPipeAttackStep(p);
-                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
-                                engine.SetPipeAttackStep(q, v);
-                            break;
-                        }
-                        case 3: /* release time (no MIDI CC) */
-                        {
-                            engine.SetPipeReleaseStep(
-                                p, engine.GetPipeReleaseStep(p) + delta);
-                            const int v = engine.GetPipeReleaseStep(p);
-                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
-                                engine.SetPipeReleaseStep(q, v);
                             break;
                         }
                         default: /* level */
@@ -990,14 +1134,6 @@ static void PollControls()
                                 = engine.GetPipeCharacterStep(p);
                             cc_character_dirty_[p]
                                 = true; /* coalesced, sent in MainLoop */
-                            break;
-                        case 2: /* attack time (no MIDI CC) */
-                            engine.SetPipeAttackStep(
-                                p, engine.GetPipeAttackStep(p) + delta);
-                            break;
-                        case 3: /* release time (no MIDI CC) */
-                            engine.SetPipeReleaseStep(
-                                p, engine.GetPipeReleaseStep(p) + delta);
                             break;
                         default: /* level */
                             engine.SetPipeStep(p, engine.GetPipeStep(p) + delta);
@@ -1047,7 +1183,7 @@ static void UpdateLeds()
         pre_blink_t = now;
     }
 
-    if(preset_mode_ != kPresetNone)
+    if(preset_mode_ != kPresetNone && !mod_mode_)
     {
         /* A preset selection mode (or animation) takes over the white
          * keys; first match wins: during the SAVING/COPYING/ERASING
@@ -1118,20 +1254,46 @@ static void UpdateLeds()
             SetSmtLedFloat(white_key_led[w], r, g, b);
         }
     }
+    else if(init_holding_)
+    {
+        /* init-patch hold progress: a red bar fills the 15 white keys
+         * left to right over the 2.5 s hold (in Modulation Mode the
+         * destination overlay below redraws the black keys) */
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        int lit = static_cast<int>((now - init_hold_t_) * kNumWhiteKeys
+                                   / kInitHoldMs);
+        if(lit > kNumWhiteKeys)
+            lit = kNumWhiteKeys;
+        for(int w = 0; w < lit; w++)
+            SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
+    }
     else if(bar_pipe_ >= 0 && now < bar_until_)
     {
         const int p = bar_pipe_;
         /* value bar spans the 15 white keys only: leftmost white = 0%,
          * rightmost white = 100%. Volume bars (page-1 pipes + master) use
          * the green/orange/red position gradient; the page-2 pipe
-         * Character bar is uniformly blue, the page-3 attack bar purple,
-         * the page-4 release bar yellow, the overdrive bar uniformly
-         * red and the rotary bar uniformly purple. */
+         * Character bar is uniformly blue, the Modulation-mode attack
+         * destination bar is purple and the release destination bar
+         * yellow, the overdrive bar uniformly red and the rotary bar
+         * uniformly purple. */
         int    lit;
         BarKind kind = kBarVolume;
         if(p == kVolBar)
         {
-            if(bar_page_ == kVolBarTone)
+            if(bar_page_ == kVolBarFineTune)
+            {
+                /* volume-knob page 1, SHIFT+turn: fine tune +/-50
+                 * cents; lit = the offset in keys (0..7) from the
+                 * center white key (the custom center-out draw below) */
+                int cents = engine.GetFineTuneCents();
+                if(cents < 0)
+                    cents = -cents;
+                lit  = (cents * 7 + 25) / 50;
+                kind = kBarFineTune;
+            }
+            else if(bar_page_ == kVolBarTone)
             {
                 /* volume-knob page 2, SHIFT+turn: distortion tone
                  * percent across the 15 white keys, same red as the
@@ -1188,14 +1350,16 @@ static void UpdateLeds()
         }
         else if(bar_page_ == kModBarVolume)
         {
-            /* Modulation Mode mod-page 1: pipe volume-modulation amount */
+            /* Modulation Mode, volume-modulation destination: the
+             * pipe's volume-modulation amount */
             lit  = (engine.GetPipeVolModStep(p) * kNumWhiteKeys + 16)
                    / OrganEngine::kMaxModSteps;
             kind = kBarModVolume;
         }
         else if(bar_page_ == kModBarCharacter)
         {
-            /* Modulation Mode mod-page 2: pipe Character-modulation amt */
+            /* Modulation Mode, Character-modulation destination: the
+             * pipe's Character-modulation amount */
             lit  = (engine.GetPipeCharModStep(p) * kNumWhiteKeys + 16)
                    / OrganEngine::kMaxModSteps;
             kind = kBarModCharacter;
@@ -1208,14 +1372,16 @@ static void UpdateLeds()
         }
         else if(bar_page_ == 2)
         {
-            /* pipe page 3: attack time, 32 log-spaced steps 5 ms..10 s */
+            /* Modulation Mode, attack destination: actual attack time,
+             * 32 log-spaced steps 5 ms..10 s */
             lit  = (engine.GetPipeAttackStep(p) * kNumWhiteKeys + 16)
                    / OrganEngine::kMaxEnvSteps;
             kind = kBarAttack;
         }
         else if(bar_page_ == 3)
         {
-            /* pipe page 4: release time, 32 log-spaced steps 5 ms..10 s */
+            /* Modulation Mode, release destination: actual release
+             * time, 32 log-spaced steps 5 ms..10 s */
             lit  = (engine.GetPipeReleaseStep(p) * kNumWhiteKeys + 16)
                    / OrganEngine::kMaxEnvSteps;
             kind = kBarRelease;
@@ -1227,16 +1393,40 @@ static void UpdateLeds()
         }
         for(int i = 0; i < 25; i++)
             SetSmtLedFloat(i, 0.f, 0.f, 0.f);
-        for(int w = 0; w < lit && w < kNumWhiteKeys; w++)
+        if(kind == kBarFineTune)
         {
-            float r, g, b;
-            BarKeyColor(w, kind, r, g, b);
-            SetSmtLedFloat(white_key_led[w], r, g, b);
+            /* fine-tune bar, centered on white key 8 (index 7):
+             * exactly centered = the center key alone in green;
+             * off-center = a red span from the center key toward the
+             * offset direction (left = down in pitch, right = up),
+             * lit keys long */
+            const int center = 7;
+            const int cents  = engine.GetFineTuneCents();
+            if(cents == 0)
+            {
+                SetSmtLedFloat(white_key_led[center], 0.f, 1.f, 0.f);
+            }
+            else
+            {
+                const int lo = cents < 0 ? center - lit : center;
+                const int hi = cents < 0 ? center : center + lit;
+                for(int w = lo; w <= hi && w < kNumWhiteKeys; w++)
+                    SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
+            }
+        }
+        else
+        {
+            for(int w = 0; w < lit && w < kNumWhiteKeys; w++)
+            {
+                float r, g, b;
+                BarKeyColor(w, kind, r, g, b);
+                SetSmtLedFloat(white_key_led[w], r, g, b);
+            }
         }
     }
-    else if(shift_held_)
+    else if(shift_held_ && !mod_mode_)
     {
-        /* SHIFT preset view (NONE mode): the 15 white keys are the 15
+        /* SHIFT preset view (NONE mode, Normal Mode only): the 15 white keys are the 15
          * preset slots - filled purple, the current slot white, empty
          * off; all red with no SD card. The two octave-key hints stay
          * lit; the erase/copy/save operation LEDs are added below. */
@@ -1287,8 +1477,10 @@ static void UpdateLeds()
     /* preset operation LEDs on the three top black keys (SMT 7/8/9):
      * erase = red, copy = green, save = blue, shown while SHIFT is held
      * or a preset mode is active; during an operation only that
-     * operation's LED is lit; all off with no SD card */
-    if(shift_held_ || preset_mode_ != kPresetNone)
+     * operation's LED is lit; all off with no SD card. Normal Mode
+     * only: in Modulation Mode the destination overlay below owns every
+     * black key. */
+    if(!mod_mode_ && (shift_held_ || preset_mode_ != kPresetNone))
     {
         float er = 0.f, cp = 0.f, sv = 0.f;
         if(!preset_storage_.NoSdCard())
@@ -1309,14 +1501,35 @@ static void UpdateLeds()
         SetSmtLedFloat(9, 0.f, 0.f, sv);
     }
 
+    /* Modulation Mode's persistent black-key destination display,
+     * applied AFTER every keyboard overlay above so the value bars, the
+     * distortion-tone bar, held notes, the octave hints and any preset
+     * indicator can never overwrite it (the white keys are left to
+     * those overlays): the four destination keys glow in their
+     * destination color - the selected key at exactly 100%, the other
+     * three at exactly 75%; every other black key stays off, even while
+     * its key plays a note. */
+    if(mod_mode_)
+    {
+        for(int d = 0; d < kNumModDests; d++)
+        {
+            float r, g, b;
+            ModDestColor(d, r, g, b);
+            const float s = d == mod_dest_ ? kModDestSelected
+                                           : kModDestUnselected;
+            SetSmtLedFloat(led_map[kModDestKeySw[d]], r * s, g * s, b * s);
+        }
+        for(int i = 4; i < 10; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+    }
+
     /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
-     * Normal Mode: page 2 pipes glow blue, page 3 (attack) purple and
-     * page 4 (release) yellow - each with a brightness floor so the
-     * page stays visible at step 0; page 1 is white. Modulation Mode:
-     * mod page 1 (volume modulation) is white and mod page 2
-     * (Character modulation) is blue, brightness = 0.2 + 0.8 x amount.
-     * A muted pipe's knob LED is solid red in both modes, overriding
-     * the page color. */
+     * Normal Mode: page 2 (Character) pipes glow blue with a brightness
+     * floor so the page stays visible at step 0; page 1 (Volume) is
+     * white. Modulation Mode: all four encoders use the shared
+     * destination's color with brightness = 0.2 + 0.8 x that pipe's
+     * value for the destination parameter. A muted pipe's knob LED is
+     * solid red in both modes, overriding the page/destination color. */
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
         if(engine.GetPipeMuted(p))
@@ -1326,20 +1539,30 @@ static void UpdateLeds()
         }
         if(mod_mode_)
         {
-            if(mod_page_[p] == 0)
+            float r, g, b;
+            ModDestColor(mod_dest_, r, g, b);
+            int step, max;
+            switch(mod_dest_)
             {
-                const float s = .2f
-                                + .8f * engine.GetPipeVolModStep(p)
-                                      * (1.f / OrganEngine::kMaxModSteps);
-                SetPthLedFloat(p + 1, s, s, s); /* white: volume mod */
+                case kModDestAttack:
+                    step = engine.GetPipeAttackStep(p);
+                    max  = OrganEngine::kMaxEnvSteps;
+                    break;
+                case kModDestRelease:
+                    step = engine.GetPipeReleaseStep(p);
+                    max  = OrganEngine::kMaxEnvSteps;
+                    break;
+                case kModDestVolMod:
+                    step = engine.GetPipeVolModStep(p);
+                    max  = OrganEngine::kMaxModSteps;
+                    break;
+                default: /* kModDestCharMod */
+                    step = engine.GetPipeCharModStep(p);
+                    max  = OrganEngine::kMaxModSteps;
+                    break;
             }
-            else
-            {
-                const float s = .2f
-                                + .8f * engine.GetPipeCharModStep(p)
-                                      * (1.f / OrganEngine::kMaxModSteps);
-                SetPthLedFloat(p + 1, 0.f, 0.f, s); /* blue: Character mod */
-            }
+            const float s = .2f + .8f * step * (1.f / max);
+            SetPthLedFloat(p + 1, r * s, g * s, b * s);
             continue;
         }
         switch(pipe_page_[p])
@@ -1350,22 +1573,6 @@ static void UpdateLeds()
                                 + .8f * engine.GetPipeCharacterStep(p)
                                       * (1.f / OrganEngine::kMaxCharacterSteps);
                 SetPthLedFloat(p + 1, 0.f, 0.f, s); /* blue: Character */
-                break;
-            }
-            case 2:
-            {
-                const float s = .2f
-                                + .8f * engine.GetPipeAttackStep(p)
-                                      * (1.f / OrganEngine::kMaxEnvSteps);
-                SetPthLedFloat(p + 1, .55f * s, 0.f, s); /* purple: attack */
-                break;
-            }
-            case 3:
-            {
-                const float s = .2f
-                                + .8f * engine.GetPipeReleaseStep(p)
-                                      * (1.f / OrganEngine::kMaxEnvSteps);
-                SetPthLedFloat(p + 1, s, s, 0.f); /* yellow: release */
                 break;
             }
             default:
@@ -1424,12 +1631,18 @@ static void UpdateLeds()
         SetPthLedFloat(6, 0.f, 0.f, 0.f);
     }
 
-    /* CHOMPI/SHIFT key LED: purple while SHIFT is held with no preset
-     * mode active; blinking red once a slot is selected in SAVE_SEL,
-     * ERASE_SEL or COPY_DEST; blinking white during the SAVING, COPYING
-     * and ERASING animations; off otherwise (copy-source select has no
-     * slot yet) */
-    if(preset_mode_ == kPresetNone)
+    /* CHOMPI/SHIFT key LED: blinking white for ~1 s after the init
+     * patch applies (priority over the purple SHIFT indicator); purple
+     * while SHIFT is held with no preset mode active; blinking red once
+     * a slot is selected in SAVE_SEL, ERASE_SEL or COPY_DEST; blinking
+     * white during the SAVING, COPYING and ERASING animations; off
+     * otherwise (copy-source select has no slot yet) */
+    if(init_done_t_ != 0 && now - init_done_t_ < 1000)
+    {
+        const float w = pre_blink ? 1.f : 0.f;
+        SetPthLedFloat(0, w, w, w);
+    }
+    else if(preset_mode_ == kPresetNone)
     {
         if(shift_held_)
             SetPthLedFloat(0, .67f, 0.f, 1.f);
@@ -1617,9 +1830,9 @@ int main(void)
     for(int p = 0; p < OrganEngine::kNumPipes; p++)
     {
         pipe_page_[p]     = 0;
-        mod_page_[p]      = 0; /* boot on mod page 1 (volume modulation) */
         prev_enc_sw_[p]   = hw.button_sr.State(p);
     }
+    mod_dest_            = kModDestDefault; /* boot on volume modulation */
     vol_page_            = kVolPageMaster;
     wheel_vibrato_mode_  = false; /* boot with the wheel on rotary */
     mod_mode_            = ModModeSwitchUp(); /* settled toggle baseline */

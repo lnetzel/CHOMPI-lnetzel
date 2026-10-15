@@ -96,9 +96,11 @@ class OrganEngine
     static constexpr float kFoldbackHz     = 20000.f;
     static constexpr float kMixScale       = 1.f / 24.f;
     static constexpr int   kDefaultStep          = 16; /* 50% volume */
-    static constexpr int   kDefaultCharacterStep = 32; /* 50% character */
+    static constexpr int   kDefaultCharacterStep = 0;  /* clean sine, shaping
+                                                        * bypassed */
     static constexpr int   kDefaultDriveStep     = 0;  /* overdrive off */
-    static constexpr int   kDefaultRotaryStep    = 10; /* ~30% rotary */
+    static constexpr int   kDefaultRotaryStep    = 0;  /* rotary off (exact
+                                                        * bypass) */
     static constexpr int   kDefaultReverbMixPercent = 0; /* reverb dry */
     static constexpr int   kDefaultReverbDecayStep  = 0; /* 0.2 s decay */
     static constexpr int   kMaxReverbDecaySteps     = 100;
