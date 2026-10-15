@@ -13,6 +13,16 @@
  *   - long silence after a tail (bounded, no self-oscillation)
  *   - decay clamping/default (0.5 s at boot) and decay-time ordering
  *     (a 0.5 s tail is gone where a 20 s tail is still strong)
+ *   - stereo tank paths: a left-only impulse takes a distinguishable
+ *     path through the tank (right output exactly silent until the
+ *     cross-feedback tap reaches it, well separated after) with
+ *     decay-scaled cross-coupling (inaudible at 0.2 s, clearly audible
+ *     at 4 s)
+ *   - stereo decorrelation: identical L/R content still produces
+ *     meaningfully different L/R wet tails
+ *   - approximate L/R symmetry of the two tank paths
+ *   - strongly anti-phase stereo input at a long decay stays finite,
+ *     bounded and decaying (no runaway feedback)
  *
  *  Run: make -C firmware/chompi-organ/code/tests test
  */
@@ -47,6 +57,27 @@ static void run(PlateReverb &r, float in_l, float in_r, int n)
 /** Settle the ~10 ms mix ramp (480 samples at 48 kHz; use margin). */
 static void settle_mix(PlateReverb &r) { run(r, 0.f, 0.f, 600); }
 
+/** Impulse response helper with independent L/R impulse levels:
+ *  settles at the given mix, fires one impulse of (imp_l, imp_r),
+ *  records `n` samples of both outputs. */
+static void impulse_response_lr(PlateReverb &r, float mix, float imp_l,
+                                float imp_r, float *out_l, float *out_r,
+                                int n)
+{
+    r.SetMix(mix);
+    settle_mix(r);
+    float l, rr;
+    r.Process(imp_l, imp_r, l, rr); /* t = 0: the impulse */
+    out_l[0] = l;
+    out_r[0] = rr;
+    for(int i = 1; i < n; i++)
+    {
+        r.Process(0.f, 0.f, l, rr);
+        out_l[i] = l;
+        out_r[i] = rr;
+    }
+}
+
 static void test_silent_init_prefilled_buffer()
 {
     prefill(buf_a, 0xBEEF); /* garbage must not survive Init */
@@ -73,18 +104,7 @@ static void test_silent_init_prefilled_buffer()
 static void impulse_response(PlateReverb &r, float mix, float *out_l,
                              float *out_r, int n)
 {
-    r.SetMix(mix);
-    settle_mix(r);
-    float l, rr;
-    r.Process(1.f, 1.f, l, rr); /* t = 0: the impulse */
-    out_l[0] = l;
-    out_r[0] = rr;
-    for(int i = 1; i < n; i++)
-    {
-        r.Process(0.f, 0.f, l, rr);
-        out_l[i] = l;
-        out_r[i] = rr;
-    }
+    impulse_response_lr(r, mix, 1.f, 1.f, out_l, out_r, n);
 }
 
 static void test_repeated_init_determinism()
@@ -186,6 +206,9 @@ static void test_exact_endpoints_and_ramp()
     /* wet-only reference: mix 1 settled before any input */
     wet_ref.SetMix(1.f);
     settle_mix(wet_ref);
+    settle_mix(r); /* identical silent history, so the two tanks and
+                    * LFOs stay sample-aligned for the comparisons
+                    * below (the mix does not touch the tank) */
 
     /* r: ramp to 1 while processing the same signal; after the ~10 ms
      * ramp settles it must produce the wet-only reference BIT-EXACTLY
@@ -290,8 +313,12 @@ static void test_decay_clamping_and_default()
     printf("ok: decay clamping and default\n");
 }
 
-/** Peak |out| of the 100%-wet impulse tail inside [t0, t1] seconds. */
-static float impulse_tail_peak(float decay_s, float t0_s, float t1_s)
+/** Peak |out| of the 100%-wet tail inside [t0, t1] seconds after a 1 s
+ *  sustained stereo burst. A unit impulse is NOT a fair probe here:
+ *  the input gain is normalized by (1 - feedback) for a constant
+ *  SUSTAINED-tone wet level, so a long decay's impulse tail is tiny
+ *  and quantizes away in the 16-bit tank; organ tones are sustained. */
+static float burst_tail_peak(float decay_s, float t0_s, float t1_s)
 {
     PlateReverb r;
     r.Init(kSampleRate, buf_a);
@@ -299,7 +326,11 @@ static float impulse_tail_peak(float decay_s, float t0_s, float t1_s)
     r.SetMix(1.f);
     settle_mix(r);
     float l, rr;
-    r.Process(1.f, 1.f, l, rr); /* impulse */
+    for(int i = 0; i < 48000; i++) /* 1 s sustained 220 Hz burst */
+    {
+        const float s = .4f * sinf(i * .0288f);
+        r.Process(s, s, l, rr);
+    }
     const int n0 = static_cast<int>(t0_s * kSampleRate);
     const int n1 = static_cast<int>(t1_s * kSampleRate);
     float     peak = 0.f;
@@ -318,19 +349,176 @@ static float impulse_tail_peak(float decay_s, float t0_s, float t1_s)
 
 static void test_decay_time_ordering()
 {
-    /* 2-2.5 s window: a 0.5 s T60 tail is long gone (~1e-13), a 20 s
-     * T60 tail is still strong. Bounds are loose on purpose - they only
-     * need to separate the orders of magnitude. */
-    const float short_peak = impulse_tail_peak(.5f, 2.f, 2.5f);
-    const float long_peak  = impulse_tail_peak(20.f, 2.f, 2.5f);
-    assert(short_peak < 1e-3f);
-    assert(long_peak > .01f);
+    /* 2-2.5 s window after the burst: a 0.5 s T60 tail is long gone,
+     * a 3 s tail is faint, a 20 s tail is still present. Bounds are
+     * loose on purpose - they separate the orders of magnitude. */
+    const float short_peak = burst_tail_peak(.5f, 2.f, 2.5f);
+    const float long_peak  = burst_tail_peak(20.f, 2.f, 2.5f);
+    assert(short_peak < 2e-4f);
+    assert(long_peak > 3e-3f);
     /* monotonic in between */
-    const float mid_peak = impulse_tail_peak(3.f, 2.f, 2.5f);
+    const float mid_peak = burst_tail_peak(3.f, 2.f, 2.5f);
     assert(mid_peak > short_peak);
     assert(mid_peak < long_peak);
-    printf("ok: decay ordering (0.5s tail %.6f, 3s %.5f, 20s %.3f)\n",
+    printf("ok: decay ordering (0.5s tail %.6f, 3s %.5f, 20s %.5f)\n",
            (double)short_peak, (double)mid_peak, (double)long_peak);
+}
+
+static void test_stereo_separation_and_coupling()
+{
+    /* A left-only impulse must take a distinguishable path through the
+     * tank: it excites the left wet output directly and reaches the
+     * right only through the tank's cross-feedback. */
+    const int n = 48000; /* 1 s */
+    static float ir_l[48000], ir_r[48000];
+
+    /* Boot decay (0.2 s): tiny feedback = strong separation. Until the
+     * cross-feedback tap delay elapses (~93 ms) the right output is
+     * EXACTLY silent (no path to it exists yet); afterwards it stays
+     * at the noise floor (measured: peak_l ~0.023, peak_r ~3e-6). */
+    PlateReverb r;
+    r.Init(kSampleRate, buf_a);
+    impulse_response_lr(r, 1.f, 1.f, 0.f, ir_l, ir_r, n);
+    float peak_l = 0.f, peak_r = 0.f;
+    for(int i = 0; i < n; i++)
+    {
+        assert(isfinite(ir_l[i]));
+        assert(isfinite(ir_r[i]));
+        if(i < 4000) /* ~83 ms: before any cross-feedback can arrive */
+            assert(ir_r[i] == 0.f);
+        if(fabsf(ir_l[i]) > peak_l)
+            peak_l = fabsf(ir_l[i]);
+        if(fabsf(ir_r[i]) > peak_r)
+            peak_r = fabsf(ir_r[i]);
+    }
+    assert(peak_l > .01f);
+    assert(peak_r < 1e-3f);          /* right stays at the noise floor */
+    assert(peak_l > 50.f * peak_r); /* clearly separated */
+
+    /* Longer decay (4 s): the cross-feedback now carries clearly
+     * audible energy to the unexcited side (controlled coupling).
+     * Measured in the first 200 ms: peak_l ~0.0072, peak_r ~0.0021. */
+    PlateReverb s;
+    s.Init(kSampleRate, buf_b);
+    s.SetDecaySeconds(4.f);
+    impulse_response_lr(s, 1.f, 1.f, 0.f, ir_l, ir_r, n);
+    peak_l = peak_r = 0.f;
+    for(int i = 0; i < n / 5; i++) /* first 200 ms */
+    {
+        if(fabsf(ir_l[i]) > peak_l)
+            peak_l = fabsf(ir_l[i]);
+        if(fabsf(ir_r[i]) > peak_r)
+            peak_r = fabsf(ir_r[i]);
+    }
+    assert(peak_r > 1e-3f);  /* coupling is audible at this decay */
+    assert(peak_l > peak_r); /* the excited side still dominates early */
+    printf("ok: stereo separation and cross-coupling\n");
+}
+
+static void test_stereo_decorrelation()
+{
+    /* Identical L/R content must still produce meaningfully DIFFERENT
+     * L/R wet tails: the diffuser chains use different lengths per
+     * channel and the two tank sides/LFOs differ, so a centered signal
+     * does not collapse to a mono-sounding wet field. */
+    const int n = 48000;
+    static float ir_l[48000], ir_r[48000];
+    PlateReverb r;
+    r.Init(kSampleRate, buf_a);
+    r.SetDecaySeconds(4.f);
+    impulse_response(r, 1.f, ir_l, ir_r, n);
+
+    float max_diff = 0.f, diff_energy = 0.f, ref_energy = 0.f;
+    for(int i = 0; i < n; i++)
+    {
+        const float d = ir_l[i] - ir_r[i];
+        if(fabsf(d) > max_diff)
+            max_diff = fabsf(d);
+        diff_energy += d * d;
+        ref_energy += ir_l[i] * ir_l[i];
+    }
+    assert(max_diff > 1e-3f);
+    assert(diff_energy > .01f * ref_energy);
+    printf("ok: stereo decorrelation (max diff %.4f, diff/ref energy "
+           "%.3f)\n",
+           (double)max_diff, (double)(diff_energy / ref_energy));
+}
+
+static void test_channel_symmetry()
+{
+    /* The two tank paths are voiced slightly differently (on purpose,
+     * for decorrelation) but must be balanced: a left-only impulse's
+     * left-tail energy and a right-only impulse's right-tail energy
+     * agree within a wide tolerance. */
+    const int n = 48000;
+    static float ir_l[48000], ir_r[48000];
+
+    PlateReverb r;
+    r.Init(kSampleRate, buf_a);
+    impulse_response_lr(r, 1.f, 1.f, 0.f, ir_l, ir_r, n);
+    float e_l = 0.f;
+    for(int i = 0; i < n; i++)
+        e_l += ir_l[i] * ir_l[i];
+
+    PlateReverb s;
+    s.Init(kSampleRate, buf_b);
+    impulse_response_lr(s, 1.f, 0.f, 1.f, ir_l, ir_r, n);
+    float e_r = 0.f;
+    for(int i = 0; i < n; i++)
+        e_r += ir_r[i] * ir_r[i];
+
+    const float ratio = e_l / e_r;
+    assert(ratio > .25f);
+    assert(ratio < 4.f);
+    printf("ok: channel symmetry (L/R tail energy ratio %.3f)\n",
+           (double)ratio);
+}
+
+static void test_antiphase_stereo_bounded()
+{
+    /* Strongly anti-correlated stereo input (opposite-phase sines) at
+     * a long decay: everything stays finite, bounded and decaying -
+     * no runaway feedback or non-finite samples. */
+    PlateReverb r;
+    r.Init(kSampleRate, buf_a);
+    r.SetDecaySeconds(2.f);
+    r.SetMix(1.f);
+    settle_mix(r);
+
+    float peak_first = 0.f, peak_last = 0.f;
+    float l = 0.f, rr = 0.f;
+    for(int i = 0; i < 2 * 48000; i++) /* 2 s of anti-phase input */
+    {
+        const float s = .4f * sinf(i * .03f);
+        r.Process(s, -s, l, rr);
+        assert(isfinite(l));
+        assert(isfinite(rr));
+        assert(fabsf(l) <= 1.5f);
+        assert(fabsf(rr) <= 1.5f);
+        if(i >= 2 * 48000 - 4800) /* last 100 ms of the driven part */
+        {
+            if(fabsf(l) > peak_first)
+                peak_first = fabsf(l);
+            if(fabsf(rr) > peak_first)
+                peak_first = fabsf(rr);
+        }
+    }
+    for(int i = 0; i < 3 * 48000; i++) /* 3 s of tail */
+    {
+        r.Process(0.f, 0.f, l, rr);
+        assert(isfinite(l));
+        assert(isfinite(rr));
+        if(i >= 3 * 48000 - 24000) /* final 500 ms */
+        {
+            if(fabsf(l) > peak_last)
+                peak_last = fabsf(l);
+            if(fabsf(rr) > peak_last)
+                peak_last = fabsf(rr);
+        }
+    }
+    assert(peak_first > .01f);              /* it actually reverberated */
+    assert(peak_last < .25f * peak_first);  /* and it decays */
+    printf("ok: antiphase stereo bounded and decaying\n");
 }
 
 int main()
@@ -344,6 +532,10 @@ int main()
     test_long_silence_no_runaway();
     test_decay_clamping_and_default();
     test_decay_time_ordering();
+    test_stereo_separation_and_coupling();
+    test_stereo_decorrelation();
+    test_channel_symmetry();
+    test_antiphase_stereo_bounded();
     printf("ALL PLATE REVERB TESTS PASSED\n");
     return 0;
 }

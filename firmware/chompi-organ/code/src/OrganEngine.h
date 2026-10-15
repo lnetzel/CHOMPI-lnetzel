@@ -37,9 +37,13 @@
  *  - Rotary speaker: 60s Leslie-style mono->stereo stage after the
  *    distortion (800 Hz crossover, Doppler horn + AM drum, two virtual
  *    mics 180 deg apart); 0% is an exact bypass (DSP-6)
- *  - Plate reverb: compact vintage-1960s-inspired plate after the
- *    rotary (PlateReverb.h; Griesinger/Dattorro tank adapted from
- *    chompi-wave's reverb). Linear complementary dry/wet crossfade with
+ *  - Plate reverb: stereo-input vintage-1960s-inspired plate after
+ *    the rotary (PlateReverb.h; Griesinger/Dattorro tank adapted from
+ *    chompi-wave's reverb, reworked stereo-in): each channel excites
+ *    its own diffused tank side, so the rotary's left/right
+ *    differences survive in the wet; the tank's decay-scaled
+ *    cross-feedback progressively couples the channels into one
+ *    diffuse field. Linear complementary dry/wet crossfade with
  *    a ~10 ms ramp: 0% mix is bit-exact dry, 100% is wet only. Decay is
  *    adjustable 0.2-20 s in 100 log-spaced steps (boots at 0.2 s). The
  *    tank runs continuously (live tails, no stale state); the 64 KiB

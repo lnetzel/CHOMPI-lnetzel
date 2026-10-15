@@ -199,13 +199,18 @@ while turning. The wet level and tank headroom are normalized across the
 range, so the decay changes the tail duration, not the loudness.
 
 The plate is a fixed voicing apart from the decay (no tone/predelay
-controls): a compact Griesinger/Dattorro tank adapted from chompi-wave's
-reverb, voiced dark (~4.5 kHz damping) with subtle slow modulation and a
-~120 Hz low-cut on the tank send. Plate-inspired; not an accurate
-physical EMT emulation. The tank runs continuously, so tails ring out
-naturally after note release and survive page changes; turning the
-master volume to zero silences dry and wet alike (the reverb sits before
-the master gain).
+controls): a stereo-input Griesinger/Dattorro tank adapted from
+chompi-wave's reverb. Each channel gets its own send and allpass
+diffuser chain (different lengths per channel) and excites its own side
+of the tank, so the rotary speaker's left/right movement survives in
+the reverb; the tank's decay-scaled cross-feedback then progressively
+couples the two sides into one diffuse field (well separated at short
+decays, blended at long ones). Voiced dark (~4.5 kHz damping) with
+subtle slow modulation and a ~120 Hz low-cut per send. Plate-inspired;
+not an accurate physical EMT emulation. The tank runs continuously, so
+tails ring out naturally after note release and survive page changes;
+turning the master volume to zero silences dry and wet alike (the
+reverb sits before the master gain).
 
 The mix and decay boot at 0% / 0.2 s and are stored in the SD-card
 presets; they have no MIDI CC.
@@ -358,8 +363,11 @@ DC, 2nd/3rd harmonic content, amplitude bounds, and high-frequency
 anti-alias suppression. The reverb tests cover deterministic
 initialization (garbage-prefilled delay buffer), bounded decaying
 impulse response, mix clamping, ramp convergence/retargeting, bit-exact
-dry at 0%, wet-only 100% against a reference instance, and long-silence
-stability. The distortion tests cover the fuzz's tone control (endpoints,
+dry at 0%, wet-only 100% against a reference instance, long-silence
+stability, and the stereo tank behavior (distinguishable L/R paths with
+decay-scaled cross-coupling, decorrelation of identical L/R content,
+approximate L/R symmetry, and bounded anti-phase response). The
+distortion tests cover the fuzz's tone control (endpoints,
 monotonic darkening, click-free ramps), a bit-exact regression of the
 two-stage low-pass cascade against an independent reference
 implementation, the measured frequency response against the analytical

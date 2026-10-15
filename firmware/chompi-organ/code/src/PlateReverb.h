@@ -25,35 +25,43 @@
 // -----------------------------------------------------------------------------
 //
 /** @file PlateReverb.h
- *  @brief Compact vintage-1960s-inspired plate reverb for CHOMPI ORGAN.
+ *  @brief Stereo-input vintage-1960s-inspired plate reverb for
+ *  CHOMPI ORGAN.
  *
- *  Adapted from chompi-wave's vendored reverb (see
- *  ../../../chompi-wave/code/src/reverb.h): the Griesinger topology
- *  described in the Dattorro paper - 4 allpass diffusers on the input,
- *  then a cross-feedback tank of 2x (2 allpasses + 1 long delay), with
- *  slow LFO modulation of the two long-delay taps. Plate-inspired; the
- *  decay time is user-adjustable (0.2-20 s), the rest of the voicing is
- *  fixed. Not a claim of accurate physical EMT emulation.
+ *  Griesinger topology described in the Dattorro paper, adapted from
+ *  chompi-wave's vendored reverb (see
+ *  ../../../chompi-wave/code/src/reverb.h) and reworked stereo-in:
+ *  each input channel gets its own low-cut send and its own chain of
+ *  4 allpass diffusers with different lengths per channel (left
+ *  150/214/319/527, right 163/229/347/499) for decorrelation, then
+ *  excites its own side of a cross-feedback tank of 2x (2 allpasses +
+ *  1 long delay). The tank's cross-feedback - each side's long delay
+ *  feeds the opposite side through the decay-scaled, LFO-modulated
+ *  tap - provides the controlled inter-channel coupling: at short
+ *  decays the two sides stay well separated, at longer decays they
+ *  progressively blend into one diffuse field. Plate-inspired; the
+ *  decay time is user-adjustable (0.2-20 s), the rest of the voicing
+ *  is fixed. Not a claim of accurate physical EMT emulation.
  *
- *  Differences from the WAVE original:
+ *  Properties:
  *   - The 64 KiB delay buffer is caller-owned (ORGAN keeps it in SDRAM,
  *     out of the tight SRAM regions); the engine/filter/control state
  *     stays here in normal SRAM.
  *   - Init() explicitly initializes ALL state: delay memory, write
- *     pointer, LFOs, damping histories, input low-cut state, and the
- *     mix/ramp state (the old code left these implicit).
+ *     pointer, LFOs, damping histories, input low-cut states, and the
+ *     mix/ramp state.
  *   - The wet tank is processed independently and mixed outside the
  *     engine: out = dry * (1 - mix) + wet * mix, a linear complementary
  *     crossfade with exact endpoints (0% is bit-exact dry, 100% is wet
- *     only). The WAVE original blended inside Process with `amount`.
+ *     only).
  *   - The mix is ramped (~10 ms, sample-rate derived) with retargeting
  *     from the current value and exact-endpoint snaps.
- *   - Decay (T60) maps seconds to the tank loop feedback, and the input
- *     gain scales with (1 - feedback) so the 16-bit tank keeps constant
- *     headroom - and a constant sustained-tone wet level - across the
- *     whole decay range.
- *   - A ~120 Hz one-pole high-pass on the mono tank send keeps organ low
- *     end from building up/rumbling inside the 16-bit tank.
+ *   - Decay (T60) maps seconds to the tank loop feedback, and the
+ *     per-channel input gain scales with (1 - feedback) so the 16-bit
+ *     tank keeps constant headroom - and a constant sustained-tone wet
+ *     level - across the whole decay range.
+ *   - A ~120 Hz one-pole high-pass per send keeps organ low end from
+ *     building up/rumbling inside the 16-bit tank.
  *
  *  The tank ALWAYS runs (even at 0% mix or with idle voices), so tails
  *  stay live and no stale state accumulates. No heap allocation, no
@@ -129,7 +137,7 @@ class PlateReverb
 
         lp_decay_1_ = 0.f;
         lp_decay_2_ = 0.f;
-        hp_state_   = 0.f;
+        hp_state_l_ = hp_state_r_ = 0.f;
         hp_coeff_
             = 1.f - expf(-6.283185307179586f * kLowCutHz / sample_rate);
 
@@ -174,8 +182,12 @@ class PlateReverb
     float GetDecaySeconds() const { return decay_seconds_; }
 
     /** Process one stereo sample. Inputs are taken by value, so the
-     *  outputs may alias the inputs (in-place use). The tank runs
-     *  unconditionally; only the crossfade is gated by the mix. */
+     *  outputs may alias the inputs (in-place use). The stereo input is
+     *  preserved through the tank: each channel excites its own tank
+     *  side and the cross-feedback blends them progressively, so the
+     *  rotary speaker's left/right differences survive in the wet.
+     *  The tank runs unconditionally; only the crossfade is gated by
+     *  the mix. */
     inline void Process(float in_l, float in_r, float &out_l, float &out_r)
     {
         /* advance the mix ramp one sample. Snap when within one
@@ -191,30 +203,40 @@ class PlateReverb
         else
             mix_ = mix_target_;
 
-        /* Griesinger/Dattorro tank, as vendored in WAVE's reverb.h:
-         * 4 AP diffusers on the input, then a loop of 2x (2AP + 1Delay);
-         * slow LFO modulation of the long-delay taps. */
+        /* Stereo Griesinger/Dattorro plate: per-channel low-cut send +
+         * 4 allpass diffusers (different lengths per channel), then a
+         * cross-feedback tank of 2x (2AP + 1Delay) with slow LFO
+         * modulation of the long-delay cross taps. Total delay memory
+         * 22855 samples < kDelayBufferSize. */
         typedef E::Reserve<150,
             E::Reserve<214,
                 E::Reserve<319,
                     E::Reserve<527,
-                        E::Reserve<2182,
-                            E::Reserve<2690,
-                                E::Reserve<4501,
-                                    E::Reserve<2525,
-                                        E::Reserve<2197,
-                                            E::Reserve<6312>>>>>>>>>>
+                        E::Reserve<163,
+                            E::Reserve<229,
+                                E::Reserve<347,
+                                    E::Reserve<499,
+                                        E::Reserve<2182,
+                                            E::Reserve<2690,
+                                                E::Reserve<4501,
+                                                    E::Reserve<2525,
+                                                        E::Reserve<2197,
+                                                            E::Reserve<6312>>>>>>>>>>>>>>
             Memory;
-        E::DelayLine<Memory, 0> ap1;
-        E::DelayLine<Memory, 1> ap2;
-        E::DelayLine<Memory, 2> ap3;
-        E::DelayLine<Memory, 3> ap4;
-        E::DelayLine<Memory, 4> dap1a;
-        E::DelayLine<Memory, 5> dap1b;
-        E::DelayLine<Memory, 6> del1;
-        E::DelayLine<Memory, 7> dap2a;
-        E::DelayLine<Memory, 8> dap2b;
-        E::DelayLine<Memory, 9> del2;
+        E::DelayLine<Memory, 0>  ap1l;
+        E::DelayLine<Memory, 1>  ap2l;
+        E::DelayLine<Memory, 2>  ap3l;
+        E::DelayLine<Memory, 3>  ap4l;
+        E::DelayLine<Memory, 4>  ap1r;
+        E::DelayLine<Memory, 5>  ap2r;
+        E::DelayLine<Memory, 6>  ap3r;
+        E::DelayLine<Memory, 7>  ap4r;
+        E::DelayLine<Memory, 8>  dap1a;
+        E::DelayLine<Memory, 9>  dap1b;
+        E::DelayLine<Memory, 10> del1;
+        E::DelayLine<Memory, 11> dap2a;
+        E::DelayLine<Memory, 12> dap2b;
+        E::DelayLine<Memory, 13> del2;
         typename E::Context c;
 
         const float kap = kDiffusion;
@@ -225,27 +247,39 @@ class PlateReverb
         float lp_2 = lp_decay_2_;
 
         float wet_l, wet_r;
-        float apout = 0.f;
+        float apout_l, apout_r;
         engine_.Start(&c);
 
-        /* normalized mono send, low-cut to keep LF rumble out of the
-         * 16-bit tank */
-        c.Read(.5f * (in_l + in_r), input_gain_);
-        c.Hp(hp_state_, hp_coeff_);
+        /* left send: normalized, low-cut to keep LF rumble out of the
+         * 16-bit tank, diffused through 4 allpasses */
+        c.Read(in_l, input_gain_);
+        c.Hp(hp_state_l_, hp_coeff_);
+        c.Read(ap1l TAIL, kap);
+        c.WriteAllPass(ap1l, -kap);
+        c.Read(ap2l TAIL, kap);
+        c.WriteAllPass(ap2l, -kap);
+        c.Read(ap3l TAIL, kap);
+        c.WriteAllPass(ap3l, -kap);
+        c.Read(ap4l TAIL, kap);
+        c.WriteAllPass(ap4l, -kap);
+        c.Write(apout_l);
 
-        /* diffuse through 4 allpasses */
-        c.Read(ap1 TAIL, kap);
-        c.WriteAllPass(ap1, -kap);
-        c.Read(ap2 TAIL, kap);
-        c.WriteAllPass(ap2, -kap);
-        c.Read(ap3 TAIL, kap);
-        c.WriteAllPass(ap3, -kap);
-        c.Read(ap4 TAIL, kap);
-        c.WriteAllPass(ap4, -kap);
-        c.Write(apout);
+        /* right send: same voicing, different diffuser lengths */
+        c.Load(in_r * input_gain_);
+        c.Hp(hp_state_r_, hp_coeff_);
+        c.Read(ap1r TAIL, kap);
+        c.WriteAllPass(ap1r, -kap);
+        c.Read(ap2r TAIL, kap);
+        c.WriteAllPass(ap2r, -kap);
+        c.Read(ap3r TAIL, kap);
+        c.WriteAllPass(ap3r, -kap);
+        c.Read(ap4r TAIL, kap);
+        c.WriteAllPass(ap4r, -kap);
+        c.Write(apout_r);
 
-        /* main reverb loop, side 1 -> left wet */
-        c.Load(apout);
+        /* main reverb loop, side 1 -> left wet (cross-fed from the
+         * right side's long delay) */
+        c.Load(apout_l);
         c.Interpolate(del2, 6261.f, daisysp::LFO_2, 50.f, krt);
         c.Lp(lp_1, klp);
         c.Read(dap1a TAIL, -kap);
@@ -255,8 +289,8 @@ class PlateReverb
         c.Write(del1, 2.0f);
         c.Write(wet_l, 0.0f);
 
-        /* side 2 -> right wet */
-        c.Load(apout);
+        /* side 2 -> right wet (cross-fed from the left side) */
+        c.Load(apout_r);
         c.Interpolate(del1, 4460.f, daisysp::LFO_1, 40.f, krt);
         c.Lp(lp_2, klp);
         c.Read(dap2a TAIL, kap);
@@ -284,7 +318,8 @@ class PlateReverb
 
     float lp_decay_1_; /**< tank damping histories */
     float lp_decay_2_;
-    float hp_state_;   /**< tank-send low-cut state */
+    float hp_state_l_; /**< per-channel tank-send low-cut states */
+    float hp_state_r_;
     float hp_coeff_;
 
     float mix_;        /**< current (ramped) mix */
