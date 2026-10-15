@@ -180,7 +180,8 @@ before the plate reverb, so the leveled level also feeds the reverb. The
 fuzz is a hard limiter - its output level is nearly constant at high
 drive - so a fixed trim cannot match every registration: instead, the
 dry and fuzzed signal levels are measured per audio block, smoothed over
-~50 ms, and the fuzzed level is matched down to the dry level (never
+~50 ms, and the fuzzed level is matched down to just above the dry
+level (+1.5 dB headroom, so the damping reduces that much less; never
 boosted, never more than -30 dB, exactly unity for the clean sound).
 Quiet single notes get a deep trim, loud full chords get barely any;
 clean and distorted sounds keep the same power. The trim is folded
@@ -336,16 +337,45 @@ output pairs. Character 0 exactly bypasses shaping; the clean-sine
 engine is bit-identical to the previous firmware's sine-only sound.
 Reverb 0% is bit-exact dry; vibrato depth 0 is an exact bypass.
 
-## Building
+## Building on Windows
 
-ARM GNU 10.3-2021.10 toolchain, BOOT_SRAM app type:
+You need:
+
+- **MSYS2** (https://www.msys2.org) for a shell and GNU Make.
+- **Arm GNU Toolchain 10.3-2021.10** (`arm-none-eabi-gcc` 10.3.1), installed to
+  `C:\armgnu\10.3-2021.10`. Use exactly this version: the prebuilt libraries
+  and the SRAM budget are tuned to it, and newer compilers can overflow SRAM.
+- The `chompi-wave` folder next to this one. This project reuses its libDaisy
+  and DaisySP libraries and coreJSON sources (via relative paths), plus the
+  reverb's `fx_engine.h`.
+
+Open an **MSYS2 UCRT64** shell, then install Make once:
 
 ```sh
-make -C firmware/chompi-organ/code/src DEBUG=0 OPT=-O3
+pacman -S --needed make
 ```
 
-Output: `code/src/build/CHOMPI_ORGAN_1.0.bin` (copy to the SD card root to
-install; do not flash the bootloader).
+In each new shell, put the toolchain on the `PATH`, then build from
+`code/src`:
+
+```sh
+export PATH="/c/armgnu/10.3-2021.10/bin:$PATH"
+cd /path/to/firmware/chompi-organ/code/src
+make check-toolchain   # prints GCC 10.3.1 if the toolchain is right
+make -j4 DEBUG=0 OPT=-O3
+```
+
+The output is `code/src/build/CHOMPI_ORGAN_1.0.bin` (BOOT_SRAM app type). The
+build links the prebuilt `../chompi-wave/code/libs/libDaisy/build/libdaisy.a`
+and `../chompi-wave/code/libs/DaisySP/build/libdaisysp.a`; if those are
+missing, run `make` once in `../chompi-wave/code/libs/libDaisy` and
+`../chompi-wave/code/libs/DaisySP` first.
+
+To install it, copy `CHOMPI_ORGAN_1.0.bin` to the root of the SD card
+(deleting any other `.bin`), put the card in CHOMPI and power on; do not
+flash the bootloader. If the board has never had the CHOMPI bootloader,
+install it first as described in the
+[bootloader guide](../chompi-bootloader-v6.4-beta/README.md).
 
 ## Tests
 
@@ -373,7 +403,7 @@ two-stage low-pass cascade against an independent reference
 implementation, the measured frequency response against the analytical
 digital cascade magnitude (2-4 kHz roll-off at 48 kHz and 32 kHz),
 exact dry bypass at every tone, and the input-referenced fuzz output
-leveling (dry-matched loudness, -30 dB floor). The drift-modulator tests cover the sliding-window math
+leveling (dry-matched loudness with +1.5 dB headroom, -30 dB floor). The drift-modulator tests cover the sliding-window math
 (including the amount-0 exact-center guarantee), the 2.5-10 s random
 half durations and 5-20 s cycles, per-block continuity, modulator
 independence across the 8 seeds, and fixed-seed determinism at 48 kHz

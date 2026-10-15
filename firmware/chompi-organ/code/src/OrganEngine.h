@@ -29,8 +29,9 @@
  *    PER-STAGE cutoff, so the combined -3 dB point sits lower, and
  *    tone 100 is intentionally darker than the historical single-pole
  *    Fuzz. The tone is saved in the SD-card presets (FR-4b). An input-referenced output leveling (per-
- *  block RMS measurement, ~50 ms smoothing, trim = dry level / fuzzed
- *  level, clamped <= 1 and floored at -30 dB), folded through the
+ *  block RMS measurement, ~50 ms smoothing, trim = (dry level + 1.5 dB
+ *  headroom) / fuzzed level, clamped <= 1 and floored at -30 dB),
+ *  folded through the
  *    live wet amount, is applied after the rotary and before the plate
  *    reverb, so the reverb also receives the leveled level (no user
  *    control)
@@ -524,7 +525,9 @@ class OrganEngine
     {
         /* B4: the distortion gain/normalization only depend on the
          * drive target, so compute them once per block instead of a
-         * divide per sample. drive_ still slews per sample for
+         * divide per sample; the live gains ramp to the block targets
+         * over ~10 ms inside Distortion, so encoder ticks glide
+         * instead of stepping. drive_ still slews per sample for
          * a click-free bypass. */
         distortion_.PrepareBlock(drive_target_);
 
@@ -692,8 +695,9 @@ class OrganEngine
             float out_l, out_r;
             rotary_.Process(out_sig, out_l, out_r);
             /* Input-referenced FUZZ output leveling: servo-matches the
-             * fuzzed level down to the measured dry level (per-block
-             * RMS, ~50 ms smoothing, clamped <= 1, floored at -30 dB),
+             * fuzzed level down to just above the measured dry level
+             * (+1.5 dB headroom; per-block RMS, ~50 ms smoothing,
+             * clamped <= 1, floored at -30 dB),
              * so the fuzzed sound keeps the dry sound's power at any
              * registration or polyphony - dry signal and reverb send
              * alike, no user control. Folded through the live wet

@@ -43,7 +43,10 @@
  *
  *  Per-block gain and normalization are computed in PrepareBlock()
  *  (called once per audio block from OrganEngine::Prepare, B4-style) -
- *  no expensive coefficient work inside the sample loop.
+ *  no expensive coefficient work inside the sample loop. The live
+ *  gains ramp linearly toward those block targets over ~10 ms per
+ *  sample (exact endpoint snap), so a drive-encoder tick glides
+ *  instead of stepping the gain audibly.
  *
  *  Header-only, no MCU/Daisy dependencies: native-testable.
  */
@@ -60,6 +63,10 @@ class Distortion
     /** Finite linear ramp lengths, sample-rate derived (~10 ms). */
     static constexpr float kWetRampSeconds  = .010f;
     static constexpr float kToneRampSeconds = .010f;
+    /** Live pre-gain/post-normalization glide toward their per-block
+     *  targets over ~10 ms, so a single drive-encoder tick never steps
+     *  the gain audibly. */
+    static constexpr float kGainRampSeconds = .010f;
 
     /** Fuzz voicing (initial values): pre-gain 1..128; the post
      *  low-pass PER-STAGE cutoff is swept by the tone control from
@@ -76,22 +83,30 @@ class Distortion
      *  registration and polyphony. Instead, the per-block RMS of the
      *  dry distortion input and of the untrimmed fuzz output is
      *  measured, smoothed ~50 ms, and the trim servo-matches the fuzzed
-     *  level down to the dry level: trim = in_rms / out_rms, clamped
-     *  to <= 1 (never boosts, never touches the clean sound) and
-     *  floored at -30 dB. At drive 0 the output IS the input, so the
-     *  ratio is exactly 1: exact unity, exact bypass. Applied by
+     *  level down to just above the dry level: trim = kLevelHeadroom *
+     *  in_rms / out_rms, clamped to <= 1 (never boosts, never touches
+     *  the clean sound) and floored at -30 dB. The +1.5 dB headroom
+     *  lets the fuzz sit slightly hotter than the dry sound, so the
+     *  damping reduces ~1.5 dB less than an exact loudness match. At
+     *  drive 0 the output IS the input, so the clamped ratio is
+     *  exactly 1: exact unity, exact bypass. Applied by
      *  OrganEngine after the rotary and before the plate reverb, so
      *  the leveled level also feeds the reverb; Process() output and
      *  all shaping/filtering are unchanged, and there is no user
      *  control. */
     static constexpr float kLevelFloor         = 0.0316f; /* -30 dB */
     static constexpr float kLevelSmoothSeconds = .050f;
+    /** Headroom on the leveling servo target: the fuzzed level is
+     *  matched to the dry level RAISED by this many dB. */
+    static constexpr float kLevelHeadroomDb    = 1.5f;
+    static constexpr float kLevelHeadroom      = 1.1885022274f; /* 10^(1.5/20) */
 
     void Init(float sample_rate)
     {
         sample_rate_      = sample_rate;
         wet_ramp_inc_     = 1.f / (kWetRampSeconds * sample_rate);
         tone_ramp_inc_    = 1.f / (kToneRampSeconds * sample_rate);
+        gain_ramp_per_sample_ = 1.f / (kGainRampSeconds * sample_rate);
         tone_percent_     = 100; /* boot default: 10 kHz per stage */
         fuzz_lp_c_        = ToneCoeff(100); /* 10 kHz expression */
         fuzz_lp_c_target_ = fuzz_lp_c_;
@@ -99,6 +114,10 @@ class Distortion
         drive_target_     = 0.f;
         fuzz_lp_          = 0.f;
         fuzz_lp2_         = 0.f;
+        /* live gains start AT the drive-0 targets: no boot glide */
+        g_fuzz_    = g_fuzz_target_   = 1.f;
+        post_fuzz_ = post_fuzz_target_ = kRefLevel / FuzzClip(kRefLevel);
+        g_fuzz_inc_ = post_fuzz_inc_  = 0.f;
         level_in_acc_ = level_out_acc_ = 0.f;
         level_count_                   = 0;
         in_level_     = out_level_     = 0.f;
@@ -131,15 +150,34 @@ class Distortion
         drive_target_ = drive_target < 0.f ? 0.f
                                            : (drive_target > 1.f ? 1.f
                                                                  : drive_target);
-        const float d = drive_target_;
-        g_fuzz_    = 1.f + d * d * kFuzzGainSpan;
-        post_fuzz_ = kRefLevel / FuzzClip(kRefLevel * g_fuzz_);
+        const float d             = drive_target_;
+        const float g_fuzz_new    = 1.f + d * d * kFuzzGainSpan;
+        const float post_fuzz_new = kRefLevel
+                                    / FuzzClip(kRefLevel * g_fuzz_new);
+        /* Retarget the per-sample gain ramps only when the block
+         * target actually changed (an encoder tick): the live values
+         * glide linearly from wherever they are over ~10 ms with an
+         * exact endpoint snap, so no tick steps the gain audibly;
+         * unchanged targets leave a running ramp untouched. */
+        if(g_fuzz_new != g_fuzz_target_)
+        {
+            g_fuzz_target_ = g_fuzz_new;
+            g_fuzz_inc_ = fabsf(g_fuzz_new - g_fuzz_)
+                          * gain_ramp_per_sample_;
+        }
+        if(post_fuzz_new != post_fuzz_target_)
+        {
+            post_fuzz_target_ = post_fuzz_new;
+            post_fuzz_inc_ = fabsf(post_fuzz_new - post_fuzz_)
+                             * gain_ramp_per_sample_;
+        }
 
         /* Input-referenced output leveling, once per block (no per-
          * sample transcendental work): convert the accumulated squares
          * to block RMS, smooth ~50 ms with a per-block one-pole (about
          * four cycles of the lowest organ fundamental - stable, no
-         * pumping), then servo the trim toward in_rms / out_rms,
+         * pumping), then servo the trim toward kLevelHeadroom *
+         * in_rms / out_rms (the dry level plus ~1.5 dB headroom),
          * clamped to [kLevelFloor, 1]. Near silence the fuzz output is
          * near-silent too - hold the current trim rather than dividing
          * noise by noise. */
@@ -157,7 +195,7 @@ class Distortion
             out_level_ += a * (out_rms - out_level_);
             if(out_level_ > 1e-5f)
             {
-                float ratio = in_level_ / out_level_;
+                float ratio = kLevelHeadroom * in_level_ / out_level_;
                 ratio       = ratio > 1.f ? 1.f : ratio;
                 level_trim_ = ratio < kLevelFloor ? kLevelFloor : ratio;
             }
@@ -175,6 +213,11 @@ class Distortion
         wet_fuzz_  = RampToward(wet_fuzz_, wet_target, wet_ramp_inc_);
         fuzz_lp_c_ = RampToward(fuzz_lp_c_, fuzz_lp_c_target_,
                                 tone_ramp_inc_);
+        /* glide the live gains toward their per-block targets (~10 ms,
+         * exact endpoint snap): encoder ticks never step the gain */
+        g_fuzz_    = RampToward(g_fuzz_, g_fuzz_target_, g_fuzz_inc_);
+        post_fuzz_ = RampToward(post_fuzz_, post_fuzz_target_,
+                                post_fuzz_inc_);
         const float wet = FuzzFiltered(FuzzShaped(in));
         const float out = in + wet_fuzz_ * (wet - in);
         /* leveling followers: accumulate dry-in and UNTRIMMED fuzz-out
@@ -285,7 +328,10 @@ class Distortion
     float        fuzz_lp_c_, fuzz_lp_c_target_;
     float        wet_fuzz_;      /* wet<->dry crossfade state */
     float        drive_target_;
-    float        g_fuzz_, post_fuzz_;
+    float        g_fuzz_, post_fuzz_;               /* live, ramped */
+    float        g_fuzz_target_, post_fuzz_target_; /* per-block aims */
+    float        g_fuzz_inc_, post_fuzz_inc_;       /* per-sample steps */
+    float        gain_ramp_per_sample_; /* 1 / ramp length in samples */
     float        fuzz_lp_;  /* Fuzz filter stage-1 state */
     float        fuzz_lp2_; /* Fuzz filter stage-2 state (both retained
                              * across tone changes) */

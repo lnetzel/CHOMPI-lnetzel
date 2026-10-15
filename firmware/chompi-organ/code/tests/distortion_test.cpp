@@ -27,12 +27,16 @@
  *   - tone coefficient ramp: finite ~10 ms settlement with exact
  *     endpoint snap, bounded per-sample movement, and mid-ramp
  *     retargeting continuing from the live coefficient (48 kHz/32 kHz)
+ *   - drive-gain ramp: pre-gain and post-normalization glide toward
+ *     their per-block targets over ~10 ms with an exact endpoint snap,
+ *     so encoder ticks never step the gain audibly
  *   - fuzz symmetry/harmonic content and bounded output across amount
  *     and tone sweeps
  *   - input-referenced FUZZ output leveling: exactly unity at boot, at
  *     drive 0 and at settled bypass; servo-matches the fuzzed level
- *     down to the measured dry level (per-block RMS, ~50 ms smoothing),
- *     never boosts, floors at -30 dB; deep trim on quiet material,
+ *     down to the measured dry level plus the +1.5 dB headroom
+ *     (per-block RMS, ~50 ms smoothing), never boosts beyond the
+ *     clamp, floors at -30 dB; deep trim on quiet material,
  *     mild trim on loud material; bounded click-free transitions at
  *     48 kHz and 32 kHz
  *
@@ -478,7 +482,7 @@ static void test_output_gain()
     }
 
     /* quiet input at full drive: deep trim that servo-matches the
-     * fuzzed level down to the dry level */
+     * fuzzed level down to just above the dry level (+1.5 dB) */
     {
         Distortion e;
         e.Init(48000.f);
@@ -492,13 +496,15 @@ static void test_output_gain()
         }
         assert(e.TrimGain() < .2f); /* deep trim on quiet material */
         assert(e.TrimGain() >= Distortion::kLevelFloor);
-        /* servo accuracy: trim x fuzzed level == dry level */
-        assert(fabsf(e.TrimGain() * e.OutLevel() - e.InLevel())
+        /* servo accuracy: trim x fuzzed level == dry level + 1.5 dB */
+        assert(fabsf(e.TrimGain() * e.OutLevel()
+                     - Distortion::kLevelHeadroom * e.InLevel())
                < .05f * e.InLevel());
     }
 
-    /* loud input at full drive: only the excess over dry is trimmed,
-     * never more (no power lost on loud material) */
+    /* loud input at full drive: only the excess over the dry level
+     * (plus headroom) is trimmed, never more (no power lost on loud
+     * material) */
     {
         Distortion e;
         e.Init(48000.f);
@@ -511,7 +517,8 @@ static void test_output_gain()
                           1.f);
         }
         assert(e.TrimGain() > .5f && e.TrimGain() < 1.f);
-        assert(fabsf(e.TrimGain() * e.OutLevel() - e.InLevel())
+        assert(fabsf(e.TrimGain() * e.OutLevel()
+                     - Distortion::kLevelHeadroom * e.InLevel())
                < .05f * e.InLevel());
     }
 
@@ -589,6 +596,36 @@ static void test_output_gain()
     /* adding the leveling must not change the shaping: Process output
      * is unchanged by the followers (the cascade reference regression
      * above covers the Process arithmetic exhaustively) */
+}
+
+static void test_gain_ramp_smooths_ticks()
+{
+    /* drive-gain ramp: one encoder tick (1/32) at low drive must not
+     * step the pre-gain at the block boundary - the live gain glides
+     * linearly over ~10 ms instead. With a constant input at a fixed
+     * tone, the per-sample output movement right after the retarget is
+     * only a tiny fraction of the tick's total eventual change (an
+     * instant block-rate step would move most of it in one sample). */
+    Distortion d;
+    d.Init(48000.f);
+    d.SetTonePercent(100);
+    d.PrepareBlock(2.f * (1.f / 32.f)); /* drive step 2 */
+    for(int i = 0; i < 9600; i++)       /* settle fully (200 ms) */
+        d.Process(.1f, .09375f);
+    const float before = d.Process(.1f, .09375f);
+    d.PrepareBlock(3.f * (1.f / 32.f)); /* one tick up */
+    const float first = d.Process(.1f, .09375f);
+    float       last  = first;
+    for(int i = 0; i < 9600; i++) /* settle the ramp + filter */
+    {
+        if(i % 48 == 0)
+            d.PrepareBlock(3.f * (1.f / 32.f)); /* unchanged target:
+                                                   engine-style calls */
+        last = d.Process(.1f, .09375f);
+    }
+    const float total = fabsf(last - before);
+    assert(total > 0.f); /* the tick DID change the sound */
+    assert(fabsf(first - before) < .05f * total);
 }
 
 /** Analytical digital cascade magnitude in dB at frequency f for two
@@ -713,6 +750,7 @@ int main()
     test_reference_equality(32000.f);
     test_zero_bypass_exact();
     test_transition_to_zero_bypass();
+    test_gain_ramp_smooths_ticks();
     test_silence_settles();
     test_tone_darkening();
     test_filter_response(48000.f);
