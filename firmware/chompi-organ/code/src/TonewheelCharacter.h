@@ -44,9 +44,10 @@ class TonewheelCharacter
 
     /** Maximum-aged harmonic voicing relative to the fundamental, before
      *  normalization (implementation constants, not user controls).
-     *  Calibrated starting points: 2.5% 2nd, 6% 3rd harmonic. */
-    static constexpr float kMaxSecond = .025f;
-    static constexpr float kMaxThird  = .06f;
+     *  Calibrated points: 4.5% 2nd, 10% 3rd harmonic - clearly audible
+     *  but still organ-like, not extreme. */
+    static constexpr float kMaxSecond = .045f;
+    static constexpr float kMaxThird  = .10f;
 
     /** Deterministic per-(note, pipe) voicing variation: +/-15%. */
     static constexpr float kVariation = .15f;
