@@ -24,6 +24,12 @@ C_INCLUDES += -I../../../chompi-wave/code/libs/coreJSON/source/include
 LIBDAISY_DIR = ../../../chompi-wave/code/libs/libDaisy
 DAISYSP_DIR = ../../../chompi-wave/code/libs/DaisySP
 
+# B4: optional audio-CPU meter on PTH LED 0 (green < 70%, amber 70-85%,
+# red > 85% peak): build with `make ORGAN_CPU_METER=1`
+ifeq ($(ORGAN_CPU_METER),1)
+C_DEFS += -DORGAN_CPU_METER
+endif
+
 # Core location, and generic Makefile
 SYSTEM_FILES_DIR = $(LIBDAISY_DIR)/core
 include $(SYSTEM_FILES_DIR)/Makefile

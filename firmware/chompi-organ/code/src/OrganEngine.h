@@ -49,6 +49,16 @@
  *    adjustable 0.2-20 s in 100 log-spaced steps (boots at 0.2 s). The
  *    tank runs continuously (live tails, no stale state); the 64 KiB
  *    delay buffer is caller-owned SDRAM passed to Init().
+ *  - Stereo BBD-inspired delay (StereoBbdDelay.h) after the rotary and
+ *    its fuzz-output leveling, before the plate reverb: two caller-owned
+ *    128 KiB SDRAM float lines, 40-500 ms with smooth pitch-gliding time
+ *    changes, fixed ~35% darkening feedback, DC control and gentle
+ *    bounded saturation; subtle L/R timing/modulation differences keep
+ *    it stereo (not ping-pong). Linear complementary mix crossfade with
+ *    a ~10 ms ramp: settled 0% is bit-exact dry, 100% is wet only. The
+ *    buffers keep running at dry mix and across preset changes, so
+ *    echoes never drop. Boots dry at 250 ms; saved in the SD-card
+ *    presets; no MIDI CC.
  *  - Vibrato: global pitch modulation from one shared, free-running
  *    6 Hz LFO (Vibrato.h). Depth 0-50 = +/-0-50 cents peak, applied to
  *    every voice as a per-sample frequency multiplier on the stored
@@ -64,6 +74,21 @@
  *    ~1 ms gain slew and ~10 ms Character ramp smooth the block steps.
  *    Amount 0 is bit-exact the unmodulated center; mute still forces
  *    silence. Saved in the SD-card presets; no MIDI CC.
+ *  - Hammond-style percussion (Percussion.h): toggled by the Play/Pause
+ *    key, one SHARED decaying burst of the raw 2 2/3' pipe sine (tapped
+ *    before Character, pipe gain and the pipe envelopes) is added to
+ *    every sounding voice through a 1 ms per-voice click-prevention
+ *    gate. Classic single triggering: only a note-on from an
+ *    all-notes-released state restarts the shared 60 ms half-life
+ *    decay; legato/chord notes share its remaining tail. Percussion is
+ *    independent of pipe levels, mutes, Character, modulation amounts
+ *    and the pipe envelope times, but follows note pitch, fine tuning,
+ *    foldback, vibrato, velocity and master gain, and passes through
+ *    the fuzz/rotary/reverb chain. With 0.5-peak percussion per voice
+ *    the conservative six-voice sum bound rises from 24 to 27, so the
+ *    mix normalization interpolates 1/24 -> 1/27 with the 5 ms enable
+ *    ramp; settled-off is exactly 1/24 and the whole path is skipped
+ *    bit-exactly. On/off is saved in the SD-card presets.
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
@@ -72,9 +97,11 @@
 #include "RotarySpeaker.h"
 #include "TonewheelCharacter.h"
 #include "PlateReverb.h"
+#include "StereoBbdDelay.h"
 #include "Vibrato.h"
 #include "EnvelopeMap.h"
 #include "DriftModulator.h"
+#include "Percussion.h"
 
 namespace chompi
 {
@@ -116,11 +143,18 @@ class OrganEngine
     static constexpr int   kMaxEnvSteps     = EnvelopeMap::kMaxSteps;
     static constexpr int   kDefaultEnvStep  = 0; /* 5 ms: the original timing */
     static constexpr int   kMaxModSteps     = 32; /* per-pipe modulation amounts */
+    static constexpr int   kDefaultDelayMixPercent = 0; /* delay dry */
+    static constexpr int   kDefaultDelayTimeMs     = 250;
+    static constexpr int   kMinDelayTimeMs         = 40;
+    static constexpr int   kMaxDelayTimeMs         = 500;
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
      *  uint16_t elements in writable memory (ORGAN uses SDRAM); pass it
-     *  only after hw.Init() has configured the SDRAM controller. */
-    void Init(float sample_rate, uint16_t *reverb_delay)
+     *  only after hw.Init() has configured the SDRAM controller.
+     *  `delay_left`/`delay_right` must each point to
+     *  StereoBbdDelay::kBufferSize floats, likewise in SDRAM. */
+    void Init(float sample_rate, uint16_t *reverb_delay,
+              float *delay_left, float *delay_right)
     {
         sample_rate_ = sample_rate;
         steal_inc_   = 1.f / (0.005f * sample_rate); /* 5 ms steal fade */
@@ -140,6 +174,7 @@ class OrganEngine
             voice.pending_vel  = 0.f;
             voice.velocity     = 0.f;
             voice.age          = 0;
+            voice.perc_gate    = 0.f;
             for(int p = 0; p < kNumPipes; p++)
             {
                 voice.pipe_env[p] = 0.f;
@@ -193,9 +228,16 @@ class OrganEngine
         reverb_decay_step_  = kDefaultReverbDecayStep; /* plate_.Init()
                                                         * already set 0.2 s */
 
+        delay_.Init(sample_rate, delay_left, delay_right);
+        delay_mix_percent_ = kDefaultDelayMixPercent; /* boots exact dry */
+        delay_time_ms_     = kDefaultDelayTimeMs;     /* delay_.Init()
+                                                       * already set 250 ms */
+
         vibrato_.Init(sample_rate);
         vibrato_.SetDepth(kDefaultVibratoDepth); /* boots exactly dry */
 
+        percussion_.Init(sample_rate); /* boots disabled, settled */
+        held_count_ = 0;
         for(int n = 0; n < 128; n++)
             note_held_[n] = false;
     }
@@ -417,6 +459,45 @@ class OrganEngine
 
     int GetReverbDecayStep() const { return reverb_decay_step_; }
 
+    /** Apply one encoder click to the stereo delay mix (0..100 percent,
+     *  clamped). 0% is bit-exact dry, 100% is wet only; the ~10 ms
+     *  crossfade ramp retargets from the current mix, click-free, and
+     *  the delay lines keep running at dry mix (live tails). */
+    void SetDelayMixPercent(int percent)
+    {
+        percent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
+        delay_mix_percent_ = static_cast<uint8_t>(percent);
+        delay_.SetMix(static_cast<float>(percent) * .01f);
+    }
+
+    int GetDelayMixPercent() const { return delay_mix_percent_; }
+
+    /** Set the stereo delay time in milliseconds (clamped 40..500; the
+     *  encoder edits in 5 ms clicks, preset files may carry any
+     *  in-range integer millisecond). The read position slews to the
+     *  new time with a smooth BBD-like pitch glide; the echo history is
+     *  never cleared. */
+    void SetDelayTimeMs(int ms)
+    {
+        ms = ms < kMinDelayTimeMs
+                 ? kMinDelayTimeMs
+                 : (ms > kMaxDelayTimeMs ? kMaxDelayTimeMs : ms);
+        delay_time_ms_ = static_cast<uint16_t>(ms);
+        delay_.SetDelayMs(static_cast<float>(ms));
+    }
+
+    int GetDelayTimeMs() const { return delay_time_ms_; }
+
+    /** Toggle the Hammond-style percussion (Play/Pause key). Off is an
+     *  exact bypass: no trigger bookkeeping effect on the sound, exact
+     *  1/24 normalization, and the settled path is skipped entirely.
+     *  Toggling never re-triggers the decay; enabling while notes are
+     *  held waits for the next all-notes-released note-on. Saved in the
+     *  SD-card presets; no MIDI CC. */
+    void SetPercussionEnabled(bool on) { percussion_.SetEnabled(on); }
+
+    bool GetPercussionEnabled() const { return percussion_.IsEnabled(); }
+
     void SetMasterGain(float g)
     {
         master_gain_target_ = g < 0.f ? 0.f : (g > 1.f ? 1.f : g);
@@ -439,7 +520,20 @@ class OrganEngine
 
     void NoteOn(uint8_t note, float velocity)
     {
-        note_held_[note & 0x7f] = true;
+        note &= 0x7f;
+        /* Held-note bookkeeping for the percussion single-trigger:
+         * logical held pitches (keys, latch, MIDI) count, release tails
+         * and voice stealing do not; duplicate note-ons/offs never
+         * double-count. A note-on from an all-notes-released state
+         * while enabled restarts the shared decay - checked BEFORE
+         * marking this note held. */
+        if(!note_held_[note])
+        {
+            if(held_count_ == 0 && percussion_.IsEnabled())
+                percussion_.Trigger();
+            note_held_[note] = true;
+            held_count_++;
+        }
 
         /* Retrigger: reuse a voice already playing/releasing this note.
          * C1: a voice mid-STEAL whose pending note matches is also a
@@ -500,7 +594,11 @@ class OrganEngine
     void NoteOff(uint8_t note)
     {
         note &= 0x7f;
-        note_held_[note] = false;
+        if(note_held_[note])
+        {
+            note_held_[note] = false;
+            held_count_--;
+        }
 
         for(int v = 0; v < kNumVoices; v++)
         {
@@ -580,6 +678,23 @@ class OrganEngine
             daisysp::fonepole(master_gain_, master_gain_target_, .001f);
             daisysp::fonepole(drive_, drive_target_, .001f);
 
+            /* Percussion: advance the SHARED decay envelope once per
+             * sample (never per voice). PathActive() false means the
+             * whole percussion path below is skipped bit-exactly. */
+            const float perc_env  = percussion_.Process();
+            const float perc_ramp = percussion_.EnableRamp();
+            const bool  perc_on   = percussion_.PathActive();
+            /* Mix normalization: the conservative sum bound is 6 voices
+             * x 4 pipes = 24 units dry, 6 x (4 + 0.5 percussion) = 27
+             * with percussion fully enabled. Interpolating 1/(24 + 3r)
+             * with the enable ramp r keeps every intermediate state
+             * inside its true bound; at settled off (ramp exactly 0)
+             * the original constant is used bit-exactly. ~1 dB of dry
+             * attenuation while enabled. */
+            float mix_scale = kMixScale;
+            if(perc_ramp > 0.f)
+                mix_scale = 1.f / (24.f + 3.f * perc_ramp);
+
             /* Vibrato: advance the one shared, free-running 6 Hz LFO and
              * take this sample's global pitch multiplier (exactly 1.f at
              * depth 0, no transcendental work then). Applied to every
@@ -606,7 +721,8 @@ class OrganEngine
                         voice.osc[p].SetFreq(base_freq_[v][p] * vib_mult);
                 }
 
-                float sig = 0.f;
+                float sig  = 0.f;
+                float raw2 = 0.f; /* pipe 2's raw sine, for percussion */
                 for(int p = 0; p < kNumPipes; p++)
                 {
                     /* One sine per pipe. Character shapes the raw sine
@@ -614,12 +730,34 @@ class OrganEngine
                      * pipes and completed envelopes stay silent; settled
                      * Character zero returns the sine exactly. */
                     float psig = voice.osc[p].Process();
+                    if(p == 2)
+                        raw2 = psig; /* percussion taps the raw 2 2/3'
+                                      * sine: before Character, pipe gain
+                                      * and the pipe envelopes */
                     if(ca[p] > 0.f)
                         psig = TonewheelCharacter::ShapeSample(
                             psig, character_.Coeffs(v, p), ca[p]);
                     /* per-pipe gate envelope: each pipe fades in/out at
                      * its own attack/release rate */
                     sig += psig * pipe_gain_[p] * voice.pipe_env[p];
+                }
+
+                /* Percussion: pass the raw 2 2/3' tap through the
+                 * per-voice click-prevention gate (1 ms up while
+                 * sounding, 5 ms down on release/steal - independent of
+                 * the pipe envelope times) and the shared decay. Idle or
+                 * settled-off voices add exactly nothing; old release
+                 * tails never gain a fresh attack (their gate is down). */
+                if(perc_on)
+                {
+                    const bool sounding = voice.state == ATTACK
+                                          || voice.state == SUSTAIN;
+                    voice.perc_gate = percussion_.AdvanceGate(
+                        voice.perc_gate, sounding);
+                    if(perc_env > 0.f && voice.perc_gate > 0.f)
+                        sig += raw2 * voice.perc_gate
+                               * (Percussion::kPeakGain * perc_env
+                                  * perc_ramp);
                 }
 
                 switch(voice.state)
@@ -685,8 +823,10 @@ class OrganEngine
             /* Distortion (DSP-5): fuzz saturation stage with a tone
              * control on the mix. Runs before the master gain so the
              * drive character does not depend on the listening level;
-             * step 0 is an exact bypass at every tone. */
-            float out_sig = distortion_.Process(mix * kMixScale, drive_);
+             * step 0 is an exact bypass at every tone. mix_scale is the
+             * percussion-aware normalization above (exactly kMixScale
+             * when percussion is settled off). */
+            float out_sig = distortion_.Process(mix * mix_scale, drive_);
             /* Rotary speaker (DSP-6): mono mix -> stereo Leslie, placed
              * after the distortion (the drive is the preamp, the Leslie
              * is the speaker cabinet) and before the master gain so the
@@ -707,6 +847,11 @@ class OrganEngine
             const float fuzz_out_gain = distortion_.GetOutputGain();
             out_l *= fuzz_out_gain;
             out_r *= fuzz_out_gain;
+            /* Stereo BBD-style delay: between the leveled rotary output
+             * and the plate reverb, so echoes feed the reverb and the
+             * master gain scales them. The buffers keep running at dry
+             * mix; settled 0% is bit-exact dry. */
+            delay_.Process(out_l, out_r, out_l, out_r);
             /* Plate reverb: stereo in/out between the rotary (speaker
              * cabinet) and the master gain, so the volume knob scales
              * dry and wet equally and 0% master mutes the tail. The tank
@@ -740,6 +885,7 @@ class OrganEngine
         float               pending_vel;
         float               velocity;
         float               pipe_env[kNumPipes]; /* per-pipe gate envelope */
+        float               perc_gate; /* percussion click-prevention gate */
         uint32_t            age;
     };
 
@@ -836,9 +982,14 @@ class OrganEngine
     PlateReverb plate_;
     uint8_t  reverb_mix_percent_;
     uint8_t  reverb_decay_step_;
+    StereoBbdDelay delay_;
+    uint8_t  delay_mix_percent_;
+    uint16_t delay_time_ms_;
     Vibrato  vibrato_;
     float    base_freq_[kNumVoices][kNumPipes]; /* pre-vibrato freqs */
     bool     note_held_[128];
+    int      held_count_; /* logical held notes, for percussion rearm */
+    Percussion percussion_;
 
   public:
     uint8_t pipe_steps[kNumPipes];

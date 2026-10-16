@@ -32,6 +32,13 @@ OrganMidi   midi;
  * configured the SDRAM controller. */
 static uint16_t DSY_SDRAM_BSS plate_delay_mem[PlateReverb::kDelayBufferSize];
 
+/* Stereo BBD-style delay memory: 2 x 128 KiB floats in external SDRAM,
+ * same ownership/init pattern as the plate buffer above: cleared by
+ * StereoBbdDelay::Init via engine.Init(), after hw.Init() has
+ * configured the SDRAM controller. */
+static float DSY_SDRAM_BSS delay_mem_l[StereoBbdDelay::kBufferSize];
+static float DSY_SDRAM_BSS delay_mem_r[StereoBbdDelay::kBufferSize];
+
 /* B4: debug-build CPU meter (build with ORGAN_CPU_METER=1); peak load
  * shows on PTH LED 0 (green < 70%, amber 70-85%, red > 85%). */
 #ifdef ORGAN_CPU_METER
@@ -168,7 +175,8 @@ enum BarKind
     kBarRelease,  /**< uniformly yellow: pipe release-time bar */
     kBarModVolume,   /**< uniformly white: pipe volume-modulation bar */
     kBarModCharacter, /**< uniformly blue: pipe Character-modulation bar */
-    kBarFineTune     /**< center-out red/green: fine-tune offset bar */
+    kBarFineTune,     /**< center-out red/green: fine-tune offset bar */
+    kBarDelay        /**< uniformly yellow: stereo-delay mix/time bars */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
@@ -245,6 +253,13 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
         b = 1.f; /* blue: the whole Character-modulation bar */
         return;
     }
+    if(kind == kBarDelay)
+    {
+        r = 1.f;
+        g = 1.f;
+        b = 0.f; /* yellow: the whole delay mix/time bar */
+        return;
+    }
     r = 0.f;
     g = 1.f;
     b = 0.f; /* green: first 50% of keys */
@@ -270,8 +285,12 @@ static volatile int      bar_page_  = 0;      /* pipes: 0 = level,
                                                * modulation, 5 = Character
                                                * modulation; volume bar:
                                                * 0 = master, 1 = drive,
-                                               * 2 = reverb mix, 3 = decay,
-                                               * 4 = drive tone */
+                                               * 2 = delay mix,
+                                               * 3 = reverb mix,
+                                               * 4 = drive tone,
+                                               * 5 = fine tune,
+                                               * 6 = reverb decay,
+                                               * 7 = delay time */
 static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
 static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: wheel (rotary/vibrato) */
@@ -315,23 +334,21 @@ static const int kModBarCharacter = 5;
 static const int kModDestBarPage[kNumModDests]
     = {2, 3, kModBarVolume, kModBarCharacter};
 
-/** ENC_6 (volume encoder) pages: master volume -> overdrive -> plate
- *  reverb mix, cycled by the encoder push-switch. */
+/** ENC_6 (volume encoder) pages: master volume -> overdrive -> stereo
+ *  delay mix -> plate reverb mix, cycled by the encoder push-switch. */
 static const int kVolPageMaster = 0;
 static const int kVolPageDrive  = 1;
-static const int kVolPageReverb = 2;
+static const int kVolPageDelay  = 2;
+static const int kVolPageReverb = 3;
 static volatile int vol_page_ = kVolPageMaster; /* ENC_6 page */
-/** bar_page_ sub-state (not a vol_page_ value): on the reverb page a
- *  SHIFT+turn edits the decay, and the bar shows it instead of the mix. */
-static const int kVolBarDecay = 3;
-/** bar_page_ sub-state (not a vol_page_ value): on the drive page a
- *  SHIFT+turn edits the distortion tone, and the bar shows the tone
- *  instead of the amount (same 500 ms timeout as the decay bar). */
-static const int kVolBarTone = 4;
-/** bar_page_ sub-state (not a vol_page_ value): on the master page a
- *  SHIFT+turn edits the fine tune, and the bar shows the cents offset
- *  around the center white key. */
-static const int kVolBarFineTune = 5;
+/** bar_page_ sub-states for kVolBar (not vol_page_ values): SHIFT+turn
+ *  edits a secondary parameter per page and the bar shows it instead of
+ *  the page's main value. Explicit non-colliding IDs, distinct from
+ *  every kVolPage* number. */
+static const int kVolBarTone      = 4; /* drive page: distortion tone */
+static const int kVolBarFineTune  = 5; /* master page: fine tune */
+static const int kVolBarDecay     = 6; /* reverb page: decay */
+static const int kVolBarDelayTime = 7; /* delay page: time */
 
 /* ---- key/encoder edge tracking (audio ISR only) ---- */
 static volatile bool prev_key_[40];
@@ -688,19 +705,37 @@ static void PollControls()
     }
 
     /* ENC_6_SW (volume-knob push, SwId 32): press cycles the volume
-     * encoder through master volume -> overdrive -> plate-reverb mix;
-     * show the newly active page's value bar as confirmation */
+     * encoder through master volume -> overdrive -> stereo delay mix ->
+     * plate-reverb mix; show the newly active page's value bar as
+     * confirmation */
     {
         const int  vsw  = static_cast<int>(Hardware::SwId::ENC_6_SW);
         const bool down = hw.button_sr.State(vsw);
         if(down && !prev_key_[vsw])
         {
-            vol_page_  = (vol_page_ + 1) % 3;
+            vol_page_  = (vol_page_ + 1) % 4;
             bar_pipe_  = kVolBar;
             bar_page_  = vol_page_;
             bar_until_ = System::GetNow() + 500;
         }
         prev_key_[vsw] = down;
+    }
+
+    /* KEY_27 (Play/Pause): toggle the Hammond-style percussion on each
+     * press edge, in Normal and Modulation modes alike; holding or
+     * releasing the key does nothing. The engine only restarts the
+     * shared decay on an all-notes-released note-on, so toggling while
+     * notes are held synthesizes no attack. The settled boot baseline
+     * captured in main() means a key held at power-on never toggles,
+     * and this read does not disturb the KEY_26+27+28 shipping-mode
+     * chord checked before audio starts. Solid amber on the PTH 7 LED
+     * while enabled (UpdateLeds). */
+    {
+        const int  play_sw = static_cast<int>(Hardware::SwId::KEY_27);
+        const bool down    = hw.button_sr.State(play_sw);
+        if(down && !prev_key_[play_sw])
+            engine.SetPercussionEnabled(!engine.GetPercussionEnabled());
+        prev_key_[play_sw] = down;
     }
 
     /* KEY_28 (LOOP). Without SHIFT: toggles the key latch. While
@@ -928,13 +963,25 @@ static void PollControls()
                 }
                 else if(vol_page_ == kVolPageReverb)
                 {
-                    /* SHIFT+turn on page 3: plate-reverb decay, 100
+                    /* SHIFT+turn on page 4: plate-reverb decay, 100
                      * log-spaced steps from 0.2 s to 20 s (fine tune
                      * stays on page 1) */
                     engine.SetReverbDecayStep(engine.GetReverbDecayStep()
                                               + delta);
                     bar_pipe_  = kVolBar;
                     bar_page_  = kVolBarDecay;
+                    bar_until_ = System::GetNow() + 500;
+                }
+                else if(vol_page_ == kVolPageDelay)
+                {
+                    /* SHIFT+turn on page 3: stereo delay time, 5 ms per
+                     * click, clamped 40..500 ms; the read position
+                     * slews with a smooth BBD-like pitch glide, the
+                     * echo history is never cleared */
+                    engine.SetDelayTimeMs(engine.GetDelayTimeMs()
+                                          + delta * 5);
+                    bar_pipe_  = kVolBar;
+                    bar_page_  = kVolBarDelayTime;
                     bar_until_ = System::GetNow() + 500;
                 }
                 else
@@ -957,9 +1004,19 @@ static void PollControls()
                 bar_page_  = kVolPageDrive;
                 bar_until_ = System::GetNow() + 500;
             }
+            else if(vol_page_ == kVolPageDelay)
+            {
+                /* volume-encoder page 3: stereo delay mix, 1% per click,
+                 * clamped 0..100; 0% is exact dry, 100% wet only */
+                engine.SetDelayMixPercent(engine.GetDelayMixPercent()
+                                          + delta);
+                bar_pipe_  = kVolBar;
+                bar_page_  = kVolPageDelay;
+                bar_until_ = System::GetNow() + 500;
+            }
             else if(vol_page_ == kVolPageReverb)
             {
-                /* volume-encoder page 3: plate-reverb mix, 1% per click,
+                /* volume-encoder page 4: plate-reverb mix, 1% per click,
                  * clamped 0..100 */
                 engine.SetReverbMixPercent(engine.GetReverbMixPercent()
                                            + delta);
@@ -1304,18 +1361,37 @@ static void UpdateLeds()
             }
             else if(bar_page_ == kVolBarDecay)
             {
-                /* volume-knob page 3, SHIFT+turn: reverb decay step
-                 * (log-spaced 0.5..20 s) */
+                /* volume-knob page 4, SHIFT+turn: reverb decay step
+                 * (log-spaced 0.2..20 s) */
                 lit  = (engine.GetReverbDecayStep() * kNumWhiteKeys + 50)
                        / 100;
                 kind = kBarReverb;
             }
+            else if(bar_page_ == kVolBarDelayTime)
+            {
+                /* volume-knob page 3, SHIFT+turn: delay time, 40..500 ms
+                 * mapped to the 15 white keys */
+                lit  = ((engine.GetDelayTimeMs()
+                         - OrganEngine::kMinDelayTimeMs)
+                            * kNumWhiteKeys
+                        + 230)
+                       / (OrganEngine::kMaxDelayTimeMs
+                          - OrganEngine::kMinDelayTimeMs);
+                kind = kBarDelay;
+            }
             else if(bar_page_ == kVolPageReverb)
             {
-                /* volume-knob page 3: plate-reverb mix percent */
+                /* volume-knob page 4: plate-reverb mix percent */
                 lit  = (engine.GetReverbMixPercent() * kNumWhiteKeys + 50)
                        / 100;
                 kind = kBarReverb;
+            }
+            else if(bar_page_ == kVolPageDelay)
+            {
+                /* volume-knob page 3: stereo delay mix percent */
+                lit  = (engine.GetDelayMixPercent() * kNumWhiteKeys + 50)
+                       / 100;
+                kind = kBarDelay;
             }
             else if(bar_page_ == kVolPageDrive)
             {
@@ -1584,9 +1660,10 @@ static void UpdateLeds()
             }
         }
     }
-    /* master-volume knob LED (PTH 9): volume-encoder page 3 tracks the
-     * plate-reverb mix in blue and page 2 the overdrive amount in red
-     * (both with a brightness floor so the page stays visible at 0%). On
+    /* master-volume knob LED (PTH 9): volume-encoder page 4 tracks the
+     * plate-reverb mix in blue, page 3 the stereo-delay mix in yellow
+     * and page 2 the overdrive amount in red
+     * (all with a brightness floor so the page stays visible at 0%). On
      * page 1 brightness tracks the level and the color follows the same
      * position gradient as the white-key volume bar (green up to 50%,
      * orange 50-75%, red above 75%) */
@@ -1595,6 +1672,12 @@ static void UpdateLeds()
         const float s = .2f
                         + .8f * engine.GetReverbMixPercent() * .01f;
         SetPthLedFloat(9, 0.f, 0.f, s);
+    }
+    else if(vol_page_ == kVolPageDelay)
+    {
+        const float s = .2f
+                        + .8f * engine.GetDelayMixPercent() * .01f;
+        SetPthLedFloat(9, s, s, 0.f); /* yellow */
     }
     else if(vol_page_ == kVolPageDrive)
     {
@@ -1669,6 +1752,13 @@ static void UpdateLeds()
 
     /* latch indicator on the LOOP key LED (PTH 8): solid red while latched */
     SetPthLedFloat(8, latch_on_ ? 1.f : 0.f, 0.f, 0.f);
+
+    /* percussion indicator on the Play/Pause key LED (PTH 7): solid
+     * amber while enabled, dark while disabled */
+    SetPthLedFloat(7,
+                   engine.GetPercussionEnabled() ? 1.f : 0.f,
+                   engine.GetPercussionEnabled() ? .6f : 0.f,
+                   0.f);
 
 #ifdef ORGAN_CPU_METER
     /* B4: peak audio CPU load on PTH LED 0 (overrides shift indicator) */
@@ -1784,7 +1874,8 @@ int main(void)
         System::Delay(10);
     }
 
-    engine.Init(hw.seed.AudioSampleRate(), plate_delay_mem);
+    engine.Init(hw.seed.AudioSampleRate(), plate_delay_mem,
+                delay_mem_l, delay_mem_r);
 
     /* SD-card presets: mount, create ORGAN/ if missing, and read all 15
      * slots into the RAM cache before audio starts. With no card (or no

@@ -33,6 +33,9 @@ struct FakeEngine
     int  drive_tone;
     int  reverb_mix;
     int  reverb_decay;
+    bool percussion;
+    int  delay_mix;
+    int  delay_time_ms;
 
     static int Clamp(int v, int lo, int hi)
     {
@@ -57,6 +60,9 @@ struct FakeEngine
         drive_tone   = 100;
         reverb_mix   = 0;
         reverb_decay = 0;
+        percussion   = false;
+        delay_mix    = 0;
+        delay_time_ms = 250;
     }
 
     void SetPipeStep(int p, int s) { level[p] = Clamp(s, 0, 32); }
@@ -85,6 +91,12 @@ struct FakeEngine
     int  GetReverbMixPercent() const { return reverb_mix; }
     void SetReverbDecayStep(int s) { reverb_decay = Clamp(s, 0, 100); }
     int  GetReverbDecayStep() const { return reverb_decay; }
+    void SetPercussionEnabled(bool on) { percussion = on; }
+    bool GetPercussionEnabled() const { return percussion; }
+    void SetDelayMixPercent(int m) { delay_mix = Clamp(m, 0, 100); }
+    int  GetDelayMixPercent() const { return delay_mix; }
+    void SetDelayTimeMs(int ms) { delay_time_ms = Clamp(ms, 40, 500); }
+    int  GetDelayTimeMs() const { return delay_time_ms; }
 };
 
 static bool SamePreset(const OrganPreset &a, const OrganPreset &b)
@@ -100,7 +112,9 @@ static bool SamePreset(const OrganPreset &a, const OrganPreset &b)
     return a.vibrato == b.vibrato && a.rotary == b.rotary
            && a.drive == b.drive && a.drive_tone == b.drive_tone
            && a.reverb_mix == b.reverb_mix
-           && a.reverb_decay == b.reverb_decay;
+           && a.reverb_decay == b.reverb_decay
+           && a.percussion == b.percussion && a.delay_mix == b.delay_mix
+           && a.delay_time_ms == b.delay_time_ms;
 }
 
 static OrganPreset MakeAssortedPreset()
@@ -127,6 +141,9 @@ static OrganPreset MakeAssortedPreset()
     p.reverb_decay = 99;
     p.vol_mod[0]   = 32;
     p.char_mod[3]  = 31;
+    p.percussion   = 1;
+    p.delay_mix    = 87;
+    p.delay_time_ms = 500;
     return p;
 }
 
@@ -177,6 +194,11 @@ static void test_defaults_for_missing_keys()
     assert(p.drive_tone == OrganPreset::kDefaultTone);
     assert(p.vol_mod[2] == 0 && p.char_mod[1] == 0);
     assert(p.mute[0] == 0);
+    /* percussion and the delay fields default to off / dry / 250 ms for
+     * older presets that predate them */
+    assert(p.percussion == 0);
+    assert(p.delay_mix == 0);
+    assert(p.delay_time_ms == OrganPreset::kDefaultDelayTimeMs);
 }
 
 static void test_clamping()
@@ -190,7 +212,8 @@ static void test_clamping()
           "\"mute\":[2,0,1,-1],"
           "\"vibrato\":51,\"rotary\":-2,\"drive\":64,"
           "\"drive_tone\":101,\"reverb_mix\":-50,\"reverb_decay\":1000,"
-          "\"vol_mod\":[40,0,0,0],\"char_mod\":[0,0,0,-9]}";
+          "\"vol_mod\":[40,0,0,0],\"char_mod\":[0,0,0,-9],"
+          "\"percussion\":2,\"delay_mix\":111,\"delay_time_ms\":4}";
     assert(chompi::Parse(doc, strlen(doc), p));
     assert(p.level[0] == 32 && p.level[1] == 0 && p.level[2] == 32
            && p.level[3] == 0);
@@ -203,6 +226,10 @@ static void test_clamping()
     assert(p.drive_tone == 100 && p.reverb_mix == 0
            && p.reverb_decay == 100);
     assert(p.vol_mod[0] == 32 && p.char_mod[3] == 0);
+    /* percussion clamps to 0/1, delay mix to 0..100, time to 40..500 */
+    assert(p.percussion == 1);
+    assert(p.delay_mix == 100);
+    assert(p.delay_time_ms == OrganPreset::kMinDelayTimeMs);
 }
 
 static void test_garbage_values()
@@ -333,6 +360,9 @@ static void test_capture_apply()
     e.SetDriveTonePercent(70);
     e.SetReverbMixPercent(40);
     e.SetReverbDecayStep(55);
+    e.SetPercussionEnabled(true);
+    e.SetDelayMixPercent(65);
+    e.SetDelayTimeMs(345);
 
     OrganPreset p;
     chompi::CaptureFromEngine(p, e);
@@ -342,11 +372,14 @@ static void test_capture_apply()
     assert(p.vibrato == 25 && p.rotary == 5 && p.drive == 16
            && p.drive_tone == 70 && p.reverb_mix == 40
            && p.reverb_decay == 55);
+    assert(p.percussion == 1 && p.delay_mix == 65
+           && p.delay_time_ms == 345);
 
     /* scramble the engine, then apply the preset back */
     e.SetDefaults();
     e.SetDriveTonePercent(1);
     e.SetPipeMuted(1, false);
+    e.SetPercussionEnabled(true); /* init/off default must clear it */
     chompi::ApplyToEngine(p, e);
     assert(e.GetPipeStep(0) == 3 && e.GetPipeCharacterStep(1) == 60);
     assert(e.GetPipeAttackStep(2) == 20 && e.GetPipeReleaseStep(3) == 11);
@@ -355,6 +388,8 @@ static void test_capture_apply()
     assert(e.GetVibratoDepth() == 25 && e.GetRotaryStep() == 5);
     assert(e.GetDriveStep() == 16 && e.GetDriveTonePercent() == 70);
     assert(e.GetReverbMixPercent() == 40 && e.GetReverbDecayStep() == 55);
+    assert(e.GetPercussionEnabled() && e.GetDelayMixPercent() == 65
+           && e.GetDelayTimeMs() == 345);
 
     /* capture -> serialize -> parse -> apply is lossless */
     char buf[768];
@@ -390,6 +425,9 @@ static void test_set_init()
     assert(p.drive_tone == 100); /* neutral */
     assert(p.reverb_mix == 0);
     assert(p.reverb_decay == 0); /* 0.2 s, the shortest */
+    assert(p.percussion == 0);   /* percussion off */
+    assert(p.delay_mix == 0);    /* delay dry */
+    assert(p.delay_time_ms == 250);
 
     /* the init sound IS the boot sound: Character and rotary boot at 0 */
     assert(OrganPreset::kDefaultCharacter == 0);
@@ -397,6 +435,36 @@ static void test_set_init()
     OrganPreset def;
     def.SetDefaults();
     assert(SamePreset(p, def));
+}
+
+static void test_serialized_size_bound()
+{
+    /* every field at its widest value: the serialized document must fit
+     * both the documented caller buffers and PresetStorage::kJsonSize
+     * (768 bytes) with margin */
+    OrganPreset p;
+    for(int i = 0; i < OrganPreset::kNumPipes; i++)
+    {
+        p.level[i] = 32;
+        p.character[i] = 64;
+        p.attack[i] = 32;
+        p.release[i] = 32;
+        p.mute[i] = 1;
+        p.vol_mod[i] = 32;
+        p.char_mod[i] = 32;
+    }
+    p.vibrato = 50;
+    p.rotary = 32;
+    p.drive = 32;
+    p.drive_tone = 100;
+    p.reverb_mix = 100;
+    p.reverb_decay = 100;
+    p.percussion = 1;
+    p.delay_mix = 100;
+    p.delay_time_ms = 500; /* widest: 3 digits */
+    char buf[768];
+    const size_t n = chompi::Serialize(p, buf, sizeof(buf));
+    assert(n > 0 && n < sizeof(buf));
 }
 
 int main()
@@ -411,6 +479,7 @@ int main()
     test_bank_ops();
     test_capture_apply();
     test_set_init();
+    test_serialized_size_bound();
     printf("organ_preset_test: all tests passed\n");
     return 0;
 }

@@ -2,8 +2,9 @@
 
 Polyphonic organ firmware for the CHOMPI hardware: 6 voices x 4 pipe
 registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
-tonewheel-style Character, fuzz distortion with a tone control,
-a rotary-speaker stage, a compact vintage-1960s-inspired plate
+tonewheel-style Character, Hammond-style percussion on the Play/Pause
+key, fuzz distortion with a tone control, a rotary-speaker stage, a
+warm stereo BBD-inspired delay, a compact vintage-1960s-inspired plate
 reverb, global 6 Hz pitch vibrato, a Modulation Mode that drifts
 each pipe's volume and Character slowly and independently, and 15
 SD-card preset slots.
@@ -150,9 +151,10 @@ effect and shows its white-key value bar for 500 ms.
 
 ### Volume encoder (ENC_6)
 
-Push cycles three pages: master volume (page 1, gradient LED) ->
+Push cycles four pages: master volume (page 1, gradient LED) ->
 distortion amount (page 2, red LED with brightness floor; 0 is an exact
-bypass) -> plate-reverb mix (page 3, blue LED with brightness floor).
+bypass) -> stereo delay mix (page 3, yellow LED with brightness floor)
+-> plate-reverb mix (page 4, blue LED with brightness floor).
 Turning or pressing the encoder shows the current page's white-key value
 bar for 500 ms.
 
@@ -189,12 +191,38 @@ through the fuzz's own wet/bypass fade, so it ramps click-free and is
 exactly unity at settled bypass; it introduces no user control, and the
 main-volume value and display are unaffected.
 
-Page 3 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
+Page 3 adjusts the stereo delay mix by 1% per click, clamped to
+0-100%: 0% is exact dry and 100% is delayed signal only (a linear
+complementary crossfade with a ~10 ms click-free ramp). The white-key
+bar is uniformly yellow: no keys at 0%, half (8 keys) at 50%, all 15 at
+100%.
+
+SHIFT + turn on page 3 adjusts the delay time: 5 ms per click, clamped
+to 40-500 ms (boot default 250 ms), shown on the same yellow white-key
+bar while turning (40 ms = no keys, 500 ms = all 15). Time changes slew
+the read position smoothly, giving the pitch-gliding transitions of an
+analog BBD clock change; the echo history is never cleared.
+
+The delay is a fixed BBD-inspired voicing (no feedback/tone controls):
+two independent delay lines with a subtle fixed +/-0.5% left/right
+timing difference plus slow independent clock wobble, so the stereo
+image is preserved and gently widened - stereo, not ping-pong. Repeats
+are a fixed moderate ~35% feedback through a darkening low-pass (each
+repeat darker than the last), with a DC blocker in the loop and a gentle
+bounded saturation. There is no hiss, clock noise or self-oscillation.
+The buffers keep running at 0% mix and across page/preset changes, so
+tails ring out naturally and old echoes survive a mix reopening; loading
+a preset ramps the mix/time without clearing them.
+
+The delay mix and time boot at 0% / 250 ms and are stored in the SD-card
+presets; they have no MIDI CC.
+
+Page 4 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
 exact dry and 100% is wet only (a linear complementary crossfade with a
 ~10 ms click-free ramp). The white-key bar is uniformly blue: no keys at
 0%, half (8 keys) at 50%, all 15 at 100%.
 
-SHIFT + turn on page 3 adjusts the plate decay: 100 log-spaced steps
+SHIFT + turn on page 4 adjusts the plate decay: 100 log-spaced steps
 from 0.2 s (boot default) to 20 s, shown on the same blue white-key bar
 while turning. The wet level and tank headroom are normalized across the
 range, so the decay changes the tail duration, not the loudness.
@@ -217,7 +245,8 @@ The mix and decay boot at 0% / 0.2 s and are stored in the SD-card
 presets; they have no MIDI CC.
 
 SHIFT + turn = fine tune (+/-50 cents) on page 1 only (page 2 adjusts
-the distortion tone, page 3 adjusts decay). The fine-tune bar centers
+the distortion tone, page 3 adjusts the delay time, page 4 adjusts the
+reverb decay). The fine-tune bar centers
 on white key 8: exactly centered is that key alone in green, and any
 offset spans red from the center toward the offset (left = down in
 pitch, right = up; all seven keys on that side at +/-50 cents). Boot
@@ -234,6 +263,39 @@ power-on enters shipping mode. With SHIFT held in Normal Mode the
 white keys become the 15 preset slots (see the Presets section); in
 Modulation Mode SHIFT + a black key selects the modulation destination
 and the white keys keep playing.
+
+KEY_27 (Play/Pause) toggles the percussion on each press, in both
+modes; the key's LED is solid amber while percussion is enabled.
+
+### Percussion (KEY_27)
+
+A Hammond-inspired percussion voice: while enabled, a short decaying
+burst of the 2 2/3' pipe (the third-harmonic-like registration) is
+added to every sounding voice - a fixed, fast pluck with a ~1 ms attack
+and a 60 ms half-life exponential decay (gone by ~600 ms). It uses the
+existing pipe oscillator tapped before its level, Character and
+envelope, so it adds almost no CPU cost and is completely independent
+of the pipe levels, mutes, Character amounts and the long pipe
+attack/release settings; it still follows pitch, fine tuning, foldback,
+vibrato, velocity and the master gain, and passes through the fuzz,
+rotary, delay and reverb like everything else. Hammond-inspired, not a
+complete B3 circuit emulation.
+
+The triggering is the classic Hammond single-trigger: the decay only
+restarts on a note-on when every note was released - legato notes and
+extra chord notes share the remaining tail instead of restarting it.
+Latched and MIDI-held notes count as held, so releasing physical keys
+while the latch sustains them does not rearm the percussion; voice
+stealing and long release tails do not rearm it either. Toggling
+percussion on while notes are held does not synthesize an attack - the
+next note after a full release gets the ping. Toggling off fades the
+burst out in ~5 ms.
+
+Percussion boots off, is stored in the SD-card presets (older presets
+without the field load as off) and has no MIDI CC. While it is enabled
+the dry mix is normalized for the extra voice content (about 1 dB of
+attenuation, ramped click-free with the toggle); settled-off renders
+exactly like the percussion-less firmware.
 
 ## SD-card presets
 
@@ -273,7 +335,8 @@ in the background without taking over the Modulation-mode LEDs.
   ~1 s. Init needs no SD card. Init values: pipe levels 16 (50%),
   Character 0 (clean sine), attack and release 0 (5 ms), mutes off,
   volume/Character modulation 0, vibrato, rotary and drive 0,
-  distortion tone 100%, reverb mix 0, reverb decay 0 (0.2 s) - the
+  distortion tone 100%, reverb mix 0, reverb decay 0 (0.2 s),
+  percussion off, delay mix 0% and delay time 250 ms - the
   same sound as power-on. Not touched: master volume, fine tune,
   octave, latch state, page selections and the wheel mode. After init
   no slot is "current" (no white slot in the SHIFT slot view).
@@ -307,7 +370,8 @@ mid-write can leave a stray `.tmp` file, which is ignored.
 
 Saved in every preset: per-pipe level, Character, attack, release, mute
 and volume/Character-modulation amounts, plus vibrato depth, rotary
-amount, fuzz amount and tone, and reverb mix and decay. NOT saved:
+amount, fuzz amount and tone, reverb mix and decay, percussion on/off,
+and delay mix and time. NOT saved:
 master volume, fine tune, octave shift, latch, page selections, the
 Modulation-mode destination and the wheel's rotary/vibrato selection.
 
@@ -330,12 +394,16 @@ Character 0 is unchanged.
 
 pitch vibrato (shared 6 Hz LFO at the oscillators) -> sine -> Character
 shaping (per pipe) -> pipe gain -> voice envelope/velocity -> voice mix
+(the percussion taps the raw 2 2/3' pipe sine before Character/gain/
+envelope and joins the mix through its own shared decay)
 -> fuzz distortion (tone-controlled) -> rotary
-speaker -> plate reverb -> master gain (with the automatic fixed fuzz
+speaker -> stereo BBD-style delay -> plate reverb -> master gain (with the automatic fixed fuzz
 output trim) -> headphone + master stereo
 output pairs. Character 0 exactly bypasses shaping; the clean-sine
 engine is bit-identical to the previous firmware's sine-only sound.
-Reverb 0% is bit-exact dry; vibrato depth 0 is an exact bypass.
+Reverb 0% is bit-exact dry; vibrato depth 0 is an exact bypass;
+delay 0% is bit-exact dry; percussion off is an exact bypass with the
+original 1/24 mix normalization.
 
 ## Building on Windows
 
@@ -363,6 +431,13 @@ export PATH="/c/armgnu/10.3-2021.10/bin:$PATH"
 cd /path/to/firmware/chompi-organ/code/src
 make check-toolchain   # prints GCC 10.3.1 if the toolchain is right
 make -j4 DEBUG=0 OPT=-O3
+```
+
+For the audio-CPU meter build (peak block load on PTH LED 0: green
+< 70%, amber 70-85%, red > 85%):
+
+```sh
+make -j4 DEBUG=0 OPT=-O3 ORGAN_CPU_METER=1
 ```
 
 The output is `code/src/build/CHOMPI_ORGAN_1.0.bin` (BOOT_SRAM app type). The
@@ -415,4 +490,19 @@ the init-patch values. The Modulation-mode UI tests cover the physical
 black-key destination mapping, the boot default and remembered
 selection, the exact 75%/100% destination-key intensities and colors,
 the two-page Normal-mode cycling, the encoder press behavior, and the
-SHIFT broadcast clamping.
+SHIFT broadcast clamping. The percussion tests cover the helper timing
+(sample-rate-independent 60 ms half-life, 1 ms attack, 5 ms fades,
+exact settle-to-zero) plus real OrganEngine integration renders:
+single-trigger rearm across all-notes-released only, legato/chord tail
+sharing, latch-style held-note bookkeeping with duplicate events, no
+attack when enabled under held notes, release/steal/toggle gate fades,
+the 2 2/3' harmonic content, independence from pipe level/mute/
+Character, the 24 -> 27 mix normalization, bounded full-scale output
+and bit-exact settled-off equivalence. The delay tests cover buffer
+clearing and deterministic reinitialization, mix/time clamping and
+defaults, bit-exact dry bypass, wet-only behavior with no dry
+feedthrough, mix-ramp and time-slew convergence/retargeting, echo
+arrival time, ~35% repeat decay with progressively darker repeats,
+stereo (non-ping-pong) separation, ring wrap at 500 ms, history
+surviving bypass and time changes, in-place processing and bounded
+no-self-oscillation behavior.

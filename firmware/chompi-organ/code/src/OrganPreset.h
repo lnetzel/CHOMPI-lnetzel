@@ -38,6 +38,10 @@ struct OrganPreset
     static constexpr int kMaxReverbMix   = 100;
     static constexpr int kMaxReverbDecay = 100;
     static constexpr int kMaxMod         = 32;
+    static constexpr int kMaxPercussion  = 1;   /* 0/1 toggle */
+    static constexpr int kMaxDelayMix    = 100;
+    static constexpr int kMinDelayTimeMs = 40;
+    static constexpr int kMaxDelayTimeMs = 500;
 
     /* boot defaults (mirror OrganEngine) */
     static constexpr int kDefaultLevel       = 16; /* 50% */
@@ -51,6 +55,9 @@ struct OrganPreset
     static constexpr int kDefaultReverbMix   = 0;
     static constexpr int kDefaultReverbDecay = 0;  /* 0.2 s */
     static constexpr int kDefaultMod         = 0;
+    static constexpr int kDefaultPercussion  = 0;  /* percussion off */
+    static constexpr int kDefaultDelayMix    = 0;  /* delay dry */
+    static constexpr int kDefaultDelayTimeMs = 250;
 
     uint8_t level[kNumPipes];     /**< 0..32 pipe levels */
     uint8_t character[kNumPipes]; /**< 0..64 Character amounts */
@@ -65,6 +72,9 @@ struct OrganPreset
     uint8_t reverb_decay;         /**< 0..100 plate decay steps */
     uint8_t vol_mod[kNumPipes];   /**< 0..32 volume-modulation amounts */
     uint8_t char_mod[kNumPipes];  /**< 0..32 Character-modulation amounts */
+    uint8_t percussion;           /**< 0/1 percussion toggle */
+    uint8_t delay_mix;            /**< 0..100 delay mix percent */
+    uint16_t delay_time_ms;       /**< 40..500 delay time in ms */
 
     void SetDefaults()
     {
@@ -84,6 +94,9 @@ struct OrganPreset
         drive_tone   = kDefaultTone;
         reverb_mix   = kDefaultReverbMix;
         reverb_decay = kDefaultReverbDecay;
+        percussion   = kDefaultPercussion;
+        delay_mix    = kDefaultDelayMix;
+        delay_time_ms = kDefaultDelayTimeMs;
     }
 
     /** Init patch (SHIFT + OVERDUB held for 4 s): the same sound values
@@ -95,7 +108,9 @@ struct OrganPreset
 
 /** Serialize as compact versioned JSON. Returns the number of bytes
  *  written (excluding the terminator), or 0 when the buffer is too
- *  small (never happens with a >= 384 B buffer). */
+ *  small (never happens with the 768-byte PresetStorage buffer; the
+ *  worst-case document with every field at its widest value is well
+ *  under 450 bytes - see test_serialized_size_bound). */
 inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
 {
     const int n = snprintf(
@@ -110,7 +125,8 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         "\"vibrato\":%u,\"rotary\":%u,\"drive\":%u,"
         "\"drive_tone\":%u,\"reverb_mix\":%u,\"reverb_decay\":%u,"
         "\"vol_mod\":[%u,%u,%u,%u],"
-        "\"char_mod\":[%u,%u,%u,%u]}",
+        "\"char_mod\":[%u,%u,%u,%u],"
+        "\"percussion\":%u,\"delay_mix\":%u,\"delay_time_ms\":%u}",
         OrganPreset::kVersion,
         (unsigned)p.level[0], (unsigned)p.level[1], (unsigned)p.level[2],
         (unsigned)p.level[3],
@@ -131,7 +147,10 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         (unsigned)p.vol_mod[0], (unsigned)p.vol_mod[1],
         (unsigned)p.vol_mod[2], (unsigned)p.vol_mod[3],
         (unsigned)p.char_mod[0], (unsigned)p.char_mod[1],
-        (unsigned)p.char_mod[2], (unsigned)p.char_mod[3]);
+        (unsigned)p.char_mod[2], (unsigned)p.char_mod[3],
+        (unsigned)p.percussion,
+        (unsigned)p.delay_mix,
+        (unsigned)p.delay_time_ms);
     if(n < 0 || static_cast<size_t>(n) >= size)
         return 0;
     return static_cast<size_t>(n);
@@ -233,6 +252,16 @@ inline bool Parse(char *buf, size_t len, OrganPreset &p)
     out.reverb_decay = (uint8_t)QueryInt(buf, len, "reverb_decay",
                                          OrganPreset::kDefaultReverbDecay, 0,
                                          OrganPreset::kMaxReverbDecay);
+    out.percussion = (uint8_t)QueryInt(buf, len, "percussion",
+                                       OrganPreset::kDefaultPercussion, 0,
+                                       OrganPreset::kMaxPercussion);
+    out.delay_mix  = (uint8_t)QueryInt(buf, len, "delay_mix",
+                                       OrganPreset::kDefaultDelayMix, 0,
+                                       OrganPreset::kMaxDelayMix);
+    out.delay_time_ms = (uint16_t)QueryInt(buf, len, "delay_time_ms",
+                                           OrganPreset::kDefaultDelayTimeMs,
+                                           OrganPreset::kMinDelayTimeMs,
+                                           OrganPreset::kMaxDelayTimeMs);
     p = out;
     return true;
 }
@@ -258,6 +287,9 @@ void CaptureFromEngine(OrganPreset &p, const Engine &e)
     p.drive_tone   = (uint8_t)e.GetDriveTonePercent();
     p.reverb_mix   = (uint8_t)e.GetReverbMixPercent();
     p.reverb_decay = (uint8_t)e.GetReverbDecayStep();
+    p.percussion   = e.GetPercussionEnabled() ? 1 : 0;
+    p.delay_mix    = (uint8_t)e.GetDelayMixPercent();
+    p.delay_time_ms = (uint16_t)e.GetDelayTimeMs();
 }
 
 /** Push a preset into the engine through the regular setters (all ramped
@@ -283,6 +315,9 @@ void ApplyToEngine(const OrganPreset &p, Engine &e)
     e.SetDriveTonePercent(p.drive_tone);
     e.SetReverbMixPercent(p.reverb_mix);
     e.SetReverbDecayStep(p.reverb_decay);
+    e.SetPercussionEnabled(p.percussion != 0);
+    e.SetDelayMixPercent(p.delay_mix);
+    e.SetDelayTimeMs(p.delay_time_ms);
 }
 
 /** The RAM cache of all 15 slots. The audio ISR mutates it (user
