@@ -4,7 +4,7 @@
  *  integration tests (DaisySP is host-compilable): single-trigger
  *  rearm semantics, the intended 2 2/3' harmonic in rendered output,
  *  independence from Character/pipe controls, gate behavior across
- *  release/steal/toggle, the 27-unit mix normalization and exact
+ *  release/steal/toggle, the 28.5-unit mix normalization and exact
  *  settled-off equivalence.
  *
  *  Build & run: make -C firmware/chompi-organ/code/tests test
@@ -280,8 +280,8 @@ static void test_engine_harmonic_and_peak()
 
     r.engine.NoteOn(kNoteC3, 1.f);
     const float peak = r.PeakMs(30.f);
-    /* predicted peak: 0.5 tap x 1/27 normalization x 0.25 master gain */
-    const float expect = .5f * (1.f / 27.f) * .25f;
+    /* predicted peak: 0.75 tap x 1/28.5 normalization x 0.25 master gain */
+    const float expect = .75f * (1.f / 28.5f) * .25f;
     assert(peak > .7f * expect && peak < 1.4f * expect);
 
     /* the rendered ping is the pipe-2 (2 2/3') harmonic, not the
@@ -539,7 +539,7 @@ static void test_engine_normalization_and_off_equivalence()
 {
     /* normalization: one sustained note, one pipe at full level; the
      * percussion-enabled-settled render is the percussion-free render
-     * scaled by exactly 24/27 (~1 dB of dry attenuation) */
+     * scaled by exactly 24/28.5 (~1.5 dB of dry attenuation) */
     {
         Rig a;
         a.Init(); /* percussion never enabled: 1/24 */
@@ -560,7 +560,7 @@ static void test_engine_normalization_and_off_equivalence()
         b.engine.SetPipeStep(2, 0);
         b.engine.SetPipeStep(3, 0);
         b.RunMs(400.f); /* pipe gains fully settled */
-        b.EnablePercussionSettled(); /* 1/27, decay never triggered */
+        b.EnablePercussionSettled(); /* 1/28.5, decay never triggered */
         b.engine.NoteOn(kNoteC3, 1.f);
         b.RunMs(500.f);
         std::vector<float> cap_b;
@@ -573,7 +573,7 @@ static void test_engine_normalization_and_off_equivalence()
             eb += static_cast<double>(cap_b[i]) * cap_b[i];
         }
         const double ratio = sqrt(eb / ea);
-        assert(ratio > 24. / 27. - .005 && ratio < 24. / 27. + .005);
+        assert(ratio > 24. / 28.5 - .005 && ratio < 24. / 28.5 + .005);
     }
 
     /* settled-off equivalence: an engine whose percussion was enabled
@@ -607,7 +607,7 @@ static void test_engine_normalization_and_off_equivalence()
     }
 
     /* bounded output: full pipes, six-voice chord, percussion triggered
-     * - the 27-unit normalization keeps the master output within
+     * - the 28.5-unit normalization keeps the master output within
      * full scale even at master gain 1 */
     {
         Rig r;

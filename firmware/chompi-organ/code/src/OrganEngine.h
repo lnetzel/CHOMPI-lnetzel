@@ -6,16 +6,22 @@
  *  - Per-pipe Character: tonewheel-inspired harmonic coloration, 64
  *    steps, one independent amount per pipe shared across all voices
  *    (TonewheelCharacter.h). Step 0 is the exact clean sine; step 64 is
- *    clearly aged but still organ-like. One sine oscillator per pipe;
- *    the 2nd/3rd harmonics are derived algebraically from the sine
- *    sample, smoothly eased in and anti-alias-masked per folded note.
+ *    clearly aged but still organ-like. One table-lookup sine
+ *    oscillator per pipe (SineLut.h: 2048-entry interpolated table,
+ *    ~1.2e-6 max error - audibly identical to the libm sinf oscillator
+ *    it replaced, at a fraction of the CPU); the 2nd/3rd harmonics are
+ *    derived algebraically from the sine sample, smoothly eased in and
+ *    anti-alias-masked per folded note.
  *  - Free-running oscillators (phase never reset at note-on)
  *  - Per-pipe attack/release gate envelopes: 32 log-spaced steps each,
  *    5 ms (step 0, boot default = the original fixed timing) to 10 s
  *    (EnvelopeMap.h). Each pipe fades in/out at its own rate, so pipes
  *    can stagger their fade-in; a voice frees only when every pipe's
  *    release finishes. 5 ms steal fade
- *  - Oldest-first voice stealing; same-note retrigger reuses its voice
+ *  - Oldest-first voice stealing; same-note retrigger reuses its voice.
+ *    The steal fade completes inside Process(), but the new voice
+ *    starts once per block in Prepare() (<= 0.5 ms later, inaudible),
+ *    so the per-sample loop never does note-event work
  *  - Fixed 1/24 output scale so 6 voices x 4 pipes cannot clip
  *  - Pipe levels in 32 steps, gain = (step/32)^2, smoothed per sample
  *  - Distortion: 32-step fuzz saturation stage on the mix
@@ -84,15 +90,16 @@
  *    independent of pipe levels, mutes, Character, modulation amounts
  *    and the pipe envelope times, but follows note pitch, fine tuning,
  *    foldback, vibrato, velocity and master gain, and passes through
- *    the fuzz/rotary/reverb chain. With 0.5-peak percussion per voice
- *    the conservative six-voice sum bound rises from 24 to 27, so the
- *    mix normalization interpolates 1/24 -> 1/27 with the 5 ms enable
+ *    the fuzz/rotary/reverb chain. With 0.75-peak percussion per voice
+ *    the conservative six-voice sum bound rises from 24 to 28.5, so the
+ *    mix normalization interpolates 1/24 -> 1/28.5 with the 5 ms enable
  *    ramp; settled-off is exactly 1/24 and the whole path is skipped
  *    bit-exactly. On/off is saved in the SD-card presets.
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
  */
 #pragma once
 #include "daisysp.h"
+#include "SineLut.h"
 #include "Distortion.h"
 #include "RotarySpeaker.h"
 #include "TonewheelCharacter.h"
@@ -160,7 +167,15 @@ class OrganEngine
         steal_inc_   = 1.f / (0.005f * sample_rate); /* 5 ms steal fade */
         age_counter_ = 0;
         fine_cents_  = 0;
+        fine_mult_   = 1.f;
         freqs_dirty_ = false;
+        /* MIDI note -> Hz, equal-tempered A440: filled once here with
+         * the same expression the old per-note powf path used, so the
+         * table values are bit-identical to it; fine tune multiplies on
+         * top via fine_mult_ (UpdateFreqs). */
+        for(int n = 0; n < 128; n++)
+            note_hz_[n] = 440.f
+                          * powf(2.f, (static_cast<float>(n) - 69.f) / 12.f);
         character_.Init(sample_rate);
         for(int p = 0; p < kNumPipes; p++)
             character_.SetStep(p, kDefaultCharacterStep);
@@ -179,9 +194,7 @@ class OrganEngine
             {
                 voice.pipe_env[p] = 0.f;
                 voice.osc[p].Init(sample_rate);
-                voice.osc[p].SetAmp(1.f);
                 voice.osc[p].SetFreq(100.f);
-                voice.osc[p].SetWaveform(daisysp::Oscillator::WAVE_SIN);
                 base_freq_[v][p] = 100.f;
             }
         }
@@ -511,7 +524,10 @@ class OrganEngine
         c = c < -50 ? -50 : (c > 50 ? 50 : c);
         if(c != fine_cents_)
         {
-            fine_cents_  = c;
+            fine_cents_ = c;
+            /* one exp2f per encoder click, off the per-sample path;
+             * UpdateFreqs folds this into the note-table lookup */
+            fine_mult_   = exp2f(static_cast<float>(c) * (1.f / 1200.f));
             freqs_dirty_ = true;
         }
     }
@@ -549,7 +565,8 @@ class OrganEngine
                 StartVoice(v, note, velocity);
                 return;
             }
-            if(voice.state == STEAL && voice.pending_note == note)
+            if((voice.state == STEAL || voice.state == STEAL_START)
+               && voice.pending_note == note)
             {
                 voice.pending_vel = velocity;
                 return;
@@ -573,7 +590,7 @@ class OrganEngine
         int oldest = -1;
         for(int v = 0; v < kNumVoices; v++)
         {
-            if(voices_[v].state != STEAL
+            if(voices_[v].state != STEAL && voices_[v].state != STEAL_START
                && (oldest < 0 || voices_[v].age < voices_[oldest].age))
                 oldest = v;
         }
@@ -608,7 +625,8 @@ class OrganEngine
             {
                 voice.state = RELEASE;
             }
-            else if(voice.state == STEAL && voice.pending_note == note)
+            else if((voice.state == STEAL || voice.state == STEAL_START)
+                    && voice.pending_note == note)
             {
                 /* stolen voice's pending note was cancelled: just fade out */
                 voice.state = RELEASE;
@@ -621,6 +639,17 @@ class OrganEngine
     /** Called once per audio block, before Process(). */
     void Prepare(size_t num_samples)
     {
+        /* Block-rate steal completion: voices whose 5 ms steal fade
+         * finished during the previous block start their pending note
+         * here, so the per-sample Process() loop never does note-event
+         * work. <= 0.5 ms late - inaudible against the fade itself. */
+        for(int v = 0; v < kNumVoices; v++)
+        {
+            if(voices_[v].state == STEAL_START)
+                StartVoice(v, voices_[v].pending_note,
+                           voices_[v].pending_vel);
+        }
+
         /* B4: the distortion gain/normalization only depend on the
          * drive target, so compute them once per block instead of a
          * divide per sample; the live gains ramp to the block targets
@@ -655,7 +684,8 @@ class OrganEngine
             freqs_dirty_ = false;
             for(int v = 0; v < kNumVoices; v++)
             {
-                if(voices_[v].state != IDLE && voices_[v].state != STEAL)
+                if(voices_[v].state != IDLE && voices_[v].state != STEAL
+                   && voices_[v].state != STEAL_START)
                     UpdateFreqs(v);
             }
         }
@@ -685,15 +715,17 @@ class OrganEngine
             const float perc_ramp = percussion_.EnableRamp();
             const bool  perc_on   = percussion_.PathActive();
             /* Mix normalization: the conservative sum bound is 6 voices
-             * x 4 pipes = 24 units dry, 6 x (4 + 0.5 percussion) = 27
-             * with percussion fully enabled. Interpolating 1/(24 + 3r)
-             * with the enable ramp r keeps every intermediate state
-             * inside its true bound; at settled off (ramp exactly 0)
-             * the original constant is used bit-exactly. ~1 dB of dry
+             * x 4 pipes = 24 units dry, 6 x (4 + 0.75 percussion) = 28.5
+             * with percussion fully enabled. Interpolating
+             * 1/(24 + 6*kPeakGain*r) with the enable ramp r keeps every
+             * intermediate state inside its true bound (and tracks
+             * kPeakGain automatically); at settled off (ramp exactly 0)
+             * the original constant is used bit-exactly. ~1.5 dB of dry
              * attenuation while enabled. */
             float mix_scale = kMixScale;
             if(perc_ramp > 0.f)
-                mix_scale = 1.f / (24.f + 3.f * perc_ramp);
+                mix_scale = 1.f
+                            / (24.f + 6.f * Percussion::kPeakGain * perc_ramp);
 
             /* Vibrato: advance the one shared, free-running 6 Hz LFO and
              * take this sample's global pitch multiplier (exactly 1.f at
@@ -799,7 +831,10 @@ class OrganEngine
                     }
                     case STEAL:
                     {
-                        /* fixed 5 ms fade on all pipes, then the new note */
+                        /* fixed 5 ms fade on all pipes; the new note then
+                         * starts once per block from Prepare()
+                         * (STEAL_START), never inside this per-sample
+                         * loop */
                         bool all_down = true;
                         for(int p = 0; p < kNumPipes; p++)
                         {
@@ -810,8 +845,7 @@ class OrganEngine
                                 all_down = false;
                         }
                         if(all_down)
-                            StartVoice(v, voice.pending_note,
-                                       voice.pending_vel);
+                            voice.state = STEAL_START;
                         break;
                     }
                     default: break;
@@ -873,12 +907,13 @@ class OrganEngine
         ATTACK,
         SUSTAIN,
         RELEASE,
-        STEAL
+        STEAL,
+        STEAL_START /* fade done; StartVoice runs in Prepare() */
     };
 
     struct Voice
     {
-        daisysp::Oscillator osc[kNumPipes]; /* one sine per pipe */
+        SineLut  osc[kNumPipes]; /* one sine per pipe */
         VoiceState          state;
         uint8_t             note;
         uint8_t             pending_note;
@@ -910,19 +945,10 @@ class OrganEngine
         pipe_gain_target_[pipe] = pipe_muted_[pipe] ? 0.f : xm * xm;
     }
 
-    float NoteToHz(uint8_t note) const
-    {
-        return 440.f
-               * powf(2.f,
-                      (static_cast<float>(note) - 69.f
-                       + static_cast<float>(fine_cents_) * .01f)
-                          / 12.f);
-    }
-
     void UpdateFreqs(int v)
     {
         Voice      &voice = voices_[v];
-        const float base  = NoteToHz(voice.note);
+        const float base  = note_hz_[voice.note] * fine_mult_;
         for(int p = 0; p < kNumPipes; p++)
         {
             float f = base * PipeRatio(p);
@@ -958,6 +984,9 @@ class OrganEngine
     Voice    voices_[kNumVoices];
     uint32_t age_counter_;
     int      fine_cents_;
+    float    fine_mult_;     /* 2^(fine_cents_/1200), folded into the
+                              * note table by UpdateFreqs */
+    float    note_hz_[128];  /* A440 equal temperament, filled in Init() */
     bool     freqs_dirty_;
     float    pipe_gain_[kNumPipes];
     float    pipe_gain_target_[kNumPipes];

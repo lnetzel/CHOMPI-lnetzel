@@ -45,8 +45,10 @@ class Percussion
 {
   public:
     /** Peak percussion amplitude as a fraction of a full-scale single
-     *  pipe (before the engine's mix scaling). */
-    static constexpr float kPeakGain = .5f;
+     *  pipe (before the engine's mix scaling). 0.75 = +50% over the
+     *  original 0.5 per user request (too quiet against the pipes);
+     *  the engine's normalization bound is derived from this value. */
+    static constexpr float kPeakGain = .75f;
     /** Trigger attack smoothing. */
     static constexpr float kAttackSeconds = .001f; /* 1 ms */
     /** Exponential decay half-life. */
@@ -133,7 +135,7 @@ class Percussion
     /** Enable transition 0..1, exact endpoints when settled. The engine
      *  uses this both to fade the percussion sound on a toggle and to
      *  interpolate the mix normalization between the 24-unit (off) and
-     *  27-unit (on) bounds. */
+     *  28.5-unit (on) bounds. */
     float EnableRamp() const { return enable_ramp_; }
 
     /** Raw decay state 0..1 (tests/diagnostics). */

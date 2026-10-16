@@ -8,7 +8,7 @@ CXXFLAGS ?= -std=c++14 -O2 -Wall -Wextra -I../src
 # coreJSON is shared from chompi-wave's libs (needed by OrganPreset.h)
 COREJSON_DIR = ../../../chompi-wave/code/libs/coreJSON/source
 
-test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test envelope_map_test drift_modulator_test organ_preset_test mod_dest_test percussion_test stereo_bbd_delay_test
+test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test envelope_map_test drift_modulator_test organ_preset_test mod_dest_test percussion_test stereo_bbd_delay_test sine_lut_test
 	./tonewheel_character_test
 	./plate_reverb_test
 	./distortion_test
@@ -19,6 +19,7 @@ test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test en
 	./mod_dest_test
 	./percussion_test
 	./stereo_bbd_delay_test
+	./sine_lut_test
 
 tonewheel_character_test: tonewheel_character_test.cpp ../src/TonewheelCharacter.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
@@ -47,16 +48,19 @@ mod_dest_test: mod_dest_test.cpp ../src/ModDest.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 # percussion_test includes OrganEngine.h (engine integration tests), so it
-# needs DaisySP's headers plus the one out-of-line DaisySP implementation
-# the engine uses (Oscillator); PlateReverb.h pulls WAVE's fx_engine.h via
-# a relative include. Vendored headers trigger -Wunused-parameter etc.
+# needs DaisySP's headers (daisysp.h for fonepole; everything the engine
+# uses is header-inline since the voice oscillators moved to SineLut.h).
+# PlateReverb.h pulls WAVE's fx_engine.h via a relative include. Vendored
+# headers trigger -Wunused-parameter etc.
 DAISYSP_SRC = ../../../chompi-wave/code/libs/DaisySP/Source
 percussion_test: percussion_test.cpp ../src/Percussion.h ../src/OrganEngine.h
 	$(CXX) $(CXXFLAGS) -I$(DAISYSP_SRC) -I$(DAISYSP_SRC)/Utility \
-		-Wno-unused-parameter -o $@ $< \
-		$(DAISYSP_SRC)/Synthesis/oscillator.cpp
+		-Wno-unused-parameter -o $@ $<
 
 stereo_bbd_delay_test: stereo_bbd_delay_test.cpp ../src/StereoBbdDelay.h
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+sine_lut_test: sine_lut_test.cpp ../src/SineLut.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 # The vendored fx_engine.h triggers -Wunused-parameter from its DelayLine
@@ -73,6 +77,7 @@ clean:
 		organ_preset_test organ_preset_test.exe core_json_test.o \
 		mod_dest_test mod_dest_test.exe \
 		percussion_test percussion_test.exe \
-		stereo_bbd_delay_test stereo_bbd_delay_test.exe
+		stereo_bbd_delay_test stereo_bbd_delay_test.exe \
+		sine_lut_test sine_lut_test.exe
 
 .PHONY: test clean
