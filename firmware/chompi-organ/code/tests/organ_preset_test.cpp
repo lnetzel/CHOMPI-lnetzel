@@ -25,6 +25,7 @@ struct FakeEngine
     int  attack[4];
     int  release[4];
     bool muted[4];
+    int  length[4];
     int  vol_mod[4];
     int  char_mod[4];
     int  vibrato;
@@ -51,6 +52,7 @@ struct FakeEngine
             attack[p]    = 0;
             release[p]   = 0;
             muted[p]     = false;
+            length[p]    = 0;
             vol_mod[p]   = 0;
             char_mod[p]  = 0;
         }
@@ -75,6 +77,8 @@ struct FakeEngine
     int  GetPipeReleaseStep(int p) const { return release[p]; }
     void SetPipeMuted(int p, bool m) { muted[p] = m; }
     bool GetPipeMuted(int p) const { return muted[p]; }
+    void SetPipeLengthOctave(int p, int o) { length[p] = Clamp(o, -2, 2); }
+    int  GetPipeLengthOctave(int p) const { return length[p]; }
     void SetPipeVolModStep(int p, int s) { vol_mod[p] = Clamp(s, 0, 32); }
     int  GetPipeVolModStep(int p) const { return vol_mod[p]; }
     void SetPipeCharModStep(int p, int s) { char_mod[p] = Clamp(s, 0, 32); }
@@ -105,7 +109,8 @@ static bool SamePreset(const OrganPreset &a, const OrganPreset &b)
     {
         if(a.level[p] != b.level[p] || a.character[p] != b.character[p]
            || a.attack[p] != b.attack[p] || a.release[p] != b.release[p]
-           || a.mute[p] != b.mute[p] || a.vol_mod[p] != b.vol_mod[p]
+           || a.mute[p] != b.mute[p] || a.length[p] != b.length[p]
+           || a.vol_mod[p] != b.vol_mod[p]
            || a.char_mod[p] != b.char_mod[p])
             return false;
     }
@@ -133,6 +138,9 @@ static OrganPreset MakeAssortedPreset()
     p.release[1] = 32;
     p.attack[3]  = 7;
     p.mute[2]    = 1;
+    p.length[0]  = -2;
+    p.length[1]  = 2;
+    p.length[3]  = -1;
     p.vibrato      = 50;
     p.rotary       = 0;
     p.drive        = 32;
@@ -194,6 +202,7 @@ static void test_defaults_for_missing_keys()
     assert(p.drive_tone == OrganPreset::kDefaultTone);
     assert(p.vol_mod[2] == 0 && p.char_mod[1] == 0);
     assert(p.mute[0] == 0);
+    assert(p.length[0] == 0 && p.length[3] == 0); /* default: nominal */
     /* percussion and the delay fields default to off / dry / 250 ms for
      * older presets that predate them */
     assert(p.percussion == 0);
@@ -210,6 +219,7 @@ static void test_clamping()
           "\"character\":[128,64,-1,0],"
           "\"attack\":[33,0,0,0],\"release\":[0,0,0,99],"
           "\"mute\":[2,0,1,-1],"
+          "\"length\":[-3,2,5,0],"
           "\"vibrato\":51,\"rotary\":-2,\"drive\":64,"
           "\"drive_tone\":101,\"reverb_mix\":-50,\"reverb_decay\":1000,"
           "\"vol_mod\":[40,0,0,0],\"char_mod\":[0,0,0,-9],"
@@ -222,6 +232,9 @@ static void test_clamping()
     assert(p.attack[0] == 32 && p.release[3] == 32);
     assert(p.mute[0] == 1 && p.mute[1] == 0 && p.mute[2] == 1
            && p.mute[3] == 0);
+    /* pipe length clamps to -2..+2 */
+    assert(p.length[0] == -2 && p.length[1] == 2 && p.length[2] == 2
+           && p.length[3] == 0);
     assert(p.vibrato == 50 && p.rotary == 0 && p.drive == 32);
     assert(p.drive_tone == 100 && p.reverb_mix == 0
            && p.reverb_decay == 100);
@@ -352,6 +365,8 @@ static void test_capture_apply()
     e.SetPipeAttackStep(2, 20);
     e.SetPipeReleaseStep(3, 11);
     e.SetPipeMuted(1, true);
+    e.SetPipeLengthOctave(0, -2);
+    e.SetPipeLengthOctave(3, 1);
     e.SetPipeVolModStep(0, 9);
     e.SetPipeCharModStep(2, 12);
     e.SetVibratoDepth(25);
@@ -368,6 +383,7 @@ static void test_capture_apply()
     chompi::CaptureFromEngine(p, e);
     assert(p.level[0] == 3 && p.character[1] == 60 && p.attack[2] == 20
            && p.release[3] == 11 && p.mute[1] == 1 && p.mute[0] == 0);
+    assert(p.length[0] == -2 && p.length[3] == 1 && p.length[1] == 0);
     assert(p.vol_mod[0] == 9 && p.char_mod[2] == 12);
     assert(p.vibrato == 25 && p.rotary == 5 && p.drive == 16
            && p.drive_tone == 70 && p.reverb_mix == 40
@@ -384,6 +400,8 @@ static void test_capture_apply()
     assert(e.GetPipeStep(0) == 3 && e.GetPipeCharacterStep(1) == 60);
     assert(e.GetPipeAttackStep(2) == 20 && e.GetPipeReleaseStep(3) == 11);
     assert(e.GetPipeMuted(1) && !e.GetPipeMuted(0));
+    assert(e.GetPipeLengthOctave(0) == -2 && e.GetPipeLengthOctave(3) == 1
+           && e.GetPipeLengthOctave(1) == 0);
     assert(e.GetPipeVolModStep(0) == 9 && e.GetPipeCharModStep(2) == 12);
     assert(e.GetVibratoDepth() == 25 && e.GetRotaryStep() == 5);
     assert(e.GetDriveStep() == 16 && e.GetDriveTonePercent() == 70);
@@ -416,6 +434,7 @@ static void test_set_init()
         assert(p.attack[i] == 0);    /* 5 ms, the fastest */
         assert(p.release[i] == 0);
         assert(p.mute[i] == 0);      /* mute off */
+        assert(p.length[i] == 0);    /* nominal footage */
         assert(p.vol_mod[i] == 0);
         assert(p.char_mod[i] == 0);
     }
@@ -450,6 +469,7 @@ static void test_serialized_size_bound()
         p.attack[i] = 32;
         p.release[i] = 32;
         p.mute[i] = 1;
+        p.length[i] = -2; /* widest: "-2", 2 chars */
         p.vol_mod[i] = 32;
         p.char_mod[i] = 32;
     }

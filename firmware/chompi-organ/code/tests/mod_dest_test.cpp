@@ -2,7 +2,7 @@
  *  @brief Native tests for ModDest.h - the CHOMPI Organ's
  *  Modulation-mode UI rules: the physical black-key destination
  *  mapping, the boot default, the remembered selection, the exact
- *  destination colors and LED intensities, the two-page Normal-mode
+ *  destination colors and LED intensities, the three-page Normal-mode
  *  cycling, the encoder press behavior, and the SHIFT absolute
  *  broadcast with clamping.
  *
@@ -95,11 +95,13 @@ static void test_destination_colors_and_intensities()
     assert(b * kModDestSelected == 1.f);
 }
 
-static void test_normal_mode_two_page_cycling()
+static void test_normal_mode_three_page_cycling()
 {
-    /* Normal Mode cycles Volume (0) -> Character (1) -> Volume only */
+    /* Normal Mode cycles Volume (0) -> Character (1) -> pipe length
+     * (2) -> Volume */
     assert(NextNormalPipePage(0) == 1);
-    assert(NextNormalPipePage(1) == 0);
+    assert(NextNormalPipePage(1) == 2);
+    assert(NextNormalPipePage(2) == 0);
 }
 
 static void test_encoder_press_behavior()
@@ -140,7 +142,7 @@ int main()
     test_physical_destination_mapping();
     test_boot_default_and_remembered_selection();
     test_destination_colors_and_intensities();
-    test_normal_mode_two_page_cycling();
+    test_normal_mode_three_page_cycling();
     test_encoder_press_behavior();
     test_broadcast_and_clamping();
     printf("mod_dest_test: all tests passed\n");

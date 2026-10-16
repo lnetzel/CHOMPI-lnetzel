@@ -2,7 +2,8 @@
  *  @brief Polyphonic organ voice engine: 6 voices x 4 pipe registrations.
  *
  *  Implements FR-1/FR-6 and DSP-1..DSP-3 of chompi-organ- specification.md:
- *  - Pipe ratios 1x / 2x / 2^(19/12)x / 4x with 20 kHz octave foldback
+ *  - Pipe ratios 1x / 2x / 2^(19/12)x / 4x with 20 kHz octave foldback,
+ *    plus a per-pipe +/-2-octave pipe-length offset (encoder page 3)
  *  - Per-pipe Character: tonewheel-inspired harmonic coloration, 64
  *    steps, one independent amount per pipe shared across all voices
  *    (TonewheelCharacter.h). Step 0 is the exact clean sine; step 64 is
@@ -132,6 +133,15 @@ class OrganEngine
             default: return 1.f;
         }
     }
+    /** Octave multiplier for a pipe-length offset (-2..+2): exact
+     *  powers of two, so the default offset 0 (1x) keeps the frequency
+     *  path bit-identical to the unshifted sound. */
+    static float PipeLengthMult(int oct)
+    {
+        const float kMult[5] = {.25f, .5f, 1.f, 2.f, 4.f};
+        oct = oct < -2 ? -2 : (oct > 2 ? 2 : oct);
+        return kMult[oct + 2];
+    }
     static constexpr float kFoldbackHz     = 20000.f;
     static constexpr float kMixScale       = 1.f / 24.f;
     static constexpr int   kDefaultStep          = 16; /* 50% volume */
@@ -150,6 +160,10 @@ class OrganEngine
     static constexpr int   kMaxEnvSteps     = EnvelopeMap::kMaxSteps;
     static constexpr int   kDefaultEnvStep  = 0; /* 5 ms: the original timing */
     static constexpr int   kMaxModSteps     = 32; /* per-pipe modulation amounts */
+    static constexpr int   kMaxPipeLengthOctave    = 2; /* +/-2 octaves
+                                                        * from nominal */
+    static constexpr int   kDefaultPipeLengthOctave = 0; /* nominal
+                                                        * footage */
     static constexpr int   kDefaultDelayMixPercent = 0; /* delay dry */
     static constexpr int   kDefaultDelayTimeMs     = 250;
     static constexpr int   kMinDelayTimeMs         = 40;
@@ -206,6 +220,7 @@ class OrganEngine
             pipe_gain_[p] = pipe_gain_target_[p] = StepToGain(kDefaultStep);
             pipe_attack_step_[p]  = kDefaultEnvStep;
             pipe_release_step_[p] = kDefaultEnvStep;
+            pipe_length_oct_[p]   = kDefaultPipeLengthOctave;
             attack_inc_[p]  = EnvelopeMap::StepToInc(kDefaultEnvStep,
                                                      sample_rate);
             release_inc_[p] = attack_inc_[p];
@@ -378,6 +393,33 @@ class OrganEngine
     int GetPipeReleaseStep(int pipe) const
     {
         return pipe_release_step_[pipe];
+    }
+
+    /** Apply one encoder click to a pipe's length: an octave offset of
+ *      -2..+2 from the pipe's nominal footage (8', 4', 2 2/3', 2'),
+ *      clamped, no wrap - one detent = one octave. The new ratio folds
+ *      into the stored base frequencies via freqs_dirty_ without an
+ *      oscillator phase reset, so sounding notes move to the new pitch
+ *      click-free (same mechanism as fine tune); the 20 kHz foldback
+ *      applies after the offset, like a real organ. The percussion taps
+ *      the 2 2/3' pipe's raw oscillator, so it follows that pipe's
+ *      length. Boots 0; saved in the SD-card presets; no MIDI CC. */
+    void SetPipeLengthOctave(int pipe, int oct)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        oct = oct < -kMaxPipeLengthOctave
+                  ? -kMaxPipeLengthOctave
+                  : (oct > kMaxPipeLengthOctave ? kMaxPipeLengthOctave
+                                                : oct);
+        pipe_length_oct_[pipe] = static_cast<int8_t>(oct);
+        freqs_dirty_           = true;
+    }
+
+    int GetPipeLengthOctave(int pipe) const
+    {
+        return (pipe < 0 || pipe >= kNumPipes) ? 0
+                                               : pipe_length_oct_[pipe];
     }
 
     /** Apply one encoder click to the overdrive amount (0..kMaxSteps).
@@ -951,7 +993,8 @@ class OrganEngine
         const float base  = note_hz_[voice.note] * fine_mult_;
         for(int p = 0; p < kNumPipes; p++)
         {
-            float f = base * PipeRatio(p);
+            float f = base * PipeRatio(p)
+                       * PipeLengthMult(pipe_length_oct_[p]);
             while(f > kFoldbackHz)
                 f *= .5f; /* organ foldback: drop whole octaves */
             base_freq_[v][p] = f; /* vibrato multiplies this per sample */
@@ -1006,6 +1049,7 @@ class OrganEngine
     uint8_t  rotary_step_;
     uint8_t  pipe_attack_step_[kNumPipes];
     uint8_t  pipe_release_step_[kNumPipes];
+    int8_t   pipe_length_oct_[kNumPipes]; /* -2..+2; saved in presets */
     float    attack_inc_[kNumPipes];
     float    release_inc_[kNumPipes];
     PlateReverb plate_;

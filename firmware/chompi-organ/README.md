@@ -21,8 +21,8 @@ Everything else behaves the same in both modes.
 
 ### Pipe encoders - Normal Mode (physical knobs 1-4, left to right)
 
-Each pipe encoder has two independent pages; press the encoder's push
-switch to toggle that pipe between them 1 -> 2 -> 1 (pages are
+Each pipe encoder has three independent pages; press the encoder's push
+switch to cycle that pipe through them 1 -> 2 -> 3 -> 1 (pages are
 per-pipe, not global, and are preserved across mode changes):
 
 - **Page 1 - pipe level** (white knob LED): 32 steps, gain = (step/32)^2.
@@ -32,6 +32,17 @@ per-pipe, not global, and are preserved across mode changes):
   a floor so the page stays visible at 0): 64 steps of tonewheel-inspired
   harmonic coloration. Step 0 is the exact clean sine; step 64 is clearly
   aged but still organ-like. The white-key bar is uniformly blue.
+- **Page 3 - pipe length** (purple knob LED, brightness tracks the
+  |octave| with a floor so the page stays visible at the default): one
+  detent = one octave, up to two octaves each way from the pipe's
+  nominal footage, clamped, no wrap - e.g. the 8' pipe reaches 16' and
+  32' turning left, 4' and 2' turning right. The white-key bar shows
+  the offset as a 3-key purple group: keys 1-3 = -2 octaves, 4-6 = -1,
+  7-9 = the default length, 10-12 = +1, 13-15 = +2. Held notes move to
+  the new pitch click-free, the 20 kHz foldback applies after the
+  offset (like a real organ), and the percussion follows the 2 2/3'
+  pipe's length. Pipe lengths boot at the nominal footage, are stored
+  in the SD-card presets and have no MIDI CC.
 
 The attack and release times are edited in Modulation Mode: select the
 attack or release destination there (see the Modulation Mode section)
@@ -69,8 +80,8 @@ SHIFT adds two pipe-control gestures on the pipe encoders:
   stays silent until unmuted.
 - **SHIFT + turn** sets the value for all four pipes at once, per the
   turned pipe's current page: page 1 sets all four levels to the same
-  value, page 2 all four Character amounts. The white-key bar shows the
-  value all four pipes now share.
+  value, page 2 all four Character amounts, page 3 all four pipe
+  lengths. The white-key bar shows the value all four pipes now share.
 
 ### Pipe encoders - Modulation Mode (toggle switch UP)
 
@@ -333,7 +344,8 @@ in the background without taking over the Modulation-mode LEDs.
   key early cancels. At 2.5 s the init sound is applied live (held and
   latched notes keep sounding) and the CHOMPI key LED blinks white for
   ~1 s. Init needs no SD card. Init values: pipe levels 16 (50%),
-  Character 0 (clean sine), attack and release 0 (5 ms), mutes off,
+  Character 0 (clean sine), pipe lengths 0 (nominal footage), attack
+  and release 0 (5 ms), mutes off,
   volume/Character modulation 0, vibrato, rotary and drive 0,
   distortion tone 100%, reverb mix 0, reverb decay 0 (0.2 s),
   percussion off, delay mix 0% and delay time 250 ms - the
@@ -368,10 +380,10 @@ card mid-session disables the presets; re-inserting it re-mounts the
 card and fills still-empty, untouched slots from it. A card pulled
 mid-write can leave a stray `.tmp` file, which is ignored.
 
-Saved in every preset: per-pipe level, Character, attack, release, mute
-and volume/Character-modulation amounts, plus vibrato depth, rotary
-amount, fuzz amount and tone, reverb mix and decay, percussion on/off,
-and delay mix and time. NOT saved:
+Saved in every preset: per-pipe level, Character, pipe length, attack,
+release, mute and volume/Character-modulation amounts, plus vibrato
+depth, rotary amount, fuzz amount and tone, reverb mix and decay,
+percussion on/off, and delay mix and time. NOT saved:
 master volume, fine tune, octave shift, latch, page selections, the
 Modulation-mode destination and the wheel's rotary/vibrato selection.
 
@@ -489,7 +501,7 @@ and dirty tracking, engine capture/apply against a fake engine, and
 the init-patch values. The Modulation-mode UI tests cover the physical
 black-key destination mapping, the boot default and remembered
 selection, the exact 75%/100% destination-key intensities and colors,
-the two-page Normal-mode cycling, the encoder press behavior, and the
+the three-page Normal-mode cycling, the encoder press behavior, and the
 SHIFT broadcast clamping. The percussion tests cover the helper timing
 (sample-rate-independent 60 ms half-life, 1 ms attack, 5 ms fades,
 exact settle-to-zero) plus real OrganEngine integration renders:

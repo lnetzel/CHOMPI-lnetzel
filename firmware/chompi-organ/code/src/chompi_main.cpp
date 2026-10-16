@@ -176,7 +176,8 @@ enum BarKind
     kBarModVolume,   /**< uniformly white: pipe volume-modulation bar */
     kBarModCharacter, /**< uniformly blue: pipe Character-modulation bar */
     kBarFineTune,     /**< center-out red/green: fine-tune offset bar */
-    kBarDelay        /**< uniformly yellow: stereo-delay mix/time bars */
+    kBarDelay,        /**< uniformly yellow: stereo-delay mix/time bars */
+    kBarLength        /**< 3-key purple octave group: pipe-length bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
@@ -301,9 +302,10 @@ static const int         kWheelBarVibrato = 1;
  *  vibrato. Toggled by the debounced wheel-press edge. Volatile: written
  *  by PollControls (audio ISR), read by UpdateLeds (main loop). */
 static volatile bool wheel_vibrato_mode_ = false;
-/** Per-pipe Normal-mode encoder pages: 0 = Volume, 1 = Character;
- *  cycled per pipe by that pipe's encoder push-switch (attack/release
- *  are edited through the Modulation-mode destination instead).
+/** Per-pipe Normal-mode encoder pages: 0 = Volume, 1 = Character,
+ *  2 = pipe length (the +/-2-octave offset); cycled per pipe by that
+ *  pipe's encoder push-switch (attack/release are edited through the
+ *  Modulation-mode destination instead).
  *  Independent per pipe and preserved across mode changes. */
 static volatile int pipe_page_[OrganEngine::kNumPipes];
 
@@ -326,13 +328,17 @@ static bool ModModeSwitchUp() { return !hw.GetToggleState(); }
 static volatile bool mod_mode_ = false;
 static bool          prev_mod_mode_ = false; /* ISR-only edge tracking */
 static volatile int  mod_dest_ = kModDestDefault;
-/** bar_page_ sub-states for pipe bars in Modulation Mode. */
+/** bar_page_ sub-states for pipe bars in Modulation Mode: explicit
+ *  non-colliding IDs (Normal-mode pipe bars use the pipe_page_ values
+ *  0-2 directly: volume, Character, pipe length). */
 static const int kModBarVolume    = 4;
 static const int kModBarCharacter = 5;
+static const int kModBarAttack    = 6;
+static const int kModBarRelease   = 7;
 /** bar_page_ for a pipe-encoder turn, indexed by ModDest: attack and
  *  release reuse the purple/yellow envelope bars. */
 static const int kModDestBarPage[kNumModDests]
-    = {2, 3, kModBarVolume, kModBarCharacter};
+    = {kModBarAttack, kModBarRelease, kModBarVolume, kModBarCharacter};
 
 /** ENC_6 (volume encoder) pages: master volume -> overdrive -> stereo
  *  delay mix -> plate reverb mix, cycled by the encoder push-switch. */
@@ -669,8 +675,9 @@ static void PollControls()
     }
 
     /* pipe encoder push-switches (ENC_1..4_SW = SwId 0..3). Normal Mode:
-     * press cycles that pipe's encoder between page 1 (Volume) and page
-     * 2 (Character) and the newly active page's value bar shows as
+     * press cycles that pipe's encoder through page 1 (Volume), page 2
+     * (Character) and page 3 (pipe length) and the newly active page's
+     * value bar shows as
      * confirmation. Modulation Mode: unshifted presses do nothing (the
      * shared destination is selected with SHIFT + a black key). Either
      * way SHIFT+press toggles that pipe's mute (the press is fully
@@ -1164,6 +1171,15 @@ static void PollControls()
                             }
                             break;
                         }
+                        case 2: /* pipe length */
+                        {
+                            engine.SetPipeLengthOctave(
+                                p, engine.GetPipeLengthOctave(p) + delta);
+                            const int v = engine.GetPipeLengthOctave(p);
+                            for(int q = 0; q < OrganEngine::kNumPipes; q++)
+                                engine.SetPipeLengthOctave(q, v);
+                            break;
+                        }
                         default: /* level */
                         {
                             engine.SetPipeStep(
@@ -1191,6 +1207,10 @@ static void PollControls()
                                 = engine.GetPipeCharacterStep(p);
                             cc_character_dirty_[p]
                                 = true; /* coalesced, sent in MainLoop */
+                            break;
+                        case 2: /* pipe length */
+                            engine.SetPipeLengthOctave(
+                                p, engine.GetPipeLengthOctave(p) + delta);
                             break;
                         default: /* level */
                             engine.SetPipeStep(p, engine.GetPipeStep(p) + delta);
@@ -1331,10 +1351,11 @@ static void UpdateLeds()
         /* value bar spans the 15 white keys only: leftmost white = 0%,
          * rightmost white = 100%. Volume bars (page-1 pipes + master) use
          * the green/orange/red position gradient; the page-2 pipe
-         * Character bar is uniformly blue, the Modulation-mode attack
-         * destination bar is purple and the release destination bar
-         * yellow, the overdrive bar uniformly red and the rotary bar
-         * uniformly purple. */
+         * Character bar is uniformly blue, the page-3 pipe-length bar
+         * lights the current 3-key octave group purple, the
+         * Modulation-mode attack destination bar is purple and the
+         * release destination bar yellow, the overdrive bar uniformly
+         * red and the rotary bar uniformly purple. */
         int    lit;
         BarKind kind = kBarVolume;
         if(p == kVolBar)
@@ -1448,13 +1469,21 @@ static void UpdateLeds()
         }
         else if(bar_page_ == 2)
         {
+            /* Normal Mode page 3: pipe length, the -2..+2 octave
+             * offset; lit is unused - the custom draw below lights the
+             * current 3-key octave group */
+            lit  = 0;
+            kind = kBarLength;
+        }
+        else if(bar_page_ == kModBarAttack)
+        {
             /* Modulation Mode, attack destination: actual attack time,
              * 32 log-spaced steps 5 ms..10 s */
             lit  = (engine.GetPipeAttackStep(p) * kNumWhiteKeys + 16)
                    / OrganEngine::kMaxEnvSteps;
             kind = kBarAttack;
         }
-        else if(bar_page_ == 3)
+        else if(bar_page_ == kModBarRelease)
         {
             /* Modulation Mode, release destination: actual release
              * time, 32 log-spaced steps 5 ms..10 s */
@@ -1489,6 +1518,16 @@ static void UpdateLeds()
                 for(int w = lo; w <= hi && w < kNumWhiteKeys; w++)
                     SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
             }
+        }
+        else if(kind == kBarLength)
+        {
+            /* pipe-length bar: the 15 white keys are five 3-key octave
+             * groups - keys 1-3 = -2 octaves, 4-6 = -1, 7-9 = the
+             * default length, 10-12 = +1, 13-15 = +2; the current
+             * group's three keys light purple */
+            const int base = (engine.GetPipeLengthOctave(p) + 2) * 3;
+            for(int w = base; w < base + 3 && w < kNumWhiteKeys; w++)
+                SetSmtLedFloat(white_key_led[w], .55f, 0.f, 1.f);
         }
         else
         {
@@ -1602,7 +1641,9 @@ static void UpdateLeds()
     /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
      * Normal Mode: page 2 (Character) pipes glow blue with a brightness
      * floor so the page stays visible at step 0; page 1 (Volume) is
-     * white. Modulation Mode: all four encoders use the shared
+     * white; page 3 (pipe length) is purple with brightness tracking
+     * |octave| (a floor keeps it visible at the default). Modulation
+     * Mode: all four encoders use the shared
      * destination's color with brightness = 0.2 + 0.8 x that pipe's
      * value for the destination parameter. A muted pipe's knob LED is
      * solid red in both modes, overriding the page/destination color. */
@@ -1649,6 +1690,14 @@ static void UpdateLeds()
                                 + .8f * engine.GetPipeCharacterStep(p)
                                       * (1.f / OrganEngine::kMaxCharacterSteps);
                 SetPthLedFloat(p + 1, 0.f, 0.f, s); /* blue: Character */
+                break;
+            }
+            case 2:
+            {
+                const int oct = engine.GetPipeLengthOctave(p);
+                const int mag = oct < 0 ? -oct : oct;
+                const float s = .2f + .8f * mag * .5f;
+                SetPthLedFloat(p + 1, .55f * s, 0.f, s); /* purple: length */
                 break;
             }
             default:

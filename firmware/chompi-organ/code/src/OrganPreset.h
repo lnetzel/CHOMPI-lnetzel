@@ -38,6 +38,7 @@ struct OrganPreset
     static constexpr int kMaxReverbMix   = 100;
     static constexpr int kMaxReverbDecay = 100;
     static constexpr int kMaxMod         = 32;
+    static constexpr int kMaxLength      = 2;   /* +/-2 octaves */
     static constexpr int kMaxPercussion  = 1;   /* 0/1 toggle */
     static constexpr int kMaxDelayMix    = 100;
     static constexpr int kMinDelayTimeMs = 40;
@@ -55,6 +56,7 @@ struct OrganPreset
     static constexpr int kDefaultReverbMix   = 0;
     static constexpr int kDefaultReverbDecay = 0;  /* 0.2 s */
     static constexpr int kDefaultMod         = 0;
+    static constexpr int kDefaultLength      = 0;  /* nominal footage */
     static constexpr int kDefaultPercussion  = 0;  /* percussion off */
     static constexpr int kDefaultDelayMix    = 0;  /* delay dry */
     static constexpr int kDefaultDelayTimeMs = 250;
@@ -64,6 +66,7 @@ struct OrganPreset
     uint8_t attack[kNumPipes];    /**< 0..32 attack steps */
     uint8_t release[kNumPipes];   /**< 0..32 release steps */
     uint8_t mute[kNumPipes];      /**< 0/1 pipe mutes */
+    int8_t  length[kNumPipes];    /**< -2..+2 pipe-length octave offset */
     uint8_t vibrato;              /**< 0..50 cents peak */
     uint8_t rotary;               /**< 0..32 rotary amount */
     uint8_t drive;                /**< 0..32 fuzz amount */
@@ -85,6 +88,7 @@ struct OrganPreset
             attack[p]    = kDefaultEnv;
             release[p]   = kDefaultEnv;
             mute[p]      = 0;
+            length[p]    = kDefaultLength;
             vol_mod[p]   = kDefaultMod;
             char_mod[p]  = kDefaultMod;
         }
@@ -122,6 +126,7 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         "\"attack\":[%u,%u,%u,%u],"
         "\"release\":[%u,%u,%u,%u],"
         "\"mute\":[%u,%u,%u,%u],"
+        "\"length\":[%d,%d,%d,%d],"
         "\"vibrato\":%u,\"rotary\":%u,\"drive\":%u,"
         "\"drive_tone\":%u,\"reverb_mix\":%u,\"reverb_decay\":%u,"
         "\"vol_mod\":[%u,%u,%u,%u],"
@@ -138,6 +143,8 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         (unsigned)p.release[2], (unsigned)p.release[3],
         (unsigned)p.mute[0], (unsigned)p.mute[1], (unsigned)p.mute[2],
         (unsigned)p.mute[3],
+        (int)p.length[0], (int)p.length[1], (int)p.length[2],
+        (int)p.length[3],
         (unsigned)p.vibrato,
         (unsigned)p.rotary,
         (unsigned)p.drive,
@@ -225,6 +232,11 @@ inline bool Parse(char *buf, size_t len, OrganPreset &p)
                                            OrganPreset::kMaxEnv);
         snprintf(query, sizeof(query), "mute[%d]", i);
         out.mute[i] = (uint8_t)QueryInt(buf, len, query, 0, 0, 1);
+        snprintf(query, sizeof(query), "length[%d]", i);
+        out.length[i] = (int8_t)QueryInt(buf, len, query,
+                                         OrganPreset::kDefaultLength,
+                                         -OrganPreset::kMaxLength,
+                                         OrganPreset::kMaxLength);
         snprintf(query, sizeof(query), "vol_mod[%d]", i);
         out.vol_mod[i] = (uint8_t)QueryInt(buf, len, query,
                                            OrganPreset::kDefaultMod, 0,
@@ -278,6 +290,7 @@ void CaptureFromEngine(OrganPreset &p, const Engine &e)
         p.attack[i]    = (uint8_t)e.GetPipeAttackStep(i);
         p.release[i]   = (uint8_t)e.GetPipeReleaseStep(i);
         p.mute[i]      = e.GetPipeMuted(i) ? 1 : 0;
+        p.length[i]    = (int8_t)e.GetPipeLengthOctave(i);
         p.vol_mod[i]   = (uint8_t)e.GetPipeVolModStep(i);
         p.char_mod[i]  = (uint8_t)e.GetPipeCharModStep(i);
     }
@@ -308,6 +321,7 @@ void ApplyToEngine(const OrganPreset &p, Engine &e)
         e.SetPipeAttackStep(i, p.attack[i]);
         e.SetPipeReleaseStep(i, p.release[i]);
         e.SetPipeMuted(i, p.mute[i] != 0);
+        e.SetPipeLengthOctave(i, p.length[i]);
     }
     e.SetVibratoDepth(p.vibrato);
     e.SetRotaryStep(p.rotary);

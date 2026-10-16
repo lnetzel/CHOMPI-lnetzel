@@ -105,10 +105,11 @@ constexpr PipePressAction PipeEncoderPress(bool mod_mode, bool shift)
                  : (mod_mode ? kPipePressNothing : kPipePressCyclePage);
 }
 
-/** Normal Mode keeps two independent pages per pipe: page 0 (Volume)
- *  <-> page 1 (Character). Attack and release are edited in Modulation
- *  Mode. The page is preserved across mode changes. */
-constexpr int NextNormalPipePage(int page) { return (page + 1) % 2; }
+/** Normal Mode keeps three independent pages per pipe: page 0 (Volume)
+ *  -> page 1 (Character) -> page 2 (pipe length, the +/-2-octave
+ *  offset). Attack and release are edited in Modulation Mode. The page
+ *  is preserved across mode changes. */
+constexpr int NextNormalPipePage(int page) { return (page + 1) % 3; }
 
 /** One detent step clamped to [0, max]: the pipe setters clamp too, but
  *  the SHIFT "absolute broadcast" needs the clamped result BEFORE
