@@ -75,6 +75,7 @@ struct OrganPreset
     uint8_t reverb_decay;         /**< 0..100 plate decay steps */
     uint8_t vol_mod[kNumPipes];   /**< 0..32 volume-modulation amounts */
     uint8_t char_mod[kNumPipes];  /**< 0..32 Character-modulation amounts */
+    uint8_t length_mod[kNumPipes]; /**< 0..32 pipe-length modulation amounts */
     uint8_t percussion;           /**< 0/1 percussion toggle */
     uint8_t delay_mix;            /**< 0..100 delay mix percent */
     uint16_t delay_time_ms;       /**< 40..500 delay time in ms */
@@ -91,6 +92,7 @@ struct OrganPreset
             length[p]    = kDefaultLength;
             vol_mod[p]   = kDefaultMod;
             char_mod[p]  = kDefaultMod;
+            length_mod[p] = kDefaultMod;
         }
         vibrato      = kDefaultVibrato;
         rotary       = kDefaultRotary;
@@ -131,6 +133,7 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         "\"drive_tone\":%u,\"reverb_mix\":%u,\"reverb_decay\":%u,"
         "\"vol_mod\":[%u,%u,%u,%u],"
         "\"char_mod\":[%u,%u,%u,%u],"
+        "\"length_mod\":[%u,%u,%u,%u],"
         "\"percussion\":%u,\"delay_mix\":%u,\"delay_time_ms\":%u}",
         OrganPreset::kVersion,
         (unsigned)p.level[0], (unsigned)p.level[1], (unsigned)p.level[2],
@@ -155,6 +158,8 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         (unsigned)p.vol_mod[2], (unsigned)p.vol_mod[3],
         (unsigned)p.char_mod[0], (unsigned)p.char_mod[1],
         (unsigned)p.char_mod[2], (unsigned)p.char_mod[3],
+        (unsigned)p.length_mod[0], (unsigned)p.length_mod[1],
+        (unsigned)p.length_mod[2], (unsigned)p.length_mod[3],
         (unsigned)p.percussion,
         (unsigned)p.delay_mix,
         (unsigned)p.delay_time_ms);
@@ -245,6 +250,10 @@ inline bool Parse(char *buf, size_t len, OrganPreset &p)
         out.char_mod[i] = (uint8_t)QueryInt(buf, len, query,
                                             OrganPreset::kDefaultMod, 0,
                                             OrganPreset::kMaxMod);
+        snprintf(query, sizeof(query), "length_mod[%d]", i);
+        out.length_mod[i] = (uint8_t)QueryInt(buf, len, query,
+                                              OrganPreset::kDefaultMod, 0,
+                                              OrganPreset::kMaxMod);
     }
     out.vibrato = (uint8_t)QueryInt(buf, len, "vibrato",
                                     OrganPreset::kDefaultVibrato, 0,
@@ -293,6 +302,7 @@ void CaptureFromEngine(OrganPreset &p, const Engine &e)
         p.length[i]    = (int8_t)e.GetPipeLengthOctave(i);
         p.vol_mod[i]   = (uint8_t)e.GetPipeVolModStep(i);
         p.char_mod[i]  = (uint8_t)e.GetPipeCharModStep(i);
+        p.length_mod[i] = (uint8_t)e.GetPipeLengthModStep(i);
     }
     p.vibrato      = (uint8_t)e.GetVibratoDepth();
     p.rotary       = (uint8_t)e.GetRotaryStep();
@@ -316,6 +326,7 @@ void ApplyToEngine(const OrganPreset &p, Engine &e)
     {
         e.SetPipeVolModStep(i, p.vol_mod[i]);
         e.SetPipeCharModStep(i, p.char_mod[i]);
+        e.SetPipeLengthModStep(i, p.length_mod[i]);
         e.SetPipeStep(i, p.level[i]);
         e.SetPipeCharacterStep(i, p.character[i]);
         e.SetPipeAttackStep(i, p.attack[i]);

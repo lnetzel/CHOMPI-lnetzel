@@ -15,9 +15,10 @@
 using namespace chompi;
 
 /* SwId values (hardware.h): the 25 playable keys are 7..31; the first
- * four physical black keys are 7 (C#3), 12 (D#3), 13 (F#3), 14 (G#3);
- * the remaining black keys are 21, 22, 23, 29, 30, 31. chompi_main.cpp
- * static_asserts the destination-key table against Hardware::SwId. */
+ * five physical black keys are 7 (C#3), 12 (D#3), 13 (F#3), 14 (G#3),
+ * 21 (A#3); the remaining black keys are 22, 23, 29, 30, 31.
+ * chompi_main.cpp static_asserts the destination-key table against
+ * Hardware::SwId. */
 
 static void test_physical_destination_mapping()
 {
@@ -26,18 +27,21 @@ static void test_physical_destination_mapping()
     assert(ModDestAfterKey(kModDestVolMod, 12) == kModDestRelease); /* D#3 */
     assert(ModDestAfterKey(kModDestVolMod, 13) == kModDestVolMod);  /* F#3 */
     assert(ModDestAfterKey(kModDestVolMod, 14) == kModDestCharMod); /* G#3 */
+    assert(ModDestAfterKey(kModDestVolMod, 21)
+           == kModDestLengthMod); /* A#3 */
     assert(kModDestKeySw[0] == 7 && kModDestKeySw[1] == 12
-           && kModDestKeySw[2] == 13 && kModDestKeySw[3] == 14);
+           && kModDestKeySw[2] == 13 && kModDestKeySw[3] == 14
+           && kModDestKeySw[4] == 21);
 
     /* every playable key that is not a destination key selects nothing */
-    const int dest_key[] = {7, 12, 13, 14};
+    const int dest_key[] = {7, 12, 13, 14, 21};
     for(int swid = 7; swid < 32; swid++)
     {
         bool is_dest = false;
         for(int d = 0; d < kNumModDests; d++)
             if(swid == dest_key[d])
                 is_dest = true;
-        if(!is_dest) /* white keys and black keys 5-10 are inert */
+        if(!is_dest) /* white keys and black keys 6-10 are inert */
             assert(ModDestAfterKey(kModDestAttack, swid) == kModDestAttack);
     }
     /* non-key SwIds (encoders, SHIFT, LOOP, ...) select nothing too */
@@ -68,8 +72,10 @@ static void test_boot_default_and_remembered_selection()
     dest = ModDestAfterKey(dest, 15); /* C3: white key */
     assert(dest == kModDestAttack);
     dest = ModDestAfterKey(dest, 21); /* A#3: black key 5 */
-    assert(dest == kModDestAttack);
+    assert(dest == kModDestLengthMod);
     dest = ModDestAfterKey(dest, 14); /* select Character modulation */
+    assert(dest == kModDestCharMod);
+    dest = ModDestAfterKey(dest, 22); /* C#4: black key 6 */
     assert(dest == kModDestCharMod);
     dest = ModDestAfterKey(dest, 31); /* A#4: black key 10 */
     assert(dest == kModDestCharMod);
@@ -86,6 +92,8 @@ static void test_destination_colors_and_intensities()
     assert(r == 1.f && g == 1.f && b == 1.f); /* white */
     ModDestColor(kModDestCharMod, r, g, b);
     assert(r == 0.f && g == 0.f && b == 1.f); /* blue */
+    ModDestColor(kModDestLengthMod, r, g, b);
+    assert(r == 1.f && g == 1.f && b == 0.f); /* yellow: pipe length */
 
     /* exact LED intensity ratios: selected 100%, unselected 75% */
     assert(kModDestSelected == 1.f);

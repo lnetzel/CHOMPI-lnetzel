@@ -143,7 +143,7 @@ static const uint8_t led_map[40] = {
 static const int pipe_encoder[OrganEngine::kNumPipes] = {3, 0, 1, 2};
 static const int kVolEnc = 5; /* ENC_6 */
 
-/* the Modulation-mode destination keys are the first four physical
+/* the Modulation-mode destination keys are the first five physical
  * black keys from the left (ModDest.h keeps the values so the native
  * tests can exercise the mapping; break the build, not the mapping, if
  * the shift-register order ever changes) */
@@ -155,6 +155,8 @@ static_assert(kModDestKeySw[2] == static_cast<int>(Hardware::SwId::KEY_18),
               "mod destination key 3 is KEY_18 (F#3)");
 static_assert(kModDestKeySw[3] == static_cast<int>(Hardware::SwId::KEY_19),
               "mod destination key 4 is KEY_19 (G#3)");
+static_assert(kModDestKeySw[4] == static_cast<int>(Hardware::SwId::KEY_20),
+              "mod destination key 5 is KEY_20 (A#3)");
 
 /** SMT LED indices of the 15 white keys, left (C3) to right (C5). */
 static constexpr int     kNumWhiteKeys = 15;
@@ -175,9 +177,10 @@ enum BarKind
     kBarRelease,  /**< uniformly yellow: pipe release-time bar */
     kBarModVolume,   /**< uniformly white: pipe volume-modulation bar */
     kBarModCharacter, /**< uniformly blue: pipe Character-modulation bar */
+    kBarModLength,   /**< uniformly yellow: pipe-length modulation bar */
     kBarFineTune,     /**< center-out red/green: fine-tune offset bar */
     kBarDelay,        /**< uniformly yellow: stereo-delay mix/time bars */
-    kBarLength        /**< 3-key purple octave group: pipe-length bar */
+    kBarLength        /**< 3-key yellow octave group: pipe-length bar */
 };
 
 /** Key-bar color by white-key position w (0 = leftmost): volume bars
@@ -252,6 +255,13 @@ static void BarKeyColor(int w, BarKind kind, float &r, float &g, float &b)
         r = 0.f;
         g = 0.f;
         b = 1.f; /* blue: the whole Character-modulation bar */
+        return;
+    }
+    if(kind == kBarModLength)
+    {
+        r = 1.f;
+        g = 1.f;
+        b = 0.f; /* yellow: the whole pipe-length modulation bar */
         return;
     }
     if(kind == kBarDelay)
@@ -335,10 +345,12 @@ static const int kModBarVolume    = 4;
 static const int kModBarCharacter = 5;
 static const int kModBarAttack    = 6;
 static const int kModBarRelease   = 7;
+static const int kModBarLengthMod = 8;
 /** bar_page_ for a pipe-encoder turn, indexed by ModDest: attack and
  *  release reuse the purple/yellow envelope bars. */
 static const int kModDestBarPage[kNumModDests]
-    = {kModBarAttack, kModBarRelease, kModBarVolume, kModBarCharacter};
+    = {kModBarAttack, kModBarRelease, kModBarVolume, kModBarCharacter,
+       kModBarLengthMod};
 
 /** ENC_6 (volume encoder) pages: master volume -> overdrive -> stereo
  *  delay mix -> plate reverb mix, cycled by the encoder push-switch. */
@@ -1110,7 +1122,7 @@ static void PollControls()
                                     q++)
                                     engine.SetPipeVolModStep(q, v);
                                 break;
-                            default: /* kModDestCharMod */
+                            case kModDestCharMod:
                                 v = BroadcastStep(
                                     engine.GetPipeCharModStep(p),
                                     delta,
@@ -1118,6 +1130,15 @@ static void PollControls()
                                 for(int q = 0; q < OrganEngine::kNumPipes;
                                     q++)
                                     engine.SetPipeCharModStep(q, v);
+                                break;
+                            default: /* kModDestLengthMod */
+                                v = BroadcastStep(
+                                    engine.GetPipeLengthModStep(p),
+                                    delta,
+                                    OrganEngine::kMaxModSteps);
+                                for(int q = 0; q < OrganEngine::kNumPipes;
+                                    q++)
+                                    engine.SetPipeLengthModStep(q, v);
                                 break;
                         }
                     }
@@ -1137,9 +1158,14 @@ static void PollControls()
                                 engine.SetPipeVolModStep(
                                     p, engine.GetPipeVolModStep(p) + delta);
                                 break;
-                            default: /* kModDestCharMod */
+                            case kModDestCharMod:
                                 engine.SetPipeCharModStep(
                                     p, engine.GetPipeCharModStep(p) + delta);
+                                break;
+                            default: /* kModDestLengthMod */
+                                engine.SetPipeLengthModStep(
+                                    p,
+                                    engine.GetPipeLengthModStep(p) + delta);
                                 break;
                         }
                     }
@@ -1461,6 +1487,14 @@ static void UpdateLeds()
                    / OrganEngine::kMaxModSteps;
             kind = kBarModCharacter;
         }
+        else if(bar_page_ == kModBarLengthMod)
+        {
+            /* Modulation Mode, pipe-length-modulation destination: the
+             * pipe's length-modulation amount */
+            lit  = (engine.GetPipeLengthModStep(p) * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxModSteps;
+            kind = kBarModLength;
+        }
         else if(bar_page_ == 1)
         {
             lit  = (engine.GetPipeCharacterStep(p) * kNumWhiteKeys + 32)
@@ -1524,10 +1558,10 @@ static void UpdateLeds()
             /* pipe-length bar: the 15 white keys are five 3-key octave
              * groups - keys 1-3 = -2 octaves, 4-6 = -1, 7-9 = the
              * default length, 10-12 = +1, 13-15 = +2; the current
-             * group's three keys light purple */
+             * group's three keys light yellow */
             const int base = (engine.GetPipeLengthOctave(p) + 2) * 3;
             for(int w = base; w < base + 3 && w < kNumWhiteKeys; w++)
-                SetSmtLedFloat(white_key_led[w], .55f, 0.f, 1.f);
+                SetSmtLedFloat(white_key_led[w], 1.f, 1.f, 0.f);
         }
         else
         {
@@ -1620,9 +1654,9 @@ static void UpdateLeds()
      * applied AFTER every keyboard overlay above so the value bars, the
      * distortion-tone bar, held notes, the octave hints and any preset
      * indicator can never overwrite it (the white keys are left to
-     * those overlays): the four destination keys glow in their
+     * those overlays): the five destination keys glow in their
      * destination color - the selected key at exactly 100%, the other
-     * three at exactly 75%; every other black key stays off, even while
+     * four at exactly 75%; every other black key stays off, even while
      * its key plays a note. */
     if(mod_mode_)
     {
@@ -1634,14 +1668,16 @@ static void UpdateLeds()
                                            : kModDestUnselected;
             SetSmtLedFloat(led_map[kModDestKeySw[d]], r * s, g * s, b * s);
         }
-        for(int i = 4; i < 10; i++)
+        /* the destination keys occupy SMT LEDs 0..4 (led_map), so only
+         * the remaining black-key LEDs 5..9 are forced off */
+        for(int i = kNumModDests; i < 10; i++)
             SetSmtLedFloat(i, 0.f, 0.f, 0.f);
     }
 
     /* knob LEDs: pipe values on PTH 1-4, master volume on PTH 9.
      * Normal Mode: page 2 (Character) pipes glow blue with a brightness
      * floor so the page stays visible at step 0; page 1 (Volume) is
-     * white; page 3 (pipe length) is purple with brightness tracking
+     * white; page 3 (pipe length) is yellow with brightness tracking
      * |octave| (a floor keeps it visible at the default). Modulation
      * Mode: all four encoders use the shared
      * destination's color with brightness = 0.2 + 0.8 x that pipe's
@@ -1673,8 +1709,12 @@ static void UpdateLeds()
                     step = engine.GetPipeVolModStep(p);
                     max  = OrganEngine::kMaxModSteps;
                     break;
-                default: /* kModDestCharMod */
+                case kModDestCharMod:
                     step = engine.GetPipeCharModStep(p);
+                    max  = OrganEngine::kMaxModSteps;
+                    break;
+                default: /* kModDestLengthMod */
+                    step = engine.GetPipeLengthModStep(p);
                     max  = OrganEngine::kMaxModSteps;
                     break;
             }
@@ -1697,7 +1737,7 @@ static void UpdateLeds()
                 const int oct = engine.GetPipeLengthOctave(p);
                 const int mag = oct < 0 ? -oct : oct;
                 const float s = .2f + .8f * mag * .5f;
-                SetPthLedFloat(p + 1, .55f * s, 0.f, s); /* purple: length */
+                SetPthLedFloat(p + 1, s, s, 0.f); /* yellow: length */
                 break;
             }
             default:

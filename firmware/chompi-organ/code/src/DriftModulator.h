@@ -2,10 +2,13 @@
  *  @brief Slow, free-running "organic drift" modulator for ORGAN's
  *  Modulation Mode.
  *
- *  Eight independent instances (4 pipes x {volume, Character}) run
- *  continuously in the engine, giving each pipe's level and Character a
- *  living, slow movement. The output u in [0,1] sweeps between the
- *  window edges with a smooth raised-cosine shape (no corners):
+ *  Twelve independent instances (4 pipes x {volume, Character, pipe
+ *  length}) run continuously in the engine, giving each pipe's level,
+ *  Character and pitch a living, slow movement. An optional
+ *  per-instance rate multiplier (Init's third argument) lets the pipes
+ *  drift at audibly different speeds. The output u in [0,1] sweeps
+ *  between the window edges with a smooth raised-cosine shape (no
+ *  corners):
  *
  *      rising half:  u = (1 - cos(pi * phase)) / 2   (0 -> 1)
  *      falling half: u = (1 + cos(pi * phase)) / 2   (1 -> 0)
@@ -46,10 +49,13 @@ class DriftModulator
 
     /** seed must be distinct per instance; 0 is remapped (xorshift32's
      *  all-zero state is a fixed point). The start phase, direction and
-     *  first half-duration are all drawn from the PRNG. */
-    void Init(float sample_rate, uint32_t seed)
+     *  first half-duration are all drawn from the PRNG. `rate` scales
+     *  the drift speed (every drawn duration is divided by it): 1 is
+     *  the base rate, 2 drifts twice as fast. */
+    void Init(float sample_rate, uint32_t seed, float rate = 1.f)
     {
         sample_rate_ = sample_rate;
+        rate_        = rate > 0.f ? rate : 1.f;
         state_       = seed != 0u ? seed : 0x9E3779B9u;
         phase_       = RandFloat(); /* randomized start phase... */
         rising_      = (Next() & 1u) != 0u; /* ...and direction */
@@ -127,13 +133,13 @@ class DriftModulator
     }
 
     /** Draw a new random half duration and derive the per-sample phase
-     *  increment from it. */
+     *  increment from it; the per-instance rate divides the duration. */
     void NewDuration()
     {
         const float seconds
             = kMinHalfSeconds
               + (kMaxHalfSeconds - kMinHalfSeconds) * RandFloat();
-        phase_inc_ = 1.f / (seconds * sample_rate_);
+        phase_inc_ = rate_ / (seconds * sample_rate_);
     }
 
     void ComputeValue()
@@ -145,6 +151,7 @@ class DriftModulator
     }
 
     float    sample_rate_;
+    float    rate_;      /* speed multiplier, 1 = base rate */
     uint32_t state_;
     float    phase_;     /* position within the current half, 0..1 */
     float    phase_inc_; /* per-sample phase advance */

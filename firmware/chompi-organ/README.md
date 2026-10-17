@@ -32,12 +32,12 @@ per-pipe, not global, and are preserved across mode changes):
   a floor so the page stays visible at 0): 64 steps of tonewheel-inspired
   harmonic coloration. Step 0 is the exact clean sine; step 64 is clearly
   aged but still organ-like. The white-key bar is uniformly blue.
-- **Page 3 - pipe length** (purple knob LED, brightness tracks the
+- **Page 3 - pipe length** (yellow knob LED, brightness tracks the
   |octave| with a floor so the page stays visible at the default): one
   detent = one octave, up to two octaves each way from the pipe's
   nominal footage, clamped, no wrap - e.g. the 8' pipe reaches 16' and
   32' turning left, 4' and 2' turning right. The white-key bar shows
-  the offset as a 3-key purple group: keys 1-3 = -2 octaves, 4-6 = -1,
+  the offset as a 3-key yellow group: keys 1-3 = -2 octaves, 4-6 = -1,
   7-9 = the default length, 10-12 = +1, 13-15 = +2. Held notes move to
   the new pitch click-free, the 20 kHz foldback applies after the
   offset (like a real organ), and the percussion follows the 2 2/3'
@@ -85,11 +85,12 @@ SHIFT adds two pipe-control gestures on the pipe encoders:
 
 ### Pipe encoders - Modulation Mode (toggle switch UP)
 
-In Modulation Mode the organ drifts on its own: each pipe's volume and
-Character slowly and independently wander around their Normal Mode
-settings, giving the organ a living, organic movement. The four pipe
-encoders all edit ONE shared destination, selected with SHIFT + a
-physical black key (the black keys are numbered left to right):
+In Modulation Mode the organ drifts on its own: each pipe's volume,
+Character and pipe length slowly and independently wander around their
+Normal Mode settings, giving the organ a living, organic movement. The
+four pipe encoders all edit ONE shared destination, selected with
+SHIFT + a physical black key (the black keys are numbered left to
+right):
 
 - **Black key 1 (C#3) - attack time** (purple): the actual pipe attack
   envelope time, 32 log-spaced steps from 5 ms to 10 s.
@@ -99,18 +100,23 @@ physical black key (the black keys are numbered left to right):
   0-100% (~3% per click), clamped, no wrap.
 - **Black key 4 (G#3) - Character modulation amount** (blue): 32
   steps, same mapping.
+- **Black key 5 (A#3) - pipe-length modulation amount** (yellow): 32
+  steps, same mapping. The pipe's pitch drifts in a symmetric window of
+  up to +/-20 cents (at 100%) around its set length. Each pipe drifts
+  at its own rate (8' slowest, 2' fastest), so the four pipes never
+  move in step.
 
-Black key 5 onward selects nothing. Volume modulation is selected at
+Black key 6 onward selects nothing. Volume modulation is selected at
 boot; the selection is remembered across mode changes until reboot and
 is not stored in the presets.
 
-The four destination keys are always lit in Modulation Mode - the
-selected key at 100% of its destination color, the other three at
+The five destination keys are always lit in Modulation Mode - the
+selected key at 100% of its destination color, the other four at
 exactly 75% - with or without SHIFT held, during value bars and during
 the distortion-tone display; every other black key stays dark, even
 while its key plays a note. A turn adjusts the selected parameter for
-that pipe and shows the matching white-key value bar (purple, yellow,
-white or blue) for 500 ms. The knob LEDs use the selected destination's
+that pipe and shows the matching white-key value bar in the
+destination's color for 500 ms. The knob LEDs use the selected destination's
 color with brightness = 0.2 + 0.8 x that pipe's value (the floor keeps
 the encoder visible at 0%); a muted pipe's knob LED stays solid red.
 Unshifted encoder presses do nothing in Modulation Mode. SHIFT + turn
@@ -128,10 +134,13 @@ value), Character a = step/64 (before its smoothstep easing). The
 amount scales a window around the user value: at 100% the window is
 +/-20% (40% total); the window slides - never clips - to stay inside
 0-100%, so a 95% center swings 60-100% and a 0% center swings 0-40%
-(a silent pipe becomes audible). A muted pipe stays silent. Amount 0
-is exactly the unmodulated sound.
+(a silent pipe becomes audible). Pipe length instead drifts the pitch
+directly: a symmetric window of up to +/-20 cents (at 100%) around the
+set footage, phase-continuous and click-free. A muted pipe stays
+silent. Amount 0 is exactly the unmodulated sound.
 
-Each of the eight modulators (4 pipes x volume/Character) is a slow,
+Each of the twelve modulators (4 pipes x volume/Character/pipe length)
+is a slow,
 free-running raised-cosine swing: every half-cycle draws its own
 random 2.5-10 s duration, so a full bottom-to-top-to-bottom cycle
 takes 5-20 s, is asymmetric, and never repeats in lockstep with the
@@ -381,9 +390,9 @@ card and fills still-empty, untouched slots from it. A card pulled
 mid-write can leave a stray `.tmp` file, which is ignored.
 
 Saved in every preset: per-pipe level, Character, pipe length, attack,
-release, mute and volume/Character-modulation amounts, plus vibrato
-depth, rotary amount, fuzz amount and tone, reverb mix and decay,
-percussion on/off, and delay mix and time. NOT saved:
+release, mute and volume/Character/pipe-length-modulation amounts,
+plus vibrato depth, rotary amount, fuzz amount and tone, reverb mix
+and decay, percussion on/off, and delay mix and time. NOT saved:
 master volume, fine tune, octave shift, latch, page selections, the
 Modulation-mode destination and the wheel's rotary/vibrato selection.
 

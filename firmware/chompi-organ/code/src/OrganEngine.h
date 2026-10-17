@@ -160,6 +160,8 @@ class OrganEngine
     static constexpr int   kMaxEnvSteps     = EnvelopeMap::kMaxSteps;
     static constexpr int   kDefaultEnvStep  = 0; /* 5 ms: the original timing */
     static constexpr int   kMaxModSteps     = 32; /* per-pipe modulation amounts */
+    static constexpr int   kLengthModMaxCents = 20; /* pipe-length drift
+                                                       * half-width at 100% */
     static constexpr int   kMaxPipeLengthOctave    = 2; /* +/-2 octaves
                                                         * from nominal */
     static constexpr int   kDefaultPipeLengthOctave = 0; /* nominal
@@ -226,20 +228,33 @@ class OrganEngine
             release_inc_[p] = attack_inc_[p];
         }
 
-        /* Modulation Mode drift: 8 free-running modulators, distinct
-         * fixed seeds (nonzero, xorshift32-safe) so the pipes never run
-         * in lockstep; amounts boot at 0 = exact unmodulated sound. */
+        /* Modulation Mode drift: 12 free-running modulators (4 pipes x
+         * {volume, Character, pipe length}), distinct fixed seeds
+         * (nonzero, xorshift32-safe) so the pipes never run in
+         * lockstep; amounts boot at 0 = exact unmodulated sound. */
         const uint32_t vol_seeds[kNumPipes]
             = {0x2545F491u, 0x8F3A7B15u, 0x6C8E9CF1u, 0x1F123BB5u};
         const uint32_t char_seeds[kNumPipes]
             = {0xD1B54A35u, 0x9E3779B9u, 0x4A3C6D27u, 0x85A5E1B3u};
+        const uint32_t length_seeds[kNumPipes]
+            = {0x7F4A7C15u, 0x1B873593u, 0xB5297A4Du, 0x02B5F5A9u};
+        /* Per-pipe rate bands make the four length drifts clearly
+         * distinct: the 8' pipe wanders slowest, the 2' pipe fastest
+         * (half-swing ranges 3.6-14.3 s / 2.8-11.1 s / 2.2-8.7 s /
+         * 1.7-6.9 s), so the pipes never appear to move in step. */
+        const float length_rates[kNumPipes] = {0.70f, 0.90f, 1.15f, 1.45f};
         for(int p = 0; p < kNumPipes; p++)
         {
-            vol_mod_step_[p]  = 0;
-            char_mod_step_[p] = 0;
+            vol_mod_step_[p]    = 0;
+            char_mod_step_[p]   = 0;
+            length_mod_step_[p] = 0;
+            length_mod_mult_[p] = 1.f;
             vol_mod_[p].Init(sample_rate, vol_seeds[p]);
             char_mod_[p].Init(sample_rate, char_seeds[p]);
+            length_mod_[p].Init(sample_rate, length_seeds[p],
+                                length_rates[p]);
         }
+        length_mod_active_ = false;
 
         master_gain_ = master_gain_target_ = kDefaultMasterGain;
 
@@ -358,6 +373,26 @@ class OrganEngine
     int GetPipeCharModStep(int pipe) const
     {
         return (pipe < 0 || pipe >= kNumPipes) ? 0 : char_mod_step_[pipe];
+    }
+
+    /** Modulation Mode: set a pipe's pipe-length modulation amount
+ *      (0..kMaxModSteps, clamped). 100% drifts the pipe's pitch inside a
+ *      symmetric +/-kLengthModMaxCents window around its set length
+ *      (linear in the step); 0 is the exact unmodulated pitch
+ *      (multiplier exactly 1). The modulator keeps free-running;
+ *      changing the amount never restarts it. Boots 0; saved in the
+ *      SD-card presets; no MIDI CC. */
+    void SetPipeLengthModStep(int pipe, int step)
+    {
+        if(pipe < 0 || pipe >= kNumPipes)
+            return;
+        step = step < 0 ? 0 : (step > kMaxModSteps ? kMaxModSteps : step);
+        length_mod_step_[pipe] = static_cast<uint8_t>(step);
+    }
+
+    int GetPipeLengthModStep(int pipe) const
+    {
+        return (pipe < 0 || pipe >= kNumPipes) ? 0 : length_mod_step_[pipe];
     }
 
     /** Apply one encoder click to a pipe's attack time (0..kMaxEnvSteps,
@@ -700,16 +735,21 @@ class OrganEngine
          * a click-free bypass. */
         distortion_.PrepareBlock(drive_target_);
 
-        /* Modulation Mode drift: advance the eight free-running
+        /* Modulation Mode drift: advance the twelve free-running
          * modulators once per block and re-derive the modulated pipe
-         * gain targets and Character ramp targets from the user
-         * centers. The existing ~1 ms per-sample gain slew and the
-         * Character ~10 ms ramp smooth the block-rate steps; amount 0
+         * gain targets, Character ramp targets and pipe-length pitch
+         * multipliers from the user centers. The existing ~1 ms
+         * per-sample gain slew and the Character ~10 ms ramp smooth the
+         * block-rate steps; the pitch multiplier steps are inaudible
+         * (worst case ~7e-6 relative per block) and SineLut never
+         * resets the phase, so pitch glides click-free; amount 0
          * reproduces the unmodulated targets bit-exactly. */
+        length_mod_active_ = false;
         for(int p = 0; p < kNumPipes; p++)
         {
             vol_mod_[p].Advance(static_cast<int>(num_samples));
             char_mod_[p].Advance(static_cast<int>(num_samples));
+            length_mod_[p].Advance(static_cast<int>(num_samples));
             UpdatePipeGainTarget(p);
             const float a_center = static_cast<float>(character_.GetStep(p))
                                    * (1.f / kMaxCharacterSteps);
@@ -719,6 +759,20 @@ class OrganEngine
                 p,
                 DriftModulator::ApplyWindow(a_center, a_amount,
                                             char_mod_[p].Value()));
+            const int lmod = length_mod_step_[p];
+            if(lmod > 0)
+            {
+                length_mod_active_ = true;
+                /* symmetric window: the raised-cosine drift u in [0,1]
+                 * maps to +/-kLengthModMaxCents scaled by the amount */
+                const float cents
+                    = (length_mod_[p].Value() - .5f) * 2.f
+                      * kLengthModMaxCents
+                      * (static_cast<float>(lmod) * (1.f / kMaxModSteps));
+                length_mod_mult_[p] = exp2f(cents * (1.f / 1200.f));
+            }
+            else
+                length_mod_mult_[p] = 1.f; /* exact unmodulated pitch */
         }
 
         if(freqs_dirty_)
@@ -789,10 +843,15 @@ class OrganEngine
                 if(voice.state == IDLE)
                     continue;
 
-                if(vib_depth > 0)
+                /* Vibrato and pipe-length drift share this per-sample
+                 * retune: both multiply the stored base frequencies
+                 * (SineLut SetFreq is phase-continuous). The gate keeps
+                 * the fully-bypassed path bit-exact. */
+                if(vib_depth > 0 || length_mod_active_)
                 {
                     for(int p = 0; p < kNumPipes; p++)
-                        voice.osc[p].SetFreq(base_freq_[v][p] * vib_mult);
+                        voice.osc[p].SetFreq(base_freq_[v][p] * vib_mult
+                                             * length_mod_mult_[p]);
                 }
 
                 float sig  = 0.f;
@@ -1037,8 +1096,13 @@ class OrganEngine
     TonewheelCharacter character_;
     uint8_t  vol_mod_step_[kNumPipes];  /* boot 0; saved in presets */
     uint8_t  char_mod_step_[kNumPipes]; /* boot 0; saved in presets */
+    uint8_t  length_mod_step_[kNumPipes]; /* boot 0; saved in presets */
     DriftModulator vol_mod_[kNumPipes];  /* free-running per-pipe drift */
     DriftModulator char_mod_[kNumPipes];
+    DriftModulator length_mod_[kNumPipes];
+    float    length_mod_mult_[kNumPipes]; /* block-rate pitch multiplier,
+                                           * exactly 1 while amount is 0 */
+    bool     length_mod_active_; /* any length-mod amount > 0 (Prepare) */
     float    master_gain_;
     float    master_gain_target_;
     float    drive_;

@@ -6,9 +6,10 @@
  *  encoders, selected with SHIFT + a physical black key (the switch is
  *  UP). Black keys are numbered physically from left to right: key 1
  *  (C#3) selects the actual pipe attack time, key 2 (D#3) the actual
- *  pipe release time, key 3 (F#3) the volume-modulation amount and key
- *  4 (G#3) the Character-modulation amount; the fifth and later black
- *  keys select nothing. The selection boots on volume modulation, is
+ *  pipe release time, key 3 (F#3) the volume-modulation amount, key
+ *  4 (G#3) the Character-modulation amount and key 5 (A#3) the
+ *  pipe-length modulation amount; the sixth and later black keys
+ *  select nothing. The selection boots on volume modulation, is
  *  remembered across mode changes until reboot and is never stored in
  *  the SD-card presets.
  *
@@ -21,13 +22,14 @@
 namespace chompi
 {
 
-/** The four shared Modulation-mode destinations. */
+/** The five shared Modulation-mode destinations. */
 enum ModDest
 {
     kModDestAttack = 0, /**< actual pipe attack time (purple) */
     kModDestRelease,    /**< actual pipe release time (yellow) */
     kModDestVolMod,     /**< volume-modulation amount (white) */
     kModDestCharMod,    /**< Character-modulation amount (blue) */
+    kModDestLengthMod,  /**< pipe-length modulation amount (yellow) */
     kNumModDests
 };
 
@@ -35,18 +37,18 @@ enum ModDest
 constexpr int kModDestDefault = kModDestVolMod;
 
 /** Destination-key LED intensities: the selected key shows 100% of the
- *  destination color, the other three exactly 75%. */
+ *  destination color, the other four exactly 75%. */
 constexpr float kModDestSelected   = 1.f;
 constexpr float kModDestUnselected = .75f;
 
-/** SwId values of the four destination keys, in destination order:
- *  KEY_16 (C#3), KEY_17 (D#3), KEY_18 (F#3), KEY_19 (G#3) - the first
- *  four physical black keys from the left. */
-constexpr int kModDestKeySw[kNumModDests] = {7, 12, 13, 14};
+/** SwId values of the five destination keys, in destination order:
+ *  KEY_16 (C#3), KEY_17 (D#3), KEY_18 (F#3), KEY_19 (G#3), KEY_20 (A#3)
+ *  - the first five physical black keys from the left. */
+constexpr int kModDestKeySw[kNumModDests] = {7, 12, 13, 14, 21};
 
 /** SHIFT + key destination selection: returns the pressed key's
  *  destination, or `cur` unchanged when the key selects nothing (white
- *  keys, the fifth and later black keys). Nothing else writes the
+ *  keys, the sixth and later black keys). Nothing else writes the
  *  destination, so the selection persists across mode changes until
  *  reboot. */
 constexpr int ModDestAfterKey(int cur, int swid)
@@ -55,12 +57,14 @@ constexpr int ModDestAfterKey(int cur, int swid)
            : swid == kModDestKeySw[1] ? kModDestRelease
            : swid == kModDestKeySw[2] ? kModDestVolMod
            : swid == kModDestKeySw[3] ? kModDestCharMod
+           : swid == kModDestKeySw[4] ? kModDestLengthMod
                                       : cur;
 }
 
 /** Full-intensity destination color, matching the white-key value bars:
  *  attack purple, release yellow, volume modulation white, Character
- *  modulation blue. */
+ *  modulation blue, pipe-length modulation yellow (the pipe-length
+ *  color). */
 inline void ModDestColor(int dest, float &r, float &g, float &b)
 {
     switch(dest)
@@ -80,10 +84,15 @@ inline void ModDestColor(int dest, float &r, float &g, float &b)
             g = 1.f;
             b = 1.f; /* white */
             break;
-        default: /* kModDestCharMod */
+        case kModDestCharMod:
             r = 0.f;
             g = 0.f;
             b = 1.f; /* blue */
+            break;
+        default: /* kModDestLengthMod */
+            r = 1.f;
+            g = 1.f;
+            b = 0.f; /* yellow: the pipe-length color */
             break;
     }
 }

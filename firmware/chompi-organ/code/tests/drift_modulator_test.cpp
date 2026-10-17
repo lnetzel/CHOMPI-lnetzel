@@ -297,6 +297,57 @@ static void test_independence()
            100.0 * wide / blocks);
 }
 
+static void test_rate_scaling()
+{
+    /* rate 2 halves every drawn duration: same seed -> same duration
+     * sequence, about twice as many half-swings over the same window;
+     * the raised-cosine shape and bounds are unchanged. */
+    DriftModulator slow, fast;
+    slow.Init(48000.f, 0x2468ACE0u, 1.f);
+    fast.Init(48000.f, 0x2468ACE0u, 2.f);
+    const RunStats s = Run(slow, 48000, 400.0);
+    const RunStats f = Run(fast, 48000, 400.0);
+    assert(f.half_count > s.half_count + s.half_count * 4 / 5);
+    assert(f.half_count < s.half_count + s.half_count * 6 / 5);
+    assert(f.bounds_ok);
+    printf("ok: rate scaling (%d vs %d halves)\n", s.half_count,
+           f.half_count);
+}
+
+static void test_length_seed_independence()
+{
+    /* The engine's four pipe-length modulation seeds (OrganEngine
+     * length_mod_[]): like the volume/Character seeds, the pipe-length
+     * drifts must never run in lockstep - over a minute the spread
+     * across the 4 outputs is wide most of the time. */
+    static const uint32_t kSeeds[4]
+        = {0x7F4A7C15u, 0x1B873593u, 0xB5297A4Du, 0x02B5F5A9u};
+    DriftModulator mods[4];
+    for(int i = 0; i < 4; i++)
+        mods[i].Init(48000.f, kSeeds[i]);
+
+    const int blocks = 60 * 48000 / kBlock; /* one minute */
+    int       wide   = 0;
+    for(int b = 0; b < blocks; b++)
+    {
+        float mn = 1e30f, mx = -1e30f;
+        for(int i = 0; i < 4; i++)
+        {
+            mods[i].Advance(kBlock);
+            const float u = mods[i].Value();
+            if(u < mn)
+                mn = u;
+            if(u > mx)
+                mx = u;
+        }
+        if(mx - mn > .2f)
+            wide++;
+    }
+    assert(wide > blocks / 2);
+    printf("ok: length-seed independence (4 seeds, %.1f%% of blocks spread > 0.2)\n",
+           100.0 * wide / blocks);
+}
+
 int main()
 {
     test_window_examples();
@@ -306,6 +357,8 @@ int main()
     test_timing_32k();
     test_determinism();
     test_independence();
+    test_length_seed_independence();
+    test_rate_scaling();
     printf("ALL DRIFT MODULATOR TESTS PASSED\n");
     return 0;
 }
