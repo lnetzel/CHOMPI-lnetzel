@@ -71,13 +71,16 @@
  *    every voice as a per-sample frequency multiplier on the stored
  *    base frequencies (no oscillator phase resets, no drift). Depth 0
  *    is an exact bypass. Separate from the rotary speaker's Doppler.
- *  - Modulation Mode drift: eight slow, free-running DriftModulators
- *    (one per pipe for volume, one per pipe for Character) give the
- *    organ a living, organic movement. Each parameter's user value is
- *    the window center; the per-pipe amount (32 steps, boot 0)
+ *  - Modulation Mode drift: thirteen slow, free-running
+ *    DriftModulators (one per pipe for volume, Character and pipe
+ *    length, plus one global instance for the distortion drive) give
+ *    the organ a living, organic movement. Each parameter's user value
+ *    is the window center; the per-pipe amount (32 steps, boot 0)
  *    scales a +/-20% full-scale window that slides to stay inside
- *    [0,1] (DriftModulator::ApplyWindow). Modulated gain/Character
- *    targets are recomputed once per block in Prepare(); the existing
+ *    [0,1] (DriftModulator::ApplyWindow); the drive amount is a single
+ *    global value with the same window around the drive center.
+ *    Modulated gain/Character/drive targets are recomputed once per
+ *    block in Prepare(); the existing
  *    ~1 ms gain slew and ~10 ms Character ramp smooth the block steps.
  *    Amount 0 is bit-exact the unmodulated center; mute still forces
  *    silence. Saved in the SD-card presets; no MIDI CC.
@@ -228,10 +231,11 @@ class OrganEngine
             release_inc_[p] = attack_inc_[p];
         }
 
-        /* Modulation Mode drift: 12 free-running modulators (4 pipes x
-         * {volume, Character, pipe length}), distinct fixed seeds
-         * (nonzero, xorshift32-safe) so the pipes never run in
-         * lockstep; amounts boot at 0 = exact unmodulated sound. */
+        /* Modulation Mode drift: thirteen free-running modulators (4
+         * pipes x {volume, Character, pipe length} + one global drive),
+         * distinct fixed seeds (nonzero, xorshift32-safe) so the pipes
+         * never run in lockstep; amounts boot at 0 = exact unmodulated
+         * sound. */
         const uint32_t vol_seeds[kNumPipes]
             = {0x2545F491u, 0x8F3A7B15u, 0x6C8E9CF1u, 0x1F123BB5u};
         const uint32_t char_seeds[kNumPipes]
@@ -254,6 +258,10 @@ class OrganEngine
             length_mod_[p].Init(sample_rate, length_seeds[p],
                                 length_rates[p]);
         }
+        /* the single global drive drift runs at the base rate with its
+         * own seed; amount boots 0 = exact unmodulated drive */
+        drive_mod_step_ = 0;
+        drive_mod_.Init(sample_rate, 0xC3D2E1F0u);
         length_mod_active_ = false;
 
         master_gain_ = master_gain_target_ = kDefaultMasterGain;
@@ -261,6 +269,7 @@ class OrganEngine
         drive_step_ = kDefaultDriveStep;
         drive_ = drive_target_
             = static_cast<float>(kDefaultDriveStep) * (1.f / kMaxSteps);
+        drive_mod_target_ = drive_target_;
         distortion_.Init(sample_rate); /* fuzz; tone boots at 100% */
 
         rotary_.Init(sample_rate);
@@ -467,6 +476,23 @@ class OrganEngine
     }
 
     int GetDriveStep() const { return drive_step_; }
+
+    /** Modulation Mode: set the GLOBAL distortion modulation amount
+ *      (0..kMaxModSteps, clamped). The drive is shared by all four
+ *      pipes, so there is one amount, not one per pipe. 100% swings
+ *      the drive inside a +/-20% full-scale window around its set
+ *      level (the window slides to stay inside [0,1], so a 0 drive
+ *      drifts in and out of audibility); 0 is the exact unmodulated
+ *      center. The modulator keeps free-running; changing the amount
+ *      never restarts it. Boots 0; saved in the SD-card presets as
+ *      "drive_mod"; no MIDI CC. */
+    void SetDriveModStep(int step)
+    {
+        step = step < 0 ? 0 : (step > kMaxModSteps ? kMaxModSteps : step);
+        drive_mod_step_ = static_cast<uint8_t>(step);
+    }
+
+    int GetDriveModStep() const { return drive_mod_step_; }
 
     /** Set the distortion tone (0..100 percent, clamped, no wrap):
  *      0 = 500 Hz low-pass per stage (dark), 100 = 10 kHz per stage
@@ -732,10 +758,20 @@ class OrganEngine
          * divide per sample; the live gains ramp to the block targets
          * over ~10 ms inside Distortion, so encoder ticks glide
          * instead of stepping. drive_ still slews per sample for
-         * a click-free bypass. */
-        distortion_.PrepareBlock(drive_target_);
+         * a click-free bypass. The global drive modulation advances
+         * its free-running drift once per block and swings the target
+         * inside its window first; amount 0 is the exact unmodulated
+         * center, so the bypass path stays bit-exact. */
+        drive_mod_.Advance(static_cast<int>(num_samples));
+        drive_mod_target_
+            = DriftModulator::ApplyWindow(drive_target_,
+                                          static_cast<float>(drive_mod_step_)
+                                              * (1.f / kMaxModSteps),
+                                          drive_mod_.Value());
+        distortion_.PrepareBlock(drive_mod_target_);
 
         /* Modulation Mode drift: advance the twelve free-running
+         * per-pipe
          * modulators once per block and re-derive the modulated pipe
          * gain targets, Character ramp targets and pipe-length pitch
          * multipliers from the user centers. The existing ~1 ms
@@ -802,7 +838,7 @@ class OrganEngine
                 ca[p] = character_.EasedAmount(p);
             }
             daisysp::fonepole(master_gain_, master_gain_target_, .001f);
-            daisysp::fonepole(drive_, drive_target_, .001f);
+            daisysp::fonepole(drive_, drive_mod_target_, .001f);
 
             /* Percussion: advance the SHARED decay envelope once per
              * sample (never per voice). PathActive() false means the
@@ -1107,8 +1143,14 @@ class OrganEngine
     float    master_gain_target_;
     float    drive_;
     float    drive_target_;
+    float    drive_mod_target_; /* drive_target_ swung by the drive
+                                 * drift window; drive_ slews to this
+                                 * per sample (Prepare, block rate) */
     Distortion distortion_;
     uint8_t  drive_step_;
+    uint8_t  drive_mod_step_;     /* boot 0; saved in presets as the
+                                   * global "drive_mod" field */
+    DriftModulator drive_mod_;    /* free-running global drive drift */
     RotarySpeaker rotary_;
     uint8_t  rotary_step_;
     uint8_t  pipe_attack_step_[kNumPipes];

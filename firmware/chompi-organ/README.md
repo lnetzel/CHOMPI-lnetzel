@@ -87,7 +87,8 @@ SHIFT adds two pipe-control gestures on the pipe encoders:
 
 In Modulation Mode the organ drifts on its own: each pipe's volume,
 Character and pipe length slowly and independently wander around their
-Normal Mode settings, giving the organ a living, organic movement. The
+Normal Mode settings, and the distortion drive wanders around its set
+level too, giving the organ a living, organic movement. The
 four pipe encoders all edit ONE shared destination, selected with
 SHIFT + a physical black key (the black keys are numbered left to
 right):
@@ -105,13 +106,23 @@ right):
   up to +/-20 cents (at 100%) around its set length. Each pipe drifts
   at its own rate (8' slowest, 2' fastest), so the four pipes never
   move in step.
+- **Black key 8 (F#4) - distortion modulation amount** (red): 32
+  steps, same mapping. The distortion is shared by all four pipes, so
+  this is ONE global amount, not per pipe: only the leftmost pipe
+  encoder adjusts it (the other three knobs do nothing), and
+  SHIFT + turn behaves the same as an unshifted turn. The drive drifts
+  around the level set on the volume encoder's overdrive page; at 0%
+  drive the window slides up, so the distortion drifts in and out of
+  audibility.
 
-Black key 6 onward selects nothing. Volume modulation is selected at
+Black keys 6, 7, 9 and 10 select nothing. Volume modulation is
+selected at
 boot; the selection is remembered across mode changes until reboot and
-is not stored in the presets.
+is not stored in the presets (the distortion-modulation amount itself
+IS stored, as the global "drive_mod" preset field).
 
-The five destination keys are always lit in Modulation Mode - the
-selected key at 100% of its destination color, the other four at
+The six destination keys are always lit in Modulation Mode - the
+selected key at 100% of its destination color, the other five at
 exactly 75% - with or without SHIFT held, during value bars and during
 the distortion-tone display; every other black key stays dark, even
 while its key plays a note. A turn adjusts the selected parameter for
@@ -130,7 +141,8 @@ SHIFT all 25 keys play as usual.
 
 The modulation works in each parameter's normalized domain: volume
 x = level/32 (the squared gain curve is applied to the modulated
-value), Character a = step/64 (before its smoothstep easing). The
+value), Character a = step/64 (before its smoothstep easing), drive
+d = step/32 (shared by all pipes). The
 amount scales a window around the user value: at 100% the window is
 +/-20% (40% total); the window slides - never clips - to stay inside
 0-100%, so a 95% center swings 60-100% and a 0% center swings 0-40%
@@ -139,7 +151,8 @@ directly: a symmetric window of up to +/-20 cents (at 100%) around the
 set footage, phase-continuous and click-free. A muted pipe stays
 silent. Amount 0 is exactly the unmodulated sound.
 
-Each of the twelve modulators (4 pipes x volume/Character/pipe length)
+Each of the thirteen modulators (4 pipes x volume/Character/pipe
+length, plus one global instance for the distortion drive)
 is a slow,
 free-running raised-cosine swing: every half-cycle draws its own
 random 2.5-10 s duration, so a full bottom-to-top-to-bottom cycle
@@ -391,7 +404,8 @@ mid-write can leave a stray `.tmp` file, which is ignored.
 
 Saved in every preset: per-pipe level, Character, pipe length, attack,
 release, mute and volume/Character/pipe-length-modulation amounts,
-plus vibrato depth, rotary amount, fuzz amount and tone, reverb mix
+plus vibrato depth, rotary amount, fuzz amount and tone, the global
+distortion modulation amount, reverb mix
 and decay, percussion on/off, and delay mix and time. NOT saved:
 master volume, fine tune, octave shift, latch, page selections, the
 Modulation-mode destination and the wheel's rotary/vibrato selection.

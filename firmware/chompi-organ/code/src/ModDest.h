@@ -2,16 +2,19 @@
  *  @brief CHOMPI Organ Modulation-mode destination selection and the
  *  pipe-encoder UI rules shared by both modes.
  *
- *  Modulation Mode has ONE shared destination for all four pipe
- *  encoders, selected with SHIFT + a physical black key (the switch is
- *  UP). Black keys are numbered physically from left to right: key 1
- *  (C#3) selects the actual pipe attack time, key 2 (D#3) the actual
- *  pipe release time, key 3 (F#3) the volume-modulation amount, key
- *  4 (G#3) the Character-modulation amount and key 5 (A#3) the
- *  pipe-length modulation amount; the sixth and later black keys
+ *  Modulation Mode has ONE shared destination for the pipe encoders,
+ *  selected with SHIFT + a physical black key (the switch is UP). Black
+ *  keys are numbered physically from left to right: key 1 (C#3) selects
+ *  the actual pipe attack time, key 2 (D#3) the actual pipe release
+ *  time, key 3 (F#3) the volume-modulation amount, key 4 (G#3) the
+ *  Character-modulation amount and key 5 (A#3) the pipe-length
+ *  modulation amount; key 8 (F#4) selects the distortion modulation
+ *  amount - ONE global value (the drive is shared by all four pipes),
+ *  adjusted by the leftmost pipe encoder only. Keys 6, 7, 9 and 10
  *  select nothing. The selection boots on volume modulation, is
  *  remembered across mode changes until reboot and is never stored in
- *  the SD-card presets.
+ *  the SD-card presets (the distortion-modulation amount itself IS, as
+ *  the global "drive_mod" field).
  *
  *  Hardware-independent (no Daisy includes) so the native tests exercise
  *  the exact production logic; chompi_main.cpp static_asserts the key
@@ -22,7 +25,7 @@
 namespace chompi
 {
 
-/** The five shared Modulation-mode destinations. */
+/** The six shared Modulation-mode destinations. */
 enum ModDest
 {
     kModDestAttack = 0, /**< actual pipe attack time (purple) */
@@ -30,6 +33,7 @@ enum ModDest
     kModDestVolMod,     /**< volume-modulation amount (white) */
     kModDestCharMod,    /**< Character-modulation amount (blue) */
     kModDestLengthMod,  /**< pipe-length modulation amount (yellow) */
+    kModDestDriveMod,   /**< distortion modulation, global (red) */
     kNumModDests
 };
 
@@ -41,14 +45,15 @@ constexpr int kModDestDefault = kModDestVolMod;
 constexpr float kModDestSelected   = 1.f;
 constexpr float kModDestUnselected = .75f;
 
-/** SwId values of the five destination keys, in destination order:
- *  KEY_16 (C#3), KEY_17 (D#3), KEY_18 (F#3), KEY_19 (G#3), KEY_20 (A#3)
- *  - the first five physical black keys from the left. */
-constexpr int kModDestKeySw[kNumModDests] = {7, 12, 13, 14, 21};
+/** SwId values of the six destination keys, in destination order:
+ *  KEY_16 (C#3), KEY_17 (D#3), KEY_18 (F#3), KEY_19 (G#3), KEY_20 (A#3),
+ *  KEY_23 (F#4) - the first five physical black keys from the left,
+ *  then the eighth (keys 6 and 7 are skipped, 9 and 10 stay inert). */
+constexpr int kModDestKeySw[kNumModDests] = {7, 12, 13, 14, 21, 29};
 
 /** SHIFT + key destination selection: returns the pressed key's
  *  destination, or `cur` unchanged when the key selects nothing (white
- *  keys, the sixth and later black keys). Nothing else writes the
+ *  keys, black keys 6, 7, 9 and 10). Nothing else writes the
  *  destination, so the selection persists across mode changes until
  *  reboot. */
 constexpr int ModDestAfterKey(int cur, int swid)
@@ -58,13 +63,14 @@ constexpr int ModDestAfterKey(int cur, int swid)
            : swid == kModDestKeySw[2] ? kModDestVolMod
            : swid == kModDestKeySw[3] ? kModDestCharMod
            : swid == kModDestKeySw[4] ? kModDestLengthMod
+           : swid == kModDestKeySw[5] ? kModDestDriveMod
                                       : cur;
 }
 
 /** Full-intensity destination color, matching the white-key value bars:
  *  attack purple, release yellow, volume modulation white, Character
  *  modulation blue, pipe-length modulation yellow (the pipe-length
- *  color). */
+ *  color), distortion modulation red (the overdrive color). */
 inline void ModDestColor(int dest, float &r, float &g, float &b)
 {
     switch(dest)
@@ -89,10 +95,15 @@ inline void ModDestColor(int dest, float &r, float &g, float &b)
             g = 0.f;
             b = 1.f; /* blue */
             break;
-        default: /* kModDestLengthMod */
+        case kModDestLengthMod:
             r = 1.f;
             g = 1.f;
             b = 0.f; /* yellow: the pipe-length color */
+            break;
+        default: /* kModDestDriveMod */
+            r = 1.f;
+            g = 0.f;
+            b = 0.f; /* red: the overdrive color */
             break;
     }
 }
