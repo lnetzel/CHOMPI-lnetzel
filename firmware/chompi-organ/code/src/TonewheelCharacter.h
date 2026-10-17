@@ -17,6 +17,17 @@
  *  regardless of which voice slot renders them, and each harmonic is
  *  anti-alias-masked against the final folded pipe frequency.
  *
+ *  Bass grit: on the fundamental pipe (8', pipe kGritPipe) the harmonic
+ *  gains are additionally multiplied by (1 + kGritBoost *
+ *  BassMask(folded_hz)), a smooth low-frequency weight that is 1 at or
+ *  below kGritFullHz and 0 at or above kGritZeroHz. Real organs
+ *  reinforce low fundamentals with quint/harmonic ranks because the ear
+ *  reconstructs "bass" largely from harmonics (missing fundamental);
+ *  Character on the 8' pipe therefore adds progressively more grit
+ *  toward the bottom octave. Grit is part of the Character blend, so
+ *  step 0 remains the exact clean sine, and norm is computed from the
+ *  boosted gains so the aged-wave magnitude bound is unchanged.
+ *
  *  This is an oscillator waveform shaper, not a generic zero-preserving
  *  audio filter: the second-harmonic term is -1 when s == 0, so
  *  ShapeSample(0, ...) != 0 at nonzero Character. It IS zero-mean over
@@ -57,6 +68,15 @@ class TonewheelCharacter
      *  at kAaZero * sample_rate and stays zero above. */
     static constexpr float kAaFull = .35f;
     static constexpr float kAaZero = .45f;
+
+    /** Bass grit (8' pipe only): harmonic gains are multiplied by
+     *  (1 + kGritBoost * BassMask(folded_hz)); the mask is 1 at or below
+     *  kGritFullHz and smoothstepped to 0 at kGritZeroHz. Absolute Hz on
+     *  purpose: this is a psychoacoustic band, not sample-rate relative. */
+    static constexpr int   kGritPipe   = 0;    /* 8' fundamental */
+    static constexpr float kGritFullHz = 150.f;
+    static constexpr float kGritZeroHz = 400.f;
+    static constexpr float kGritBoost  = 2.f;  /* bottom-octave x3 gains */
 
     /** Cached voicing for one voice/pipe: variation-scaled,
      *  anti-alias-masked harmonic gains plus the maximum-aged
@@ -169,8 +189,15 @@ class TonewheelCharacter
         PipeCoeffs &c = coeffs_[voice][pipe];
         const float v2 = 1.f + kVariation * DetHash(note, pipe, 0);
         const float v3 = 1.f + kVariation * DetHash(note, pipe, 1);
-        c.second_gain  = kMaxSecond * v2 * AaMask(2.f * folded_hz);
-        c.third_gain   = kMaxThird * v3 * AaMask(3.f * folded_hz);
+        /* Bass grit: the 8' pipe's harmonics grow toward the bottom
+         * octave; other pipes get the exact literal 1.f multiplier, so
+         * they stay bit-exact the pre-grit voicing. norm is computed
+         * from the boosted gains, so the aged-wave bound holds. */
+        const float grit = pipe == kGritPipe
+                               ? 1.f + kGritBoost * BassMask(folded_hz)
+                               : 1.f;
+        c.second_gain  = kMaxSecond * v2 * AaMask(2.f * folded_hz) * grit;
+        c.third_gain   = kMaxThird * v3 * AaMask(3.f * folded_hz) * grit;
         c.norm = 1.f / (1.f + fabsf(c.second_gain) + fabsf(c.third_gain));
     }
 
@@ -221,6 +248,20 @@ class TonewheelCharacter
         if(harmonic_hz >= zero)
             return 0.f;
         const float t = (harmonic_hz - full) / (zero - full);
+        return 1.f - Smooth(t);
+    }
+
+    /** Smooth low-frequency weight for the 8'-pipe bass grit: 1 at or
+     *  below kGritFullHz, smoothstepped to 0 at kGritZeroHz, 0 above.
+     *  Absolute Hz on purpose (psychoacoustic band), so it does not
+     *  depend on the sample rate. */
+    static float BassMask(float hz)
+    {
+        if(hz <= kGritFullHz)
+            return 1.f;
+        if(hz >= kGritZeroHz)
+            return 0.f;
+        const float t = (hz - kGritFullHz) / (kGritZeroHz - kGritFullHz);
         return 1.f - Smooth(t);
     }
 

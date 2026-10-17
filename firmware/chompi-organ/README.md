@@ -31,7 +31,11 @@ per-pipe, not global, and are preserved across mode changes):
 - **Page 2 - Character** (blue knob LED, brightness tracks the amount with
   a floor so the page stays visible at 0): 64 steps of tonewheel-inspired
   harmonic coloration. Step 0 is the exact clean sine; step 64 is clearly
-  aged but still organ-like. The white-key bar is uniformly blue.
+  aged but still organ-like. On the 8' pipe the added harmonics are
+  progressively boosted below ~400 Hz (full at 150 Hz), so low notes gain
+  extra grit and definition as Character rises - the same low-end
+  reinforcement real organs get from quint ranks. The white-key bar is
+  uniformly blue.
 - **Page 3 - pipe length** (yellow knob LED, brightness tracks the
   |octave| with a floor so the page stays visible at the default): one
   detent = one octave, up to two octaves each way from the pipe's

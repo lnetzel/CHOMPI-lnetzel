@@ -11,6 +11,8 @@
  *   - expected 2nd/3rd harmonic content (coherent DFT bin projections)
  *   - amplitude bounds (aged waveform never exceeds magnitude 1)
  *   - high-frequency harmonic suppression (anti-alias masks)
+ *   - 8'-pipe bass grit: low-frequency harmonic boost, band edges,
+ *     pipes 1-3 untouched, boosted harmonic content (coherent DFT)
  *   - folded-frequency sweep: bounds hold, zero amount stays exact sine
  *
  *  Run: make -C firmware/chompi-organ/code/tests test
@@ -199,13 +201,14 @@ static void test_variation()
     assert(c0.third_gain == c5.third_gain);
     assert(c0.norm == c5.norm);
 
-    /* variation bounded to +/-15% where the AA mask is fully open */
+    /* variation bounded to +/-15% where the AA mask is fully open;
+     * pipe 1: no bass grit, so the plain kMax range applies exactly */
     int distinct = 0;
     float prev   = -99.f;
     for(int note = 36; note < 96; note++)
     {
-        tc.UpdateVoiceCoeffs(0, note, 0, 220.f); /* harmonics << 0.35*sr */
-        const TonewheelCharacter::PipeCoeffs &c = tc.Coeffs(0, 0);
+        tc.UpdateVoiceCoeffs(0, note, 1, 220.f); /* harmonics << 0.35*sr */
+        const TonewheelCharacter::PipeCoeffs &c = tc.Coeffs(0, 1);
         assert(fabsf(c.second_gain) <= TonewheelCharacter::kMaxSecond * 1.15f + 1e-7f);
         assert(fabsf(c.second_gain) >= TonewheelCharacter::kMaxSecond * 0.85f - 1e-7f);
         assert(fabsf(c.third_gain) <= TonewheelCharacter::kMaxThird * 1.15f + 1e-7f);
@@ -287,10 +290,13 @@ static void test_harmonic_content()
 
 static void test_amplitude_bounds()
 {
-    /* worst case: maximum variation gains, mask fully open */
+    /* worst case: maximum variation gains on the 8' pipe with full bass
+     * grit, mask fully open */
     TonewheelCharacter::PipeCoeffs c;
-    c.second_gain = TonewheelCharacter::kMaxSecond * 1.15f;
-    c.third_gain  = TonewheelCharacter::kMaxThird * 1.15f;
+    c.second_gain = TonewheelCharacter::kMaxSecond * 1.15f
+                    * (1.f + TonewheelCharacter::kGritBoost);
+    c.third_gain  = TonewheelCharacter::kMaxThird * 1.15f
+                    * (1.f + TonewheelCharacter::kGritBoost);
     c.norm = 1.f / (1.f + fabsf(c.second_gain) + fabsf(c.third_gain));
 
     for(float a = 0.f; a <= 1.0001f; a += 0.083f)
@@ -333,6 +339,71 @@ static void test_antialias_masks()
     assert(fabsf(tc.Coeffs(0, 0).third_gain)
            >= TonewheelCharacter::kMaxThird * 0.85f);
     printf("ok: anti-alias masks (sr=%g)\n", static_cast<double>(sr));
+}
+
+static void test_bass_grit()
+{
+    TonewheelCharacter tc;
+    tc.Init(48000.f);
+
+    /* Same note on pipe 0, low vs mid frequency: variation and AA mask
+     * are identical (fully open) in both, so the gain ratio is exactly
+     * 1 + kGritBoost at the bottom of the band and 1 above it. */
+    tc.UpdateVoiceCoeffs(0, 60, 0, 100.f);
+    const TonewheelCharacter::PipeCoeffs &lo = tc.Coeffs(0, 0);
+    tc.UpdateVoiceCoeffs(1, 60, 0, 1000.f);
+    const TonewheelCharacter::PipeCoeffs &mid = tc.Coeffs(1, 0);
+    const float expect = 1.f + TonewheelCharacter::kGritBoost;
+    assert(fabsf(lo.second_gain / mid.second_gain - expect) < 1e-5f);
+    assert(fabsf(lo.third_gain / mid.third_gain - expect) < 1e-5f);
+
+    /* norm is computed from the BOOSTED gains: aged bound unchanged */
+    assert(fabsf(lo.norm
+                 - 1.f / (1.f + fabsf(lo.second_gain)
+                          + fabsf(lo.third_gain)))
+           < 1e-7f);
+
+    /* Band edges: exactly full at kGritFullHz, exactly off at
+     * kGritZeroHz, strictly decreasing between them. */
+    float prev_ratio = expect + 1.f;
+    for(float f = TonewheelCharacter::kGritFullHz;
+        f <= TonewheelCharacter::kGritZeroHz;
+        f += 25.f)
+    {
+        tc.UpdateVoiceCoeffs(2, 60, 0, f);
+        const float r = tc.Coeffs(2, 0).third_gain / mid.third_gain;
+        assert(r >= 1.f && r <= expect + 1e-6f);
+        assert(r < prev_ratio);
+        prev_ratio = r;
+    }
+    assert(prev_ratio == 1.f); /* exactly off at kGritZeroHz */
+
+    /* Pipes 1-3 get no grit at any frequency: below the AA band their
+     * gains are frequency-independent, so 80 Hz must equal 1000 Hz
+     * bit-exactly. */
+    for(int p = 1; p < 4; p++)
+    {
+        tc.UpdateVoiceCoeffs(0, 60, p, 80.f);
+        tc.UpdateVoiceCoeffs(1, 60, p, 1000.f);
+        assert(tc.Coeffs(0, p).second_gain == tc.Coeffs(1, p).second_gain);
+        assert(tc.Coeffs(0, p).third_gain == tc.Coeffs(1, p).third_gain);
+    }
+
+    /* Coherent DFT at the bottom of the band: measured 2nd/3rd match
+     * the boosted gains, 4th+ stays at the noise floor. The buffer holds
+     * 5 complete cycles, so the fundamental is bin 5 and the 2nd/3rd/4th
+     * harmonics are bins 10/15/20. */
+    tc.UpdateVoiceCoeffs(0, 48, 0, 80.f);
+    const TonewheelCharacter::PipeCoeffs &c = tc.Coeffs(0, 0);
+    static float buf[4096];
+    const int n = render_cycles(buf, 4096, 80.f, 48000.f, 5, c, 1.f);
+    const float b1 = BinMag(buf, n, 5);
+    assert(fabsf(BinMag(buf, n, 10) / b1 - fabsf(c.second_gain)) < 1e-3f);
+    assert(fabsf(BinMag(buf, n, 15) / b1 - fabsf(c.third_gain)) < 1e-3f);
+    assert(BinMag(buf, n, 20) / b1 < 1e-3f);
+    printf("ok: bass grit (g2=%g g3=%g)\n",
+           static_cast<double>(c.second_gain),
+           static_cast<double>(c.third_gain));
 }
 
 static void test_frequency_sweep()
@@ -439,6 +510,7 @@ int main()
     test_harmonic_content();
     test_amplitude_bounds();
     test_antialias_masks();
+    test_bass_grit();
     test_frequency_sweep();
     test_modulated_target();
     printf("ALL TONEWHEEL CHARACTER TESTS PASSED\n");

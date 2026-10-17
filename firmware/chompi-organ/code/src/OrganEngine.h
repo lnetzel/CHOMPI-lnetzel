@@ -12,7 +12,11 @@
  *    ~1.2e-6 max error - audibly identical to the libm sinf oscillator
  *    it replaced, at a fraction of the CPU); the 2nd/3rd harmonics are
  *    derived algebraically from the sine sample, smoothly eased in and
- *    anti-alias-masked per folded note.
+ *    anti-alias-masked per folded note. On the 8' pipe the harmonic
+ *    gains get an extra low-frequency boost (full at or below 150 Hz,
+ *    smoothstepped to 0 at 400 Hz), so the bottom octave gains grit as
+ *    Character rises - the organ-builder's quint-reinforcement trick
+ *    for low fundamentals; step 0 stays the exact clean sine.
  *  - Free-running oscillators (phase never reset at note-on)
  *  - Per-pipe attack/release gate envelopes: 32 log-spaced steps each,
  *    5 ms (step 0, boot default = the original fixed timing) to 10 s
