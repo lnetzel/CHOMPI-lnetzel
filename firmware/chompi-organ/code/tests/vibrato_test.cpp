@@ -10,6 +10,9 @@
  *   - stable base tuning: cycle mean of the multiplier stays ~1
  *   - exact zero-depth behavior: Process() returns exactly 1.f
  *   - finite, bounded output over long runs at both 48 kHz and 32 kHz
+ *   - delay envelope: exact-dry delay window, 250 ms linear fade-in
+ *     landing bit-exact on the undelayed trajectory, retrigger, no-op
+ *     trigger at delay 0, mid-envelope clear via SetDelayMs(0)
  *
  *  Run: make -C firmware/chompi-organ/code/tests test
  */
@@ -206,6 +209,120 @@ static void test_finite_and_bounded()
     }
 }
 
+static void test_delay_off_passthrough()
+{
+    /* Boot default (delay 0): Trigger() is a no-op and the multiplier
+     * trajectory stays bit-identical to an untriggered one. */
+    Vibrato a, b;
+    a.Init(48000.f);
+    b.Init(48000.f);
+    a.SetDepth(50);
+    b.SetDepth(50);
+    assert(a.DelayEnv() == 1.f);
+    a.Trigger(); /* no delay set: must do nothing */
+    assert(a.DelayEnv() == 1.f);
+    for(int i = 0; i < 48000; i++)
+        assert(a.Process() == b.Process());
+}
+
+static void test_delay_window_exact_dry()
+{
+    /* 1000 ms delay at 48 kHz: exactly 1.f for the whole window, even
+     * at full depth; the fade-in starts right after. */
+    Vibrato v;
+    v.Init(48000.f);
+    v.SetDepth(50);
+    v.SetDelayMs(1000.f);
+    assert(fabsf(v.GetDelayMs() - 1000.f) < .01f);
+    v.Trigger();
+    assert(v.DelayEnv() == 0.f);
+    for(int i = 0; i < 48000; i++)
+        assert(v.Process() == 1.f);
+    assert(v.DelayEnv() == 0.f); /* ramp not started yet */
+    v.Process();
+    assert(v.DelayEnv() > 0.f && v.DelayEnv() < 1.f); /* ramping */
+}
+
+static void test_delay_ramp_settles_bitexact()
+{
+    /* After the delay + the 250 ms ramp the delayed instance is
+     * bit-identical to a free-running undelayed one started at the
+     * same time (both phase trajectories advance together). */
+    Vibrato v, ref;
+    v.Init(48000.f);
+    ref.Init(48000.f);
+    v.SetDepth(50);
+    ref.SetDepth(50);
+    v.SetDelayMs(1000.f);
+    v.Trigger();
+    const int delay_n = 48000;    /* 1 s window */
+    const int ramp_n  = 12000;    /* 250 ms at 48 kHz */
+    float     prev_env = 0.f;
+    bool      rose     = false;
+    for(int i = 0; i < delay_n + ramp_n + 2; i++)
+    {
+        v.Process();
+        ref.Process();
+        const float e = v.DelayEnv();
+        if(e > prev_env)
+            rose = true;
+        prev_env = e;
+    }
+    assert(rose);              /* the fade-in actually happened */
+    assert(prev_env == 1.f);   /* ... and landed exactly on full */
+    for(int i = 0; i < 8000; i++)
+        assert(v.Process() == ref.Process()); /* settled: bit-exact */
+}
+
+static void test_delay_retrigger()
+{
+    /* A fresh Trigger mid-ramp restarts the delay from exact dry. */
+    Vibrato v;
+    v.Init(48000.f);
+    v.SetDepth(50);
+    v.SetDelayMs(500.f); /* 24000 samples */
+    v.Trigger();
+    for(int i = 0; i < 24000 + 6000; i++) /* delay + half the ramp */
+        v.Process();
+    assert(v.DelayEnv() > 0.f && v.DelayEnv() < 1.f); /* mid-ramp */
+    v.Trigger();
+    assert(v.DelayEnv() == 0.f);
+    for(int i = 0; i < 24000; i++)
+        assert(v.Process() == 1.f);
+}
+
+static void test_zero_depth_with_delay()
+{
+    /* Depth 0 stays exactly dry through trigger, window and ramp. */
+    Vibrato v;
+    v.Init(48000.f);
+    v.SetDelayMs(200.f);
+    v.Trigger();
+    for(int i = 0; i < 48000; i++)
+        assert(v.Process() == 1.f);
+}
+
+static void test_delay_cleared_mid_envelope()
+{
+    /* SetDelayMs(0) forces the envelope to exactly 1 immediately. */
+    Vibrato v, ref;
+    v.Init(48000.f);
+    ref.Init(48000.f);
+    v.SetDepth(50);
+    ref.SetDepth(50);
+    v.SetDelayMs(1000.f);
+    v.Trigger();
+    for(int i = 0; i < 1000; i++)
+    {
+        v.Process();
+        ref.Process();
+    }
+    v.SetDelayMs(0.f);
+    assert(v.DelayEnv() == 1.f);
+    for(int i = 0; i < 8000; i++)
+        assert(v.Process() == ref.Process());
+}
+
 int main()
 {
     test_init_and_clamp();
@@ -215,6 +332,12 @@ int main()
     test_phase_continuity();
     test_base_tuning_stable();
     test_finite_and_bounded();
+    test_delay_off_passthrough();
+    test_delay_window_exact_dry();
+    test_delay_ramp_settles_bitexact();
+    test_delay_retrigger();
+    test_zero_depth_with_delay();
+    test_delay_cleared_mid_envelope();
     printf("vibrato_test: all passed\n");
     return 0;
 }

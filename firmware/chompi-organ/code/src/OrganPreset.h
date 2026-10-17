@@ -32,6 +32,7 @@ struct OrganPreset
     static constexpr int kMaxCharacter   = 64;
     static constexpr int kMaxEnv         = 32;
     static constexpr int kMaxVibrato     = 50;
+    static constexpr int kMaxVibratoDelay = 50; /* 0..5 s in 100 ms steps */
     static constexpr int kMaxRotary      = 32;
     static constexpr int kMaxDrive       = 32;
     static constexpr int kMaxTone        = 100;
@@ -50,6 +51,7 @@ struct OrganPreset
                                                     * bypassed */
     static constexpr int kDefaultEnv         = 0;  /* 5 ms */
     static constexpr int kDefaultVibrato     = 0;
+    static constexpr int kDefaultVibratoDelay = 0; /* delay off */
     static constexpr int kDefaultRotary      = 0;  /* rotary off */
     static constexpr int kDefaultDrive       = 0;
     static constexpr int kDefaultTone        = 100;
@@ -68,6 +70,8 @@ struct OrganPreset
     uint8_t mute[kNumPipes];      /**< 0/1 pipe mutes */
     int8_t  length[kNumPipes];    /**< -2..+2 pipe-length octave offset */
     uint8_t vibrato;              /**< 0..50 cents peak */
+    uint8_t vibrato_delay;        /**< 0..50 note-on delay steps of
+                                   *   100 ms (0..5 s); 0 = off */
     uint8_t rotary;               /**< 0..32 rotary amount */
     uint8_t drive;                /**< 0..32 fuzz amount */
     uint8_t drive_tone;           /**< 0..100 fuzz tone percent */
@@ -97,6 +101,7 @@ struct OrganPreset
             length_mod[p] = kDefaultMod;
         }
         vibrato      = kDefaultVibrato;
+        vibrato_delay = kDefaultVibratoDelay;
         rotary       = kDefaultRotary;
         drive        = kDefaultDrive;
         drive_tone   = kDefaultTone;
@@ -132,7 +137,7 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         "\"release\":[%u,%u,%u,%u],"
         "\"mute\":[%u,%u,%u,%u],"
         "\"length\":[%d,%d,%d,%d],"
-        "\"vibrato\":%u,\"rotary\":%u,\"drive\":%u,"
+        "\"vibrato\":%u,\"vibrato_delay\":%u,\"rotary\":%u,\"drive\":%u,"
         "\"drive_tone\":%u,\"reverb_mix\":%u,\"reverb_decay\":%u,"
         "\"vol_mod\":[%u,%u,%u,%u],"
         "\"char_mod\":[%u,%u,%u,%u],"
@@ -153,6 +158,7 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         (int)p.length[0], (int)p.length[1], (int)p.length[2],
         (int)p.length[3],
         (unsigned)p.vibrato,
+        (unsigned)p.vibrato_delay,
         (unsigned)p.rotary,
         (unsigned)p.drive,
         (unsigned)p.drive_tone,
@@ -263,6 +269,9 @@ inline bool Parse(char *buf, size_t len, OrganPreset &p)
     out.vibrato = (uint8_t)QueryInt(buf, len, "vibrato",
                                     OrganPreset::kDefaultVibrato, 0,
                                     OrganPreset::kMaxVibrato);
+    out.vibrato_delay = (uint8_t)QueryInt(buf, len, "vibrato_delay",
+                                          OrganPreset::kDefaultVibratoDelay,
+                                          0, OrganPreset::kMaxVibratoDelay);
     out.rotary  = (uint8_t)QueryInt(buf, len, "rotary",
                                     OrganPreset::kDefaultRotary, 0,
                                     OrganPreset::kMaxRotary);
@@ -313,6 +322,7 @@ void CaptureFromEngine(OrganPreset &p, const Engine &e)
         p.length_mod[i] = (uint8_t)e.GetPipeLengthModStep(i);
     }
     p.vibrato      = (uint8_t)e.GetVibratoDepth();
+    p.vibrato_delay = (uint8_t)e.GetVibratoDelayStep();
     p.rotary       = (uint8_t)e.GetRotaryStep();
     p.drive        = (uint8_t)e.GetDriveStep();
     p.drive_tone   = (uint8_t)e.GetDriveTonePercent();
@@ -344,6 +354,7 @@ void ApplyToEngine(const OrganPreset &p, Engine &e)
         e.SetPipeLengthOctave(i, p.length[i]);
     }
     e.SetVibratoDepth(p.vibrato);
+    e.SetVibratoDelayStep(p.vibrato_delay);
     e.SetRotaryStep(p.rotary);
     e.SetDriveStep(p.drive);
     e.SetDriveTonePercent(p.drive_tone);

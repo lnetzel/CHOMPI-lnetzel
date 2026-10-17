@@ -165,6 +165,9 @@ class OrganEngine
     static constexpr float kMaxReverbDecaySeconds   = 20.f;
     static constexpr int   kMaxVibratoDepthCents    = Vibrato::kMaxDepthCents;
     static constexpr int   kDefaultVibratoDepth     = 0; /* vibrato off */
+    static constexpr int   kMaxVibratoDelaySteps    = 50; /* 0..5 s */
+    static constexpr int   kVibratoDelayStepMs      = 100;
+    static constexpr int   kDefaultVibratoDelayStep = 0; /* delay off */
     static constexpr int   kMaxEnvSteps     = EnvelopeMap::kMaxSteps;
     static constexpr int   kDefaultEnvStep  = 0; /* 5 ms: the original timing */
     static constexpr int   kMaxModSteps     = 32; /* per-pipe modulation amounts */
@@ -293,6 +296,8 @@ class OrganEngine
 
         vibrato_.Init(sample_rate);
         vibrato_.SetDepth(kDefaultVibratoDepth); /* boots exactly dry */
+        vibrato_delay_step_ = kDefaultVibratoDelayStep;
+        vibrato_.SetDelayMs(0.f); /* delay envelope off */
 
         percussion_.Init(sample_rate); /* boots disabled, settled */
         held_count_ = 0;
@@ -549,6 +554,25 @@ class OrganEngine
 
     int GetVibratoDepth() const { return vibrato_.GetDepth(); }
 
+    /** Apply one encoder click to the vibrato note-on delay (0..50
+ *      steps of 100 ms = 0..5 s, clamped, no wrap). Step 0 (boot, init
+ *      patch) disables the envelope bit-exactly; any set step holds the
+ *      vibrato at exact dry after a note-on from an all-notes-released
+ *      state, then fades in over a fixed 250 ms ramp (Vibrato.h).
+ *      Saved in the SD-card presets; no MIDI CC. */
+    void SetVibratoDelayStep(int step)
+    {
+        step = step < 0 ? 0
+                        : (step > kMaxVibratoDelaySteps
+                               ? kMaxVibratoDelaySteps
+                               : step);
+        vibrato_delay_step_ = static_cast<uint8_t>(step);
+        vibrato_.SetDelayMs(static_cast<float>(step
+                                               * kVibratoDelayStepMs));
+    }
+
+    int GetVibratoDelayStep() const { return vibrato_delay_step_; }
+
     /** Apply one encoder click to the plate-reverb mix (0..kMaxSteps,
  *      clamped). Step 0 is bit-exact dry, step 32 is wet only; the
  *      ~10 ms crossfade ramp retargets from the current mix,
@@ -657,6 +681,12 @@ class OrganEngine
         {
             if(held_count_ == 0 && percussion_.IsEnabled())
                 percussion_.Trigger();
+            /* Vibrato note-on delay: single-trigger from an
+             * all-notes-released state (the same rule as the percussion
+             * rearm); a no-op while the delay step is 0. Legato
+             * note-ons never restart the fade-in. */
+            if(held_count_ == 0)
+                vibrato_.Trigger();
             note_held_[note] = true;
             held_count_++;
         }
@@ -1172,6 +1202,7 @@ class OrganEngine
     uint8_t  delay_mix_percent_;
     uint16_t delay_time_ms_;
     Vibrato  vibrato_;
+    uint8_t  vibrato_delay_step_; /* 0..50 x 100 ms; saved in presets */
     float    base_freq_[kNumVoices][kNumPipes]; /* pre-vibrato freqs */
     bool     note_held_[128];
     int      held_count_; /* logical held notes, for percussion rearm */

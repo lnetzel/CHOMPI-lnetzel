@@ -309,8 +309,10 @@ static volatile uint32_t bar_until_ = 0;      /* ms timestamp for bar timeout */
 static const int         kVolBar    = OrganEngine::kNumPipes; /* bar_pipe_: master volume */
 static const int         kRotaryBar = OrganEngine::kNumPipes + 1; /* bar_pipe_: wheel (rotary/vibrato) */
 static const int         kWheelEnc  = 4; /* enc[4]: transport wheel (ENC_5) */
-/** bar_page_ sub-state for kRotaryBar: 0 = rotary amount, 1 = vibrato depth */
+/** bar_page_ sub-states for kRotaryBar: 0 = rotary amount, 1 = vibrato
+ *  depth, 2 = vibrato note-on delay (SHIFT+turn in vibrato mode) */
 static const int         kWheelBarVibrato = 1;
+static const int         kWheelBarVibratoDelay = 2;
 /** Transport-wheel selection: false = rotary (boot default), true =
  *  vibrato. Toggled by the debounced wheel-press edge. Volatile: written
  *  by PollControls (audio ISR), read by UpdateLeds (main loop). */
@@ -1059,7 +1061,18 @@ static void PollControls()
         }
         else if(i == kWheelEnc)
         {
-            if(wheel_vibrato_mode_)
+            if(wheel_vibrato_mode_ && shift_held_)
+            {
+                /* wheel in vibrato mode, SHIFT+turn: vibrato note-on
+                 * delay, 0..50 steps of 100 ms (0..5 s), clamped, no
+                 * wrap; 0 = the vibrato starts with the note */
+                engine.SetVibratoDelayStep(engine.GetVibratoDelayStep()
+                                           + delta);
+                bar_pipe_  = kRotaryBar;
+                bar_page_  = kWheelBarVibratoDelay;
+                bar_until_ = System::GetNow() + 500;
+            }
+            else if(wheel_vibrato_mode_)
             {
                 /* wheel in vibrato mode: depth 0..50 cents peak */
                 engine.SetVibratoDepth(engine.GetVibratoDepth() + delta);
@@ -1483,6 +1496,15 @@ static void UpdateLeds()
                  * the 15 white keys (not 50 display segments) */
                 lit  = (engine.GetVibratoDepth() * kNumWhiteKeys + 25)
                        / OrganEngine::kMaxVibratoDepthCents;
+                kind = kBarVibrato;
+            }
+            else if(bar_page_ == kWheelBarVibratoDelay)
+            {
+                /* SHIFT+turn in vibrato mode: note-on delay 0..50 steps
+                 * (100 ms each) mapped across the 15 white keys, same
+                 * pink as the vibrato-depth bar */
+                lit  = (engine.GetVibratoDelayStep() * kNumWhiteKeys + 25)
+                       / OrganEngine::kMaxVibratoDelaySteps;
                 kind = kBarVibrato;
             }
             else

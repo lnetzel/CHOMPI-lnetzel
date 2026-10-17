@@ -30,6 +30,7 @@ struct FakeEngine
     int  char_mod[4];
     int  length_mod[4];
     int  vibrato;
+    int  vibrato_delay;
     int  rotary;
     int  drive;
     int  drive_tone;
@@ -60,6 +61,7 @@ struct FakeEngine
             length_mod[p] = 0;
         }
         vibrato      = 0;
+        vibrato_delay = 0;
         rotary       = 0;
         drive        = 0;
         drive_tone   = 100;
@@ -91,6 +93,8 @@ struct FakeEngine
     int  GetPipeLengthModStep(int p) const { return length_mod[p]; }
     void SetVibratoDepth(int d) { vibrato = Clamp(d, 0, 50); }
     int  GetVibratoDepth() const { return vibrato; }
+    void SetVibratoDelayStep(int s) { vibrato_delay = Clamp(s, 0, 50); }
+    int  GetVibratoDelayStep() const { return vibrato_delay; }
     void SetRotaryStep(int s) { rotary = Clamp(s, 0, 32); }
     int  GetRotaryStep() const { return rotary; }
     void SetDriveStep(int s) { drive = Clamp(s, 0, 32); }
@@ -123,7 +127,8 @@ static bool SamePreset(const OrganPreset &a, const OrganPreset &b)
            || a.length_mod[p] != b.length_mod[p])
             return false;
     }
-    return a.vibrato == b.vibrato && a.rotary == b.rotary
+    return a.vibrato == b.vibrato && a.vibrato_delay == b.vibrato_delay
+           && a.rotary == b.rotary
            && a.drive == b.drive && a.drive_tone == b.drive_tone
            && a.reverb_mix == b.reverb_mix
            && a.reverb_decay == b.reverb_decay
@@ -152,6 +157,7 @@ static OrganPreset MakeAssortedPreset()
     p.length[1]  = 2;
     p.length[3]  = -1;
     p.vibrato      = 50;
+    p.vibrato_delay = 34; /* 3.4 s */
     p.rotary       = 0;
     p.drive        = 32;
     p.drive_tone   = 0;
@@ -223,6 +229,8 @@ static void test_defaults_for_missing_keys()
     assert(p.delay_time_ms == OrganPreset::kDefaultDelayTimeMs);
     /* drive_mod defaults to off for older presets that predate it */
     assert(p.drive_mod == 0);
+    /* vibrato_delay defaults to off for older presets that predate it */
+    assert(p.vibrato_delay == 0);
 }
 
 static void test_clamping()
@@ -235,7 +243,7 @@ static void test_clamping()
           "\"attack\":[33,0,0,0],\"release\":[0,0,0,99],"
           "\"mute\":[2,0,1,-1],"
           "\"length\":[-3,2,5,0],"
-          "\"vibrato\":51,\"rotary\":-2,\"drive\":64,"
+          "\"vibrato\":51,\"vibrato_delay\":99,\"rotary\":-2,\"drive\":64,"
           "\"drive_tone\":101,\"reverb_mix\":-50,\"reverb_decay\":1000,"
           "\"vol_mod\":[40,0,0,0],\"char_mod\":[0,0,0,-9],"
           "\"length_mod\":[0,33,-1,7],"
@@ -253,6 +261,8 @@ static void test_clamping()
     assert(p.length[0] == -2 && p.length[1] == 2 && p.length[2] == 2
            && p.length[3] == 0);
     assert(p.vibrato == 50 && p.rotary == 0 && p.drive == 32);
+    /* vibrato delay clamps to 0..50 (0..5 s in 100 ms steps) */
+    assert(p.vibrato_delay == 50);
     assert(p.drive_tone == 100 && p.reverb_mix == 0
            && p.reverb_decay == 100);
     assert(p.vol_mod[0] == 32 && p.char_mod[3] == 0);
@@ -392,6 +402,7 @@ static void test_capture_apply()
     e.SetPipeCharModStep(2, 12);
     e.SetPipeLengthModStep(1, 21);
     e.SetVibratoDepth(25);
+    e.SetVibratoDelayStep(34);
     e.SetRotaryStep(5);
     e.SetDriveStep(16);
     e.SetDriveTonePercent(70);
@@ -409,7 +420,8 @@ static void test_capture_apply()
     assert(p.length[0] == -2 && p.length[3] == 1 && p.length[1] == 0);
     assert(p.vol_mod[0] == 9 && p.char_mod[2] == 12
            && p.length_mod[1] == 21);
-    assert(p.vibrato == 25 && p.rotary == 5 && p.drive == 16
+    assert(p.vibrato == 25 && p.vibrato_delay == 34 && p.rotary == 5
+           && p.drive == 16
            && p.drive_tone == 70 && p.reverb_mix == 13
            && p.reverb_decay == 55);
     assert(p.percussion == 1 && p.delay_mix == 65
@@ -430,7 +442,8 @@ static void test_capture_apply()
            && e.GetPipeLengthOctave(1) == 0);
     assert(e.GetPipeVolModStep(0) == 9 && e.GetPipeCharModStep(2) == 12
            && e.GetPipeLengthModStep(1) == 21);
-    assert(e.GetVibratoDepth() == 25 && e.GetRotaryStep() == 5);
+    assert(e.GetVibratoDepth() == 25 && e.GetVibratoDelayStep() == 34
+           && e.GetRotaryStep() == 5);
     assert(e.GetDriveStep() == 16 && e.GetDriveTonePercent() == 70);
     assert(e.GetReverbMixStep() == 13 && e.GetReverbDecayStep() == 55);
     assert(e.GetPercussionEnabled() && e.GetDelayMixPercent() == 65
@@ -468,6 +481,7 @@ static void test_set_init()
         assert(p.length_mod[i] == 0);
     }
     assert(p.vibrato == 0);
+    assert(p.vibrato_delay == 0); /* vibrato delay off */
     assert(p.rotary == 0);
     assert(p.drive == 0);
     assert(p.drive_tone == 100); /* neutral */
@@ -505,6 +519,7 @@ static void test_serialized_size_bound()
         p.length_mod[i] = 32;
     }
     p.vibrato = 50;
+    p.vibrato_delay = 50;
     p.rotary = 32;
     p.drive = 32;
     p.drive_tone = 100;

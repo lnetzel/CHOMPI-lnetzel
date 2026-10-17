@@ -185,6 +185,13 @@ effect and shows its white-key value bar for 500 ms.
   shared, free-running 6 Hz LFO across all voices (depth 50 = one
   semitone peak-to-peak); 0 is an exact bypass and boots at 0. Pink bar.
   The depth is stored in the SD-card presets.
+- Vibrato note-on delay: with vibrato selected on the wheel, SHIFT +
+  turn sets a 0-5 s delay in 100 ms steps (clamped, no wrap). When a
+  note is pressed from an all-notes-released state the vibrato stays
+  off for the delay time, then fades in over a fixed 250 ms ramp up to
+  the set depth; notes pressed while other notes are held do not
+  restart it. Pink bar. 0 (boot and init patch) starts the vibrato
+  with the note. The delay is stored in the SD-card presets.
 
 ### Volume encoder (ENC_6)
 
@@ -373,7 +380,8 @@ in the background without taking over the Modulation-mode LEDs.
   ~1 s. Init needs no SD card. Init values: pipe levels 16 (50%),
   Character 0 (clean sine), pipe lengths 0 (nominal footage), attack
   and release 0 (5 ms), mutes off,
-  volume/Character modulation 0, vibrato, rotary and drive 0,
+  volume/Character modulation 0, vibrato depth and note-on delay 0,
+  rotary and drive 0,
   distortion tone 100%, reverb mix 0, reverb decay 0 (0.2 s),
   percussion off, delay mix 0% and delay time 250 ms - the
   same sound as power-on. Not touched: master volume, fine tune,
@@ -409,8 +417,8 @@ mid-write can leave a stray `.tmp` file, which is ignored.
 
 Saved in every preset: per-pipe level, Character, pipe length, attack,
 release, mute and volume/Character/pipe-length-modulation amounts,
-plus vibrato depth, rotary amount, fuzz amount and tone, the global
-distortion modulation amount, reverb mix
+plus vibrato depth and note-on delay, rotary amount, fuzz amount and
+tone, the global distortion modulation amount, reverb mix
 and decay, percussion on/off, and delay mix and time. NOT saved:
 master volume, fine tune, octave shift, latch, page selections, the
 Modulation-mode destination and the wheel's rotary/vibrato selection.
