@@ -1,6 +1,6 @@
 ﻿---
 name: build-firmware
-description: 'Use when: compiling, building, or making any CHOMPI firmware (.bin) on this Windows machine. Trigger words: compile, build, make, flash, firmware binary. Covers chompi-tape, chompi-tempo, chompi-wave, chompi-usb-storage, and the v6.4 bootloader, including the pinned toolchains and MSYS2 invocation.'
+description: 'Use when: compiling, building, or making any CHOMPI firmware (.bin) on this Windows machine. Trigger words: compile, build, make, flash, firmware binary. Covers chompi-tape, chompi-tempo, chompi-wave, chompi-organ, chompi-usb-storage, and the v6.4 bootloader, including the pinned toolchains and MSYS2 invocation. For chompi-organ specifically, prefer the build-organ skill (organ README recipe + organ gotcha table).'
 ---
 
 # Build CHOMPI Firmware on Windows
@@ -36,6 +36,7 @@ make lives at /usr/bin/make in MSYS2. Output lands in code/src/build/<TARGET>.bi
 | chompi-tempo | firmware/chompi-tempo/code/src | CHOMPI | build/CHOMPI.bin | needs 13.3.rel1 toolchain first on PATH; same layout as tape |
 | chompi-wave | firmware/chompi-wave/code/src | CHOMPI | build/CHOMPI.bin | make program-boot installs bin/CHOMPI_Bootloader_V6_2_0.bin |
 | chompi-usb-storage | firmware/chompi-usb-storage/code/src | chompi_usb_storage_v1.5 | build/chompi_usb_storage_v1.5.bin | run make check-toolchain first; reuses wave libDaisy build and tape LED helper - those folders must exist |
+| chompi-organ | firmware/chompi-organ/code/src | CHOMPI_ORGAN_1.0 | build/CHOMPI_ORGAN_1.0.bin | reuses wave's libDaisy/DaisySP/coreJSON via relative paths; host tests in code/tests (`make test` with /ucrt64/bin on PATH). Organ-specific gotchas: use the build-organ skill |
 | chompi-bootloader-v6.4-beta | firmware/chompi-bootloader-v6.4-beta | - | bootloader/build/chompi_bootloader_v6_4.bin | run ./build-bootloader.sh (clean arg purges first); correct build is byte-identical to release: 119,612 bytes, md5 580b187fec405849fb401eb699281e4c |
 | chompi-drone | - | - | - | empty folder, nothing to build |
 
