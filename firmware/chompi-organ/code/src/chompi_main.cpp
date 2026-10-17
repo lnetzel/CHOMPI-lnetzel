@@ -26,11 +26,12 @@ Hardware    hw;
 OrganEngine engine;
 OrganMidi   midi;
 
-/* Plate-reverb delay memory: 64 KiB in external SDRAM, kept out of the
- * tight SRAM regions. Never written from a global constructor: it is
- * cleared by PlateReverb::Init via engine.Init(), after hw.Init() has
- * configured the SDRAM controller. */
-static uint16_t DSY_SDRAM_BSS plate_delay_mem[PlateReverb::kDelayBufferSize];
+/* Plate-reverb delay memory: 128 KiB of floats in external SDRAM, kept
+ * out of the tight SRAM regions. Never written from a global
+ * constructor: it is cleared by PlateReverb::Init via engine.Init(),
+ * after hw.Init() has configured the SDRAM controller. */
+static PlateReverb::T DSY_SDRAM_BSS
+    plate_delay_mem[PlateReverb::kDelayBufferSize];
 
 /* Stereo BBD-style delay memory: 2 x 128 KiB floats in external SDRAM,
  * same ownership/init pattern as the plate buffer above: cleared by
@@ -1039,10 +1040,9 @@ static void PollControls()
             }
             else if(vol_page_ == kVolPageReverb)
             {
-                /* volume-encoder page 4: plate-reverb mix, 1% per click,
-                 * clamped 0..100 */
-                engine.SetReverbMixPercent(engine.GetReverbMixPercent()
-                                           + delta);
+                /* volume-encoder page 4: plate-reverb mix, 32 steps
+                 * (same granularity as the overdrive amount) */
+                engine.SetReverbMixStep(engine.GetReverbMixStep() + delta);
                 bar_pipe_  = kVolBar;
                 bar_page_  = kVolPageReverb;
                 bar_until_ = System::GetNow() + 500;
@@ -1450,9 +1450,9 @@ static void UpdateLeds()
             }
             else if(bar_page_ == kVolPageReverb)
             {
-                /* volume-knob page 4: plate-reverb mix percent */
-                lit  = (engine.GetReverbMixPercent() * kNumWhiteKeys + 50)
-                       / 100;
+                /* volume-knob page 4: plate-reverb mix */
+                lit  = (engine.GetReverbMixStep() * kNumWhiteKeys + 16)
+                       / OrganEngine::kMaxSteps;
                 kind = kBarReverb;
             }
             else if(bar_page_ == kVolPageDelay)
@@ -1810,7 +1810,8 @@ static void UpdateLeds()
     if(vol_page_ == kVolPageReverb)
     {
         const float s = .2f
-                        + .8f * engine.GetReverbMixPercent() * .01f;
+                        + .8f * engine.GetReverbMixStep()
+                                  * (1.f / OrganEngine::kMaxSteps);
         SetPthLedFloat(9, 0.f, 0.f, s);
     }
     else if(vol_page_ == kVolPageDelay)

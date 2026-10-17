@@ -97,8 +97,8 @@ struct FakeEngine
     int  GetDriveStep() const { return drive; }
     void SetDriveTonePercent(int t) { drive_tone = Clamp(t, 0, 100); }
     int  GetDriveTonePercent() const { return drive_tone; }
-    void SetReverbMixPercent(int m) { reverb_mix = Clamp(m, 0, 100); }
-    int  GetReverbMixPercent() const { return reverb_mix; }
+    void SetReverbMixStep(int s) { reverb_mix = Clamp(s, 0, 32); }
+    int  GetReverbMixStep() const { return reverb_mix; }
     void SetReverbDecayStep(int s) { reverb_decay = Clamp(s, 0, 100); }
     int  GetReverbDecayStep() const { return reverb_decay; }
     void SetPercussionEnabled(bool on) { percussion = on; }
@@ -155,7 +155,7 @@ static OrganPreset MakeAssortedPreset()
     p.rotary       = 0;
     p.drive        = 32;
     p.drive_tone   = 0;
-    p.reverb_mix   = 100;
+    p.reverb_mix   = 32;
     p.reverb_decay = 99;
     p.vol_mod[0]   = 32;
     p.char_mod[3]  = 31;
@@ -395,7 +395,7 @@ static void test_capture_apply()
     e.SetRotaryStep(5);
     e.SetDriveStep(16);
     e.SetDriveTonePercent(70);
-    e.SetReverbMixPercent(40);
+    e.SetReverbMixStep(13);
     e.SetReverbDecayStep(55);
     e.SetPercussionEnabled(true);
     e.SetDelayMixPercent(65);
@@ -410,7 +410,7 @@ static void test_capture_apply()
     assert(p.vol_mod[0] == 9 && p.char_mod[2] == 12
            && p.length_mod[1] == 21);
     assert(p.vibrato == 25 && p.rotary == 5 && p.drive == 16
-           && p.drive_tone == 70 && p.reverb_mix == 40
+           && p.drive_tone == 70 && p.reverb_mix == 13
            && p.reverb_decay == 55);
     assert(p.percussion == 1 && p.delay_mix == 65
            && p.delay_time_ms == 345);
@@ -432,7 +432,7 @@ static void test_capture_apply()
            && e.GetPipeLengthModStep(1) == 21);
     assert(e.GetVibratoDepth() == 25 && e.GetRotaryStep() == 5);
     assert(e.GetDriveStep() == 16 && e.GetDriveTonePercent() == 70);
-    assert(e.GetReverbMixPercent() == 40 && e.GetReverbDecayStep() == 55);
+    assert(e.GetReverbMixStep() == 13 && e.GetReverbDecayStep() == 55);
     assert(e.GetPercussionEnabled() && e.GetDelayMixPercent() == 65
            && e.GetDelayTimeMs() == 345);
     assert(e.GetDriveModStep() == 18);
@@ -508,7 +508,7 @@ static void test_serialized_size_bound()
     p.rotary = 32;
     p.drive = 32;
     p.drive_tone = 100;
-    p.reverb_mix = 100;
+    p.reverb_mix = 32;
     p.reverb_decay = 100;
     p.percussion = 1;
     p.delay_mix = 100;

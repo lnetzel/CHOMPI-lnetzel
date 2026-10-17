@@ -6,8 +6,8 @@
  *  pipes that is 24 sinf per sample and one of the largest steady-state
  *  CPU costs of the engine. This oscillator returns the same sine from a
  *  2048-entry table with linear interpolation: max abs error ~1.2e-6
- *  (-118 dB), far below the plate reverb's 16-bit tank quantization and
- *  the analog output noise floor, and thousands of times smaller than
+ *  (-118 dB), far below the analog output noise floor, and thousands
+ *  of times smaller than
  *  TonewheelCharacter's deliberate per-note variation - so the swap is
  *  audibly transparent.
  *

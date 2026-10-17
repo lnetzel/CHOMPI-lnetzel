@@ -37,10 +37,10 @@ using chompi::PlateReverb;
 static const float kSampleRate = 48000.f;
 
 /** Per-test delay storage (the MCU build places this in SDRAM). */
-static uint16_t buf_a[PlateReverb::kDelayBufferSize];
-static uint16_t buf_b[PlateReverb::kDelayBufferSize];
+static PlateReverb::T buf_a[PlateReverb::kDelayBufferSize];
+static PlateReverb::T buf_b[PlateReverb::kDelayBufferSize];
 
-static void prefill(uint16_t *buf, uint16_t v)
+static void prefill(PlateReverb::T *buf, PlateReverb::T v)
 {
     for(size_t i = 0; i < PlateReverb::kDelayBufferSize; i++)
         buf[i] = v;
@@ -80,7 +80,7 @@ static void impulse_response_lr(PlateReverb &r, float mix, float imp_l,
 
 static void test_silent_init_prefilled_buffer()
 {
-    prefill(buf_a, 0xBEEF); /* garbage must not survive Init */
+    prefill(buf_a, 1e30f); /* garbage must not survive Init */
     PlateReverb r;
     r.Init(kSampleRate, buf_a);
 
@@ -278,8 +278,8 @@ static void test_long_silence_no_runaway()
     float l, rr;
     r.Process(1.f, 1.f, l, rr); /* impulse */
 
-    /* 8 s of decay + silence; the tail must shrink toward the 16-bit
-     * noise floor and never blow up */
+    /* 8 s of decay + silence; the tail must shrink toward the noise
+     * floor and never blow up */
     float peak_tail = 0.f;
     for(int i = 0; i < 8 * 48000; i++)
     {
@@ -317,7 +317,7 @@ static void test_decay_clamping_and_default()
  *  sustained stereo burst. A unit impulse is NOT a fair probe here:
  *  the input gain is normalized by (1 - feedback) for a constant
  *  SUSTAINED-tone wet level, so a long decay's impulse tail is tiny
- *  and quantizes away in the 16-bit tank; organ tones are sustained. */
+ *  in comparison; organ tones are sustained. */
 static float burst_tail_peak(float decay_s, float t0_s, float t1_s)
 {
     PlateReverb r;

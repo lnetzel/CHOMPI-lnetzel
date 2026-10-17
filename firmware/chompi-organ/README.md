@@ -250,10 +250,11 @@ a preset ramps the mix/time without clearing them.
 The delay mix and time boot at 0% / 250 ms and are stored in the SD-card
 presets; they have no MIDI CC.
 
-Page 4 adjusts the reverb mix by 1% per click, clamped to 0-100%: 0% is
-exact dry and 100% is wet only (a linear complementary crossfade with a
-~10 ms click-free ramp). The white-key bar is uniformly blue: no keys at
-0%, half (8 keys) at 50%, all 15 at 100%.
+Page 4 adjusts the reverb mix in 32 steps (one per click, the same
+granularity as the overdrive amount): step 0 is exact dry and step 32
+is wet only (a linear complementary crossfade with a ~10 ms click-free
+ramp). The white-key bar is uniformly blue: no keys at 0, half (8 keys)
+at step 16, all 15 at step 32.
 
 SHIFT + turn on page 4 adjusts the plate decay: 100 log-spaced steps
 from 0.2 s (boot default) to 20 s, shown on the same blue white-key bar

@@ -35,7 +35,7 @@ struct OrganPreset
     static constexpr int kMaxRotary      = 32;
     static constexpr int kMaxDrive       = 32;
     static constexpr int kMaxTone        = 100;
-    static constexpr int kMaxReverbMix   = 100;
+    static constexpr int kMaxReverbMix   = 32;
     static constexpr int kMaxReverbDecay = 100;
     static constexpr int kMaxMod         = 32;
     static constexpr int kMaxLength      = 2;   /* +/-2 octaves */
@@ -71,7 +71,7 @@ struct OrganPreset
     uint8_t rotary;               /**< 0..32 rotary amount */
     uint8_t drive;                /**< 0..32 fuzz amount */
     uint8_t drive_tone;           /**< 0..100 fuzz tone percent */
-    uint8_t reverb_mix;           /**< 0..100 plate mix percent */
+    uint8_t reverb_mix;           /**< 0..32 plate mix steps */
     uint8_t reverb_decay;         /**< 0..100 plate decay steps */
     uint8_t vol_mod[kNumPipes];   /**< 0..32 volume-modulation amounts */
     uint8_t char_mod[kNumPipes];  /**< 0..32 Character-modulation amounts */
@@ -316,7 +316,7 @@ void CaptureFromEngine(OrganPreset &p, const Engine &e)
     p.rotary       = (uint8_t)e.GetRotaryStep();
     p.drive        = (uint8_t)e.GetDriveStep();
     p.drive_tone   = (uint8_t)e.GetDriveTonePercent();
-    p.reverb_mix   = (uint8_t)e.GetReverbMixPercent();
+    p.reverb_mix   = (uint8_t)e.GetReverbMixStep();
     p.reverb_decay = (uint8_t)e.GetReverbDecayStep();
     p.percussion   = e.GetPercussionEnabled() ? 1 : 0;
     p.delay_mix    = (uint8_t)e.GetDelayMixPercent();
@@ -347,7 +347,7 @@ void ApplyToEngine(const OrganPreset &p, Engine &e)
     e.SetRotaryStep(p.rotary);
     e.SetDriveStep(p.drive);
     e.SetDriveTonePercent(p.drive_tone);
-    e.SetReverbMixPercent(p.reverb_mix);
+    e.SetReverbMixStep(p.reverb_mix);
     e.SetReverbDecayStep(p.reverb_decay);
     e.SetPercussionEnabled(p.percussion != 0);
     e.SetDelayMixPercent(p.delay_mix);

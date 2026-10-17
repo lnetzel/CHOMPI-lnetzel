@@ -57,11 +57,11 @@
  *   - The mix is ramped (~10 ms, sample-rate derived) with retargeting
  *     from the current value and exact-endpoint snaps.
  *   - Decay (T60) maps seconds to the tank loop feedback, and the
- *     per-channel input gain scales with (1 - feedback) so the 16-bit
- *     tank keeps constant headroom - and a constant sustained-tone wet
- *     level - across the whole decay range.
- *   - A ~120 Hz one-pole high-pass per send keeps organ low end from
- *     building up/rumbling inside the 16-bit tank.
+ *    per-channel input gain scales with (1 - feedback) so the tank
+ *    keeps a constant sustained-tone wet level across the whole decay
+ *    range (only the tail duration changes).
+ *  - A ~120 Hz one-pole high-pass per send keeps organ low end from
+ *    building up/rumbling inside the tank.
  *
  *  The tank ALWAYS runs (even at 0% mix or with idle voices), so tails
  *  stay live and no stale state accumulates. No heap allocation, no
@@ -89,12 +89,17 @@
 namespace chompi
 {
 
-class PlateReverb
+template <daisysp::Format kFormat>
+class PlateReverbT
 {
   public:
-    /** Delay-buffer size in uint16_t elements (64 KiB). The caller owns
-     *  the storage; ORGAN places it in SDRAM. */
+    /** Delay-buffer size in elements (32 Ki samples; 64 KiB at 16-bit,
+     *  128 KiB at 32-bit float). The caller owns the storage; ORGAN
+     *  places it in SDRAM. */
     static constexpr size_t kDelayBufferSize = 32768;
+
+    typedef daisysp::FxEngine<kDelayBufferSize, kFormat> E;
+    typedef typename E::T T; /**< delay-storage element type */
 
     /** Mix ramp length, sample-rate derived (~10 ms). */
     static constexpr float kMixRampSeconds = .010f;
@@ -106,8 +111,8 @@ class PlateReverb
     static constexpr float kInputGain = .4f;   /**< send gain at the default
                                                 *   decay; scales with
                                                 *   (1 - feedback) so the
-                                                *   16-bit tank keeps
-                                                *   constant headroom */
+                                                *   sustained-tone wet
+                                                *   level is constant */
     static constexpr float kWetGain   = 1.f;   /**< wet make-up gain */
     static constexpr float kLowCutHz  = 120.f; /**< tank-send low-cut */
     static constexpr float kLfo1Hz    = .5f;   /**< slow shimmer/chorus */
@@ -124,10 +129,10 @@ class PlateReverb
     static constexpr float kLoopSamples = 20407.f;
 
     /** Initialize every piece of state. `delay_buffer` must point to
-     *  kDelayBufferSize uint16_t elements and must be writable (on the
+     *  kDelayBufferSize T elements and must be writable (on the
      *  MCU, call only after the SDRAM controller is configured - never
      *  from a global constructor). Safe to call repeatedly. */
-    void Init(float sample_rate, uint16_t *delay_buffer)
+    void Init(float sample_rate, T *delay_buffer)
     {
         sample_rate_ = sample_rate;
         engine_.Init(delay_buffer); /* buffer pointer + LFO phase/freq */
@@ -181,6 +186,15 @@ class PlateReverb
 
     float GetDecaySeconds() const { return decay_seconds_; }
 
+    /** Test hook: override the tank LFO rates (cycles/sample, as in
+     *  FxEngine::SetLFOFrequency; 0 freezes the modulated taps). Not
+     *  used by the firmware. */
+    void SetLfoRatesForTesting(float f1, float f2)
+    {
+        engine_.SetLFOFrequency(daisysp::LFO_1, f1);
+        engine_.SetLFOFrequency(daisysp::LFO_2, f2);
+    }
+
     /** Process one stereo sample. Inputs are taken by value, so the
      *  outputs may alias the inputs (in-place use). The stereo input is
      *  preserved through the tank: each channel excites its own tank
@@ -208,35 +222,35 @@ class PlateReverb
          * cross-feedback tank of 2x (2AP + 1Delay) with slow LFO
          * modulation of the long-delay cross taps. Total delay memory
          * 22855 samples < kDelayBufferSize. */
-        typedef E::Reserve<150,
-            E::Reserve<214,
-                E::Reserve<319,
-                    E::Reserve<527,
-                        E::Reserve<163,
-                            E::Reserve<229,
-                                E::Reserve<347,
-                                    E::Reserve<499,
-                                        E::Reserve<2182,
-                                            E::Reserve<2690,
-                                                E::Reserve<4501,
-                                                    E::Reserve<2525,
-                                                        E::Reserve<2197,
-                                                            E::Reserve<6312>>>>>>>>>>>>>>
+        typedef typename E::template Reserve<150,
+            typename E::template Reserve<214,
+                typename E::template Reserve<319,
+                    typename E::template Reserve<527,
+                        typename E::template Reserve<163,
+                            typename E::template Reserve<229,
+                                typename E::template Reserve<347,
+                                    typename E::template Reserve<499,
+                                        typename E::template Reserve<2182,
+                                            typename E::template Reserve<2690,
+                                                typename E::template Reserve<4501,
+                                                    typename E::template Reserve<2525,
+                                                        typename E::template Reserve<2197,
+                                                            typename E::template Reserve<6312>>>>>>>>>>>>>>
             Memory;
-        E::DelayLine<Memory, 0>  ap1l;
-        E::DelayLine<Memory, 1>  ap2l;
-        E::DelayLine<Memory, 2>  ap3l;
-        E::DelayLine<Memory, 3>  ap4l;
-        E::DelayLine<Memory, 4>  ap1r;
-        E::DelayLine<Memory, 5>  ap2r;
-        E::DelayLine<Memory, 6>  ap3r;
-        E::DelayLine<Memory, 7>  ap4r;
-        E::DelayLine<Memory, 8>  dap1a;
-        E::DelayLine<Memory, 9>  dap1b;
-        E::DelayLine<Memory, 10> del1;
-        E::DelayLine<Memory, 11> dap2a;
-        E::DelayLine<Memory, 12> dap2b;
-        E::DelayLine<Memory, 13> del2;
+        typename E::template DelayLine<Memory, 0>  ap1l;
+        typename E::template DelayLine<Memory, 1>  ap2l;
+        typename E::template DelayLine<Memory, 2>  ap3l;
+        typename E::template DelayLine<Memory, 3>  ap4l;
+        typename E::template DelayLine<Memory, 4>  ap1r;
+        typename E::template DelayLine<Memory, 5>  ap2r;
+        typename E::template DelayLine<Memory, 6>  ap3r;
+        typename E::template DelayLine<Memory, 7>  ap4r;
+        typename E::template DelayLine<Memory, 8>  dap1a;
+        typename E::template DelayLine<Memory, 9>  dap1b;
+        typename E::template DelayLine<Memory, 10> del1;
+        typename E::template DelayLine<Memory, 11> dap2a;
+        typename E::template DelayLine<Memory, 12> dap2b;
+        typename E::template DelayLine<Memory, 13> del2;
         typename E::Context c;
 
         const float kap = kDiffusion;
@@ -251,7 +265,7 @@ class PlateReverb
         engine_.Start(&c);
 
         /* left send: normalized, low-cut to keep LF rumble out of the
-         * 16-bit tank, diffused through 4 allpasses */
+         * tank, diffused through 4 allpasses */
         c.Read(in_l, input_gain_);
         c.Hp(hp_state_l_, hp_coeff_);
         c.Read(ap1l TAIL, kap);
@@ -313,7 +327,6 @@ class PlateReverb
     }
 
   private:
-    typedef daisysp::FxEngine<kDelayBufferSize, daisysp::FORMAT_16_BIT> E;
     E engine_;
 
     float lp_decay_1_; /**< tank damping histories */
@@ -331,5 +344,14 @@ class PlateReverb
     float feedback_;      /**< tank loop feedback, from decay_seconds_ */
     float input_gain_;    /**< send gain, scaled by (1 - feedback_) */
 };
+
+/** The production plate: 32-bit float tank storage. The original
+ *  16-bit tank (FORMAT_16_BIT) quantized every delay write by
+ *  truncation; the recirculating loop amplifies that error at long
+ *  decays (measured -69 dBFS steady-state and -55 dBFS in the tail at
+ *  20 s decay, wet-only), audible as a slight noise at 50% mix. Float
+ *  storage eliminates it entirely and skips the per-access float<->int
+ *  conversions; the SDRAM cost is 128 KiB instead of 64 KiB. */
+typedef PlateReverbT<daisysp::FORMAT_32_BIT> PlateReverb;
 
 } // namespace chompi

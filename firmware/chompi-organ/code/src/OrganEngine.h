@@ -51,11 +51,12 @@
  *    its own diffused tank side, so the rotary's left/right
  *    differences survive in the wet; the tank's decay-scaled
  *    cross-feedback progressively couples the channels into one
- *    diffuse field. Linear complementary dry/wet crossfade with
- *    a ~10 ms ramp: 0% mix is bit-exact dry, 100% is wet only. Decay is
+ *    diffuse field. Mix is adjustable in 32 steps through a linear
+ *    complementary dry/wet crossfade with a ~10 ms ramp: step 0 is
+ *    bit-exact dry, step 32 is wet only. Decay is
  *    adjustable 0.2-20 s in 100 log-spaced steps (boots at 0.2 s). The
- *    tank runs continuously (live tails, no stale state); the 64 KiB
- *    delay buffer is caller-owned SDRAM passed to Init().
+ *    tank runs continuously (live tails, no stale state); the 128 KiB
+ *    float delay buffer is caller-owned SDRAM passed to Init().
  *  - Stereo BBD-inspired delay (StereoBbdDelay.h) after the rotary and
  *    its fuzz-output leveling, before the plate reverb: two caller-owned
  *    128 KiB SDRAM float lines, 40-500 ms with smooth pitch-gliding time
@@ -153,7 +154,7 @@ class OrganEngine
     static constexpr int   kDefaultDriveStep     = 0;  /* overdrive off */
     static constexpr int   kDefaultRotaryStep    = 0;  /* rotary off (exact
                                                         * bypass) */
-    static constexpr int   kDefaultReverbMixPercent = 0; /* reverb dry */
+    static constexpr int   kDefaultReverbMixStep    = 0; /* reverb dry */
     static constexpr int   kDefaultReverbDecayStep  = 0; /* 0.2 s decay */
     static constexpr int   kMaxReverbDecaySteps     = 100;
     static constexpr float kMinReverbDecaySeconds   = .2f;
@@ -175,11 +176,12 @@ class OrganEngine
     static constexpr int   kMaxDelayTimeMs         = 500;
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
-     *  uint16_t elements in writable memory (ORGAN uses SDRAM); pass it
+     *  PlateReverb::T elements in writable memory (ORGAN uses SDRAM);
+     *  pass it
      *  only after hw.Init() has configured the SDRAM controller.
      *  `delay_left`/`delay_right` must each point to
      *  StereoBbdDelay::kBufferSize floats, likewise in SDRAM. */
-    void Init(float sample_rate, uint16_t *reverb_delay,
+    void Init(float sample_rate, PlateReverb::T *reverb_delay,
               float *delay_left, float *delay_right)
     {
         sample_rate_ = sample_rate;
@@ -276,7 +278,7 @@ class OrganEngine
         SetRotaryStep(kDefaultRotaryStep);
 
         plate_.Init(sample_rate, reverb_delay);
-        reverb_mix_percent_ = kDefaultReverbMixPercent;
+        reverb_mix_step_    = kDefaultReverbMixStep;
         reverb_decay_step_  = kDefaultReverbDecayStep; /* plate_.Init()
                                                         * already set 0.2 s */
 
@@ -543,17 +545,18 @@ class OrganEngine
 
     int GetVibratoDepth() const { return vibrato_.GetDepth(); }
 
-    /** Apply one encoder click to the plate-reverb mix (0..100 percent,
- *      clamped). 0% is bit-exact dry, 100% is wet only; the ~10 ms
- *      crossfade ramp retargets from the current mix, click-free. */
-    void SetReverbMixPercent(int percent)
+    /** Apply one encoder click to the plate-reverb mix (0..kMaxSteps,
+ *      clamped). Step 0 is bit-exact dry, step 32 is wet only; the
+ *      ~10 ms crossfade ramp retargets from the current mix,
+ *      click-free. */
+    void SetReverbMixStep(int step)
     {
-        percent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
-        reverb_mix_percent_ = static_cast<uint8_t>(percent);
-        plate_.SetMix(static_cast<float>(percent) * .01f);
+        step = step < 0 ? 0 : (step > kMaxSteps ? kMaxSteps : step);
+        reverb_mix_step_ = static_cast<uint8_t>(step);
+        plate_.SetMix(static_cast<float>(step) * (1.f / kMaxSteps));
     }
 
-    int GetReverbMixPercent() const { return reverb_mix_percent_; }
+    int GetReverbMixStep() const { return reverb_mix_step_; }
 
     /** Apply one encoder click to the plate-reverb decay (0..100 steps,
  *      clamped), mapped exponentially from 0.2 s (step 0, boot default)
@@ -1159,7 +1162,7 @@ class OrganEngine
     float    attack_inc_[kNumPipes];
     float    release_inc_[kNumPipes];
     PlateReverb plate_;
-    uint8_t  reverb_mix_percent_;
+    uint8_t  reverb_mix_step_;
     uint8_t  reverb_decay_step_;
     StereoBbdDelay delay_;
     uint8_t  delay_mix_percent_;

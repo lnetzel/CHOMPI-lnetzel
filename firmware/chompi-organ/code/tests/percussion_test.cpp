@@ -177,8 +177,8 @@ static float Pipe2Hz(int note)
 
 struct Rig
 {
-    OrganEngine engine;
-    uint16_t *  plate_mem;
+    OrganEngine           engine;
+    chompi::PlateReverb::T *plate_mem;
     float *     delay_l;
     float *     delay_r;
     float       buf[4][kBlock];
@@ -186,7 +186,7 @@ struct Rig
 
     void Init()
     {
-        plate_mem = new uint16_t[chompi::PlateReverb::kDelayBufferSize];
+        plate_mem = new chompi::PlateReverb::T[chompi::PlateReverb::kDelayBufferSize];
         delay_l   = new float[chompi::StereoBbdDelay::kBufferSize];
         delay_r   = new float[chompi::StereoBbdDelay::kBufferSize];
         engine.Init(kSr, plate_mem, delay_l, delay_r);
