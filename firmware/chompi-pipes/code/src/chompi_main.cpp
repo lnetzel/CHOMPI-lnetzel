@@ -14,6 +14,7 @@
 #include "MidiHandler.h"
 #include "OrganPreset.h"
 #include "PresetStorage.h"
+#include "SdRecorder.h"
 #include "ModDest.h"
 #ifdef PIPES_CPU_METER
 #include "util/CpuLoadMeter.h"
@@ -39,6 +40,11 @@ static PlateReverb::T DSY_SDRAM_BSS
  * configured the SDRAM controller. */
 static float DSY_SDRAM_BSS delay_mem_l[StereoBbdDelay::kBufferSize];
 static float DSY_SDRAM_BSS delay_mem_r[StereoBbdDelay::kBufferSize];
+
+/* Record-to-SD ring: 2 x 262,144 int16 (1 MiB, ~5.5 s of card-stall
+ * slack at 48 kHz stereo) in external SDRAM, same ownership pattern as
+ * the delay buffers above. */
+static int16_t DSY_SDRAM_BSS rec_ring[2 * 262144];
 
 /* B4: debug-build CPU meter (build with PIPES_CPU_METER=1); peak load
  * shows on PTH LED 0 (green < 70%, amber 70-85%, red > 85%). */
@@ -408,6 +414,11 @@ static volatile bool    cc_character_dirty_[OrganEngine::kNumPipes];
 static OrganPresetBank preset_bank_;
 static PresetStorage   preset_storage_;
 
+/* Record-to-SD: a global so its FIL/bounce buffers stay in D1 .bss
+ * (the SDMMC IDMA cannot reach the DTCMRAM stack - same rule as
+ * preset_storage_). Shares the card mounted by PresetStorage. */
+static SdRecorder sd_recorder_;
+
 /** Preset UI modes (Tape's gestures): slot-selection modes plus the
  *  >=1 s SAVING/COPYING/ERASING animations. Volatile: written by
  *  PollControls (audio ISR), read by UpdateLeds (main loop); the main
@@ -437,6 +448,44 @@ static volatile bool     init_holding_ = false; /* hold in progress */
 static volatile uint32_t init_hold_t_  = 0;     /* hold start (ms) */
 static volatile uint32_t init_done_t_  = 0;     /* last apply (ms; 0 = never) */
 static const uint32_t    kInitHoldMs   = 2500;
+
+/* ---- record-to-SD chord (PLAY + LOOP) ----
+ * Normal Mode only, no SHIFT (SHIFT+KEY_28 stays the init-patch hold):
+ * hold PLAY+LOOP for 2 s (red fill bar) -> 4 s countdown on the first
+ * four white keys -> recording starts (PTH 0 blinks red) and normal
+ * play resumes. The same chord held 1 s stops (works in both modes).
+ * KEY_27/KEY_28's percussion/latch toggles moved to the RELEASE edge
+ * so a completed chord has no side effects. Volatile: written by
+ * PollControls (audio ISR), read by UpdateLeds (main loop). */
+enum RecState
+{
+    kRecIdle = 0,
+    kRecHoldStart, /**< 2 s arm hold */
+    kRecCountdown, /**< 4 s countdown */
+    kRecActive,    /**< recording */
+    kRecHoldStop,  /**< 1 s stop hold */
+    kRecError      /**< ~2 s fast red blink on PTH 0 */
+};
+static volatile int      rec_state_   = kRecIdle;
+static volatile uint32_t rec_state_t_ = 0; /* state entry (ms) */
+static volatile uint32_t rec_flash_t_ = 0; /* no-card flash (0 = off) */
+static volatile bool     play_pending_ = false; /* KEY_27 toggle arms
+                                                 * here, fires on
+                                                 * release */
+static volatile bool     loop_pending_ = false; /* KEY_28: same for the
+                                                 * latch */
+static bool              play_edge_    = false; /* fresh KEY_27 down
+                                                 * this pass */
+static bool              loop_edge_    = false; /* fresh KEY_28 down
+                                                 * this pass */
+static bool              rec_seen_run_ = false; /* take reached
+                                                 * kSRecord (for the
+                                                 * 6 h auto-stop) */
+static const uint32_t    kRecHoldStartMs = 2000;
+static const uint32_t    kRecCountdownMs = 4000;
+static const uint32_t    kRecHoldStopMs  = 1000;
+static const uint32_t    kRecSwallowMs   = 400;
+static const uint32_t    kRecErrorMs     = 2000;
 
 /** White-key SwIds, slot 0 (C3, leftmost) .. slot 14 (C5, rightmost). */
 static const int kWhiteKeySw[kNumWhiteKeys] = {
@@ -748,10 +797,14 @@ static void PollControls()
     }
 
     /* KEY_27 (Play/Pause): toggle the Hammond-style percussion on each
-     * press edge, in Normal and Modulation modes alike; holding or
-     * releasing the key does nothing. The engine only restarts the
-     * shared decay on an all-notes-released note-on, so toggling while
-     * notes are held synthesizes no attack. The settled boot baseline
+     * RELEASE edge, in Normal and Modulation modes alike; holding the
+     * key does nothing on its own. The toggle moved from the down-edge
+     * to the release so the PLAY+LOOP record chord is deterministic:
+     * the press only arms the toggle (play_pending_), the release fires
+     * it, and a completed (or >400 ms aborted) record hold consumes the
+     * press so it never toggles. The engine only restarts the shared
+     * decay on an all-notes-released note-on, so toggling while notes
+     * are held synthesizes no attack. The settled boot baseline
      * captured in main() means a key held at power-on never toggles,
      * and this read does not disturb the KEY_26+27+28 shipping-mode
      * chord checked before audio starts. Solid amber on the PTH 7 LED
@@ -760,11 +813,21 @@ static void PollControls()
         const int  play_sw = static_cast<int>(Hardware::SwId::KEY_27);
         const bool down    = hw.button_sr.State(play_sw);
         if(down && !prev_key_[play_sw])
+        {
+            play_pending_ = true;
+            play_edge_    = true; /* for the record chord below */
+        }
+        else if(!down && prev_key_[play_sw] && play_pending_)
+        {
+            play_pending_ = false;
             engine.SetPercussionEnabled(!engine.GetPercussionEnabled());
+        }
         prev_key_[play_sw] = down;
     }
 
-    /* KEY_28 (LOOP). Without SHIFT: toggles the key latch. While
+    /* KEY_28 (LOOP). Without SHIFT: toggles the key latch on the
+     * RELEASE edge (moved from the down-edge for the PLAY+LOOP record
+     * chord, same as KEY_27 above). While
      * latched, releasing a key keeps its note sounding; re-pressing a
      * key whose note is latched releases that note (toggle-off) instead
      * of retriggering it; unlatching releases every latched note whose
@@ -781,6 +844,7 @@ static void PollControls()
         const uint32_t now     = System::GetNow();
         if(down && !prev_key_[loop_sw])
         {
+            loop_edge_ = true; /* for the record chord below */
             if(shift_held_)
             {
                 /* SHIFT + OVERDUB: init-patch hold, no latch toggle */
@@ -792,20 +856,25 @@ static void PollControls()
             }
             else
             {
-                latch_on_ = !latch_on_;
-                if(!latch_on_)
+                loop_pending_ = true; /* latch toggle fires on release */
+            }
+        }
+        else if(!down && prev_key_[loop_sw] && loop_pending_)
+        {
+            loop_pending_ = false;
+            latch_on_     = !latch_on_;
+            if(!latch_on_)
+            {
+                for(int swid = 7; swid < 32; swid++)
                 {
-                    for(int swid = 7; swid < 32; swid++)
+                    if(latched_[swid] && active_note_[swid] != 0
+                       && !hw.button_sr.State(swid))
                     {
-                        if(latched_[swid] && active_note_[swid] != 0
-                           && !hw.button_sr.State(swid))
-                        {
-                            const uint8_t note = active_note_[swid] - 1;
-                            engine.NoteOff(note);
-                            out_q.PushBack({1, note, 0});
-                        }
-                        latched_[swid] = false;
+                        const uint8_t note = active_note_[swid] - 1;
+                        engine.NoteOff(note);
+                        out_q.PushBack({1, note, 0});
                     }
+                    latched_[swid] = false;
                 }
             }
         }
@@ -827,6 +896,145 @@ static void PollControls()
                 init_holding_   = false;
             }
         }
+    }
+
+    /* ---- record-to-SD chord (PLAY + LOOP) ----
+     * Start: hold PLAY+LOOP for 2 s in Normal Mode (no SHIFT, no preset
+     * mode active) -> 4 s countdown -> the recorder starts. Stop: hold
+     * the same chord for 1 s (works in both modes). A completed chord
+     * consumes both keys' pending percussion/latch toggles; an aborted
+     * hold that survived >400 ms swallows them too (an aborted gesture
+     * is not two quick presses). With no SD card the four countdown
+     * keys flash red for ~1 s and the gesture stays inert. The trigger
+     * needs a fresh down-edge on one of the keys, so a chord held at
+     * boot (baselined in prev_key_) or still held from the start
+     * gesture can never fire. */
+    {
+        const bool play_down
+            = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_27));
+        const bool loop_down
+            = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_28));
+        const uint32_t now = System::GetNow();
+
+        /* a recorder error (no free take number, full/failed card)
+         * surfaces in every UI state */
+        if(rec_state_ != kRecError
+           && sd_recorder_.GetState() == SdRecorder::kSError)
+        {
+            rec_state_   = kRecError;
+            rec_state_t_ = now;
+        }
+
+        switch(rec_state_)
+        {
+            case kRecIdle:
+                if(play_down && loop_down && (play_edge_ || loop_edge_)
+                   && !mod_mode_ && !shift_held_
+                   && preset_mode_ == kPresetNone)
+                {
+                    if(preset_storage_.NoSdCard())
+                    {
+                        rec_flash_t_  = now; /* red flash, stay idle */
+                        play_pending_ = false;
+                        loop_pending_ = false;
+                    }
+                    else
+                    {
+                        rec_state_   = kRecHoldStart;
+                        rec_state_t_ = now;
+                    }
+                }
+                break;
+
+            case kRecHoldStart:
+                if(!play_down || !loop_down || shift_held_ || mod_mode_)
+                {
+                    /* cancelled: early release, SHIFT mid-hold or the
+                     * switch flipped to Modulation */
+                    if(now - rec_state_t_ > kRecSwallowMs)
+                    {
+                        play_pending_ = false;
+                        loop_pending_ = false;
+                    }
+                    rec_state_ = kRecIdle;
+                }
+                else if(now - rec_state_t_ >= kRecHoldStartMs)
+                {
+                    play_pending_ = false; /* the chord consumes both */
+                    loop_pending_ = false;
+                    rec_state_    = kRecCountdown;
+                    rec_state_t_  = now;
+                }
+                break;
+
+            case kRecCountdown:
+                if(play_edge_ || loop_edge_)
+                {
+                    /* a fresh PLAY or LOOP press cancels; that press
+                     * toggles nothing */
+                    play_pending_ = false;
+                    loop_pending_ = false;
+                    rec_state_    = kRecIdle;
+                }
+                else if(now - rec_state_t_ >= kRecCountdownMs)
+                {
+                    sd_recorder_.RequestStart();
+                    rec_seen_run_ = false;
+                    rec_state_    = kRecActive;
+                    rec_state_t_  = now;
+                }
+                break;
+
+            case kRecActive:
+                if(sd_recorder_.IsRecording())
+                    rec_seen_run_ = true;
+                else if(rec_seen_run_
+                        && sd_recorder_.GetState() == SdRecorder::kSIdle)
+                {
+                    /* the recorder stopped on its own: the 6 h take
+                     * limit hit and the file was closed cleanly */
+                    rec_state_   = kRecIdle;
+                    rec_state_t_ = now;
+                    break;
+                }
+                /* a FRESH chord starts the 1 s stop hold (keys still
+                 * held from the start gesture have no fresh edge and
+                 * do not stop the take) */
+                if(play_down && loop_down && (play_edge_ || loop_edge_))
+                {
+                    rec_state_   = kRecHoldStop;
+                    rec_state_t_ = now;
+                }
+                break;
+
+            case kRecHoldStop: /* both modes, no gate */
+                if(!play_down || !loop_down)
+                {
+                    if(now - rec_state_t_ > kRecSwallowMs)
+                    {
+                        play_pending_ = false;
+                        loop_pending_ = false;
+                    }
+                    rec_state_ = kRecActive;
+                }
+                else if(now - rec_state_t_ >= kRecHoldStopMs)
+                {
+                    play_pending_ = false;
+                    loop_pending_ = false;
+                    sd_recorder_.RequestStop();
+                    rec_state_   = kRecIdle;
+                    rec_state_t_ = now;
+                }
+                break;
+
+            case kRecError:
+            default:
+                if(now - rec_state_t_ >= kRecErrorMs)
+                    rec_state_ = kRecIdle;
+                break;
+        }
+        play_edge_ = false; /* edges live for exactly one pass */
+        loop_edge_ = false;
     }
 
     /* playable keys: SwId 7..31 (SHIFT+KEY_16/KEY_17 = octave down/up,
@@ -1301,6 +1509,7 @@ void AudioCallback(AudioHandle::InputBuffer in,
     PollControls();
     engine.Prepare(size);
     engine.Process(out, size); /* audio input ignored */
+    sd_recorder_.PushBlock(out[0], out[1], size); /* capture phones L/R */
 #ifdef PIPES_CPU_METER
     cpu_meter.OnBlockEnd();
 #endif
@@ -1320,6 +1529,10 @@ static void UpdateLeds()
         pre_blink   = !pre_blink;
         pre_blink_t = now;
     }
+
+    /* no-card record flash: ~1 s on the four countdown keys */
+    if(rec_flash_t_ != 0 && now - rec_flash_t_ >= 1000)
+        rec_flash_t_ = 0;
 
     if(preset_mode_ != kPresetNone && !mod_mode_)
     {
@@ -1391,6 +1604,49 @@ static void UpdateLeds()
             }
             SetSmtLedFloat(white_key_led[w], r, g, b);
         }
+    }
+    else if(rec_state_ == kRecHoldStart || rec_state_ == kRecHoldStop)
+    {
+        /* record arm/stop hold progress: the same red left->right fill
+         * as the init bar (2 s to arm, 1 s to stop) */
+        const uint32_t hold_ms = rec_state_ == kRecHoldStart
+                                     ? kRecHoldStartMs
+                                     : kRecHoldStopMs;
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        int lit = static_cast<int>((now - rec_state_t_) * kNumWhiteKeys
+                                   / hold_ms);
+        if(lit > kNumWhiteKeys)
+            lit = kNumWhiteKeys;
+        for(int w = 0; w < lit; w++)
+            SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
+    }
+    else if(rec_state_ == kRecCountdown)
+    {
+        /* 4 s record countdown on the first four white keys: all four
+         * light white; every 1 s the next one turns red (key 1 red at
+         * +1 s .. key 4 at +4 s, when the recording starts). Notes
+         * keep playing under the overlay. */
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        int red = static_cast<int>((now - rec_state_t_) / 1000);
+        if(red > 4)
+            red = 4;
+        for(int w = 0; w < 4; w++)
+        {
+            const bool r = w < red;
+            SetSmtLedFloat(white_key_led[w], 1.f, r ? 0.f : 1.f,
+                           r ? 0.f : 1.f);
+        }
+    }
+    else if(rec_flash_t_ != 0)
+    {
+        /* record chord with no SD card: the four countdown keys flash
+         * red for ~1 s, nothing is armed */
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        for(int w = 0; w < 4; w++)
+            SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
     }
     else if(init_holding_)
     {
@@ -1878,15 +2134,31 @@ static void UpdateLeds()
     }
 
     /* CHOMPI/SHIFT key LED: blinking white for ~1 s after the init
-     * patch applies (priority over the purple SHIFT indicator); purple
-     * while SHIFT is held with no preset mode active; blinking red once
-     * a slot is selected in SAVE_SEL, ERASE_SEL or COPY_DEST; blinking
-     * white during the SAVING, COPYING and ERASING animations; off
-     * otherwise (copy-source select has no slot yet) */
+     * patch applies (priority over everything below); then a fast red
+     * blink on a recorder error and the 2 Hz red recording blink
+     * (SHIFT-held purple wins while SHIFT is held); purple while SHIFT
+     * is held with no preset mode active; blinking red once a slot is
+     * selected in SAVE_SEL, ERASE_SEL or COPY_DEST; blinking white
+     * during the SAVING, COPYING and ERASING animations; off otherwise
+     * (copy-source select has no slot yet) */
     if(init_done_t_ != 0 && now - init_done_t_ < 1000)
     {
         const float w = pre_blink ? 1.f : 0.f;
         SetPthLedFloat(0, w, w, w);
+    }
+    else if(rec_state_ == kRecError)
+    {
+        /* recorder error (no free take number, full/failed card):
+         * ~2 s of fast red blink */
+        SetPthLedFloat(0, ((now / 125) & 1) ? 1.f : 0.f, 0.f, 0.f);
+    }
+    else if((rec_state_ == kRecActive || rec_state_ == kRecHoldStop)
+            && !shift_held_)
+    {
+        /* recording: 2 Hz red blink on the 250 ms preset toggle; the
+         * SHIFT-held purple below wins while SHIFT is held, so shift
+         * operations keep their feedback */
+        SetPthLedFloat(0, pre_blink ? 1.f : 0.f, 0.f, 0.f);
     }
     else if(preset_mode_ == kPresetNone)
     {
@@ -1955,6 +2227,10 @@ void MainLoop(void *data)
     /* staged, non-blocking preset SD writer: one small FatFS step per
      * pass, at thread level only (never in the audio ISR) */
     preset_storage_.Service(preset_bank_);
+
+    /* staged WAV recorder drain: open/write/sync/close in small steps,
+     * same thread-level-only rule as the preset writer */
+    sd_recorder_.Service(System::GetNow());
 
     /* drain queued MIDI note on/off messages (B2: notes only; CCs below) */
     while(!out_q.IsEmpty())
@@ -2047,6 +2323,9 @@ int main(void)
     preset_bank_.Init();
     preset_storage_.Init();
     preset_storage_.LoadAll(preset_bank_);
+
+    /* record-to-SD: the recorder shares the card mounted above */
+    sd_recorder_.Init(rec_ring, 262144, hw.seed.AudioSampleRate());
 
     LedSetup();
 

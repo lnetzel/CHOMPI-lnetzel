@@ -301,16 +301,17 @@ default volume is 25%.
 
 25 playable keys (C3-C5). SHIFT + C#3/D#3 = octave down/up (+/-2,
 Normal Mode only - the octave never changes while the switch is UP).
-KEY_28 (LOOP) toggles the key latch; while latched, re-pressing a key
-releases its note. SHIFT + LOOP does not toggle the latch - it starts
-the init-patch hold (see the Presets section). KEY_26+27+28 held at
-power-on enters shipping mode. With SHIFT held in Normal Mode the
-white keys become the 15 preset slots (see the Presets section); in
-Modulation Mode SHIFT + a black key selects the modulation destination
-and the white keys keep playing.
+KEY_28 (LOOP) toggles the key latch on release; while latched,
+re-pressing a key releases its note. SHIFT + LOOP does not toggle the
+latch - it starts the init-patch hold (see the Presets section).
+KEY_26+27+28 held at power-on enters shipping mode. With SHIFT held in
+Normal Mode the white keys become the 15 preset slots (see the Presets
+section); in Modulation Mode SHIFT + a black key selects the
+modulation destination and the white keys keep playing.
 
-KEY_27 (Play/Pause) toggles the percussion on each press, in both
-modes; the key's LED is solid amber while percussion is enabled.
+KEY_27 (Play/Pause) toggles the percussion on release, in both modes;
+the key's LED is solid amber while percussion is enabled. Holding
+PLAY + LOOP records to the SD card (see the Recording section).
 
 ### Percussion (KEY_27)
 
@@ -422,6 +423,41 @@ tone, the global distortion modulation amount, reverb mix
 and decay, percussion on/off, and delay mix and time. NOT saved:
 master volume, fine tune, octave shift, latch, page selections, the
 Modulation-mode destination and the wheel's rotary/vibrato selection.
+
+## Recording to SD
+
+PIPES records the full audio chain - everything you hear on the
+headphone output - to 48 kHz / 16-bit stereo WAV files on the SD card
+(`PIPES/RECORDINGS/Recording 01.wav`, `Recording 02.wav`, ...).
+
+- **Start:** hold PLAY + LOOP together for 2 s (Normal Mode only, no
+  SHIFT). A red bar fills the 15 white keys while you hold; releasing
+  either key early cancels. Then a 4 s countdown runs on the first
+  four white keys (all four light white; every 1 s the next one turns
+  red) - a fresh PLAY or LOOP press during the countdown cancels.
+  Recording then starts and the instrument returns to normal play.
+- **While recording** the CHOMPI key LED blinks red. SHIFT keeps
+  working normally (the LED stays purple while SHIFT is held), and
+  PLAY/LOOP still toggle the percussion and the latch.
+- **Stop:** hold PLAY + LOOP together for 1 s (works in both modes).
+
+The percussion and latch toggles moved from the press edge to the
+release edge so the chord is deterministic: a completed chord never
+toggles anything, and an aborted hold longer than ~0.4 s is not two
+quick presses either.
+
+Takes are numbered with the next free number - `Recording 01.wav` ..
+`Recording 99.wav`, then plain `Recording 100.wav`, `101.wav`, ... up
+to 999 - and an old take is never overwritten. One take can be ~6 h
+long (the 4 GiB FAT32/WAV limit stops it automatically). A power cut
+mid-take loses at most ~1 s of audio: the take is synced to the card
+once per second, and only a clean stop patches the final length into
+the WAV header (tolerant players still open an unpatched file). With
+no SD card the chord just flashes the four countdown keys red and
+stays inert; a full card, a failed write or every take number taken
+blinks the CHOMPI key LED red fast for ~2 s and nothing is recorded.
+Recordings are session-scope: no preset stores them and there is no
+MIDI control.
 
 ## MIDI (channel 1, DIN and USB)
 
@@ -553,4 +589,9 @@ feedthrough, mix-ramp and time-slew convergence/retargeting, echo
 arrival time, ~35% repeat decay with progressively darker repeats,
 stereo (non-ping-pong) separation, ring wrap at 500 ms, history
 surviving bypass and time changes, in-place processing and bounded
-no-self-oscillation behavior.
+no-self-oscillation behavior. The recorder tests cover the
+float-to-16-bit conversion clamping, the record ring's wrap,
+full-refusal and SPSC ordering, the next-free-take-number rule with
+the 99 -> 100 rollover and the take name formatting, the canonical
+WAV header bytes and patched sizes, and the per-take byte-limit
+auto-stop.

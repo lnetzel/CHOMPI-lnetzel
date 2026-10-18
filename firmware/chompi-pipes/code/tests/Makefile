@@ -8,7 +8,7 @@ CXXFLAGS ?= -std=c++14 -O2 -Wall -Wextra -I../src
 # coreJSON is shared from chompi-wave's libs (needed by OrganPreset.h)
 COREJSON_DIR = ../../../chompi-wave/code/libs/coreJSON/source
 
-test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test envelope_map_test drift_modulator_test organ_preset_test mod_dest_test percussion_test stereo_bbd_delay_test sine_lut_test
+test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test envelope_map_test drift_modulator_test organ_preset_test mod_dest_test percussion_test stereo_bbd_delay_test sine_lut_test sd_recorder_test
 	./tonewheel_character_test
 	./plate_reverb_test
 	./distortion_test
@@ -20,6 +20,7 @@ test: tonewheel_character_test plate_reverb_test distortion_test vibrato_test en
 	./percussion_test
 	./stereo_bbd_delay_test
 	./sine_lut_test
+	./sd_recorder_test
 
 tonewheel_character_test: tonewheel_character_test.cpp ../src/TonewheelCharacter.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
@@ -63,6 +64,9 @@ stereo_bbd_delay_test: stereo_bbd_delay_test.cpp ../src/StereoBbdDelay.h
 sine_lut_test: sine_lut_test.cpp ../src/SineLut.h
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+sd_recorder_test: sd_recorder_test.cpp ../src/SdRecorder.h
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
 # The vendored fx_engine.h triggers -Wunused-parameter from its DelayLine
 # template parameters; keep the test output readable without editing it.
 plate_reverb_test: CXXFLAGS += -Wno-unused-parameter
@@ -78,6 +82,7 @@ clean:
 		mod_dest_test mod_dest_test.exe \
 		percussion_test percussion_test.exe \
 		stereo_bbd_delay_test stereo_bbd_delay_test.exe \
-		sine_lut_test sine_lut_test.exe
+		sine_lut_test sine_lut_test.exe \
+		sd_recorder_test sd_recorder_test.exe
 
 .PHONY: test clean
