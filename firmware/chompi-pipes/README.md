@@ -438,9 +438,12 @@ Modulation-mode destination and the wheel's rotary/vibrato selection.
 
 ## Recording to SD
 
-PIPES records the full audio chain - everything you hear on the
-headphone output - to 48 kHz / 16-bit stereo WAV files on the SD card
-(`PIPES/RECORDINGS/Recording 01.wav`, `Recording 02.wav`, ...).
+PIPES records the full audio chain - pipes, fuzz, rotary, delay and
+reverb - to 48 kHz / 16-bit stereo WAV files on the SD card
+(`PIPES/RECORDINGS/Recording 01.wav`, `Recording 02.wav`, ...). The
+tap sits BEFORE the master volume knob at a fixed -6 dB level, so
+takes land DAW-ready no matter where the knob is; the headphone and
+master outputs are unchanged.
 
 - **Start:** hold PLAY + LOOP together for 2 s (Normal Mode only, no
   SHIFT). A red bar fills the 15 white keys while you hold; releasing

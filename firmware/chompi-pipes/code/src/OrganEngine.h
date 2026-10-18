@@ -105,6 +105,10 @@
  *    ramp; settled-off is exactly 1/24 and the whole path is skipped
  *    bit-exactly. On/off is saved in the SD-card presets.
  *  - Smoothed master gain (existing CHOMPI volume-knob behaviour)
+ *  - SD-recording tap (SdRecorder): Process() copies the pre-master-gain
+ *    stereo bus into caller-owned block buffers at a fixed -6 dB level
+ *    (kRecordTapGain), so card takes are DAW-ready and independent of
+ *    the volume knob; the headphone/master outputs are unchanged.
  */
 #pragma once
 #include "daisysp.h"
@@ -152,6 +156,9 @@ class OrganEngine
     }
     static constexpr float kFoldbackHz     = 20000.f;
     static constexpr float kMixScale       = 1.f / 24.f;
+    /** Fixed record-tap level: -6 dB (x0.5) on the pre-master-gain bus,
+     *  so SD-card takes land DAW-ready regardless of the volume knob. */
+    static constexpr float kRecordTapGain  = .5f;
     static constexpr int   kDefaultStep          = 16; /* 50% volume */
     static constexpr int   kDefaultCharacterStep = 0;  /* clean sine, shaping
                                                         * bypassed */
@@ -681,6 +688,17 @@ class OrganEngine
 
     float GetMasterGain() const { return master_gain_target_; }
 
+    /** SD-recording tap: when set, Process() writes each block's
+     *  pre-master-gain stereo bus (post pipes/fuzz/rotary/delay/reverb)
+     *  into these buffers at the fixed -6 dB record level
+     *  (kRecordTapGain). The buffers must hold at least one audio block
+     *  per channel; a nullptr disables the tap (exact zero cost). */
+    void SetRecordTap(float *l, float *r)
+    {
+        rec_tap_l_ = l;
+        rec_tap_r_ = r;
+    }
+
     void AddFineTuneCents(int delta)
     {
         int c = fine_cents_ + delta;
@@ -1094,6 +1112,13 @@ class OrganEngine
              * dry and wet equally and 0% master mutes the tail. The tank
              * runs even with idle voices; 0% mix is bit-exact dry. */
             plate_.Process(out_l, out_r, out_l, out_r);
+            /* record tap: the pre-master-gain bus at the fixed -6 dB
+             * recording level - the volume knob never touches a take */
+            if(rec_tap_l_ != nullptr)
+            {
+                rec_tap_l_[i] = out_l * kRecordTapGain;
+                rec_tap_r_[i] = out_r * kRecordTapGain;
+            }
             out_l *= master_gain_;
             out_r *= master_gain_;
             out[0][i] = out_l; /* headphone L */
@@ -1207,6 +1232,8 @@ class OrganEngine
     bool     length_mod_active_; /* any length-mod amount > 0 (Prepare) */
     float    master_gain_;
     float    master_gain_target_;
+    float   *rec_tap_l_ = nullptr; /* pre-gain record tap, -6 dB */
+    float   *rec_tap_r_ = nullptr;
     float    drive_;
     float    drive_target_;
     float    drive_mod_target_; /* drive_target_ swung by the drive

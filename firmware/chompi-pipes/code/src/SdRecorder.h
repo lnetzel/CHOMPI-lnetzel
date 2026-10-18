@@ -1,7 +1,8 @@
 /** @file SdRecorder.h
  *  @brief CHOMPI-PIPES record-to-SD: captures the full audio chain
- *  (exactly what the headphone output plays) to 48 kHz / 16-bit /
- *  stereo WAV files at PIPES/RECORDINGS/Recording NN.wav.
+ *  (the pre-master-gain stereo bus at a fixed -6 dB level, so takes
+ *  are independent of the volume knob) to 48 kHz / 16-bit / stereo
+ *  WAV files at PIPES/RECORDINGS/Recording NN.wav.
  *
  *  Same constraint class as PresetStorage.h:
  *   1. The audio ISR only converts + appends to a lock-free SPSC ring;

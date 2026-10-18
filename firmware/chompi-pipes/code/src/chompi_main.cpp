@@ -46,6 +46,12 @@ static float DSY_SDRAM_BSS delay_mem_r[StereoBbdDelay::kBufferSize];
  * the delay buffers above. */
 static int16_t DSY_SDRAM_BSS rec_ring[2 * 262144];
 
+/* Record tap buffers: one audio block of the pre-master-gain stereo
+ * bus at the fixed -6 dB recording level, written by the engine and
+ * drained by sd_recorder_ (block size 24, hardware.h). */
+static float rec_tap_l[24];
+static float rec_tap_r[24];
+
 /* B4: debug-build CPU meter (build with PIPES_CPU_METER=1); peak load
  * shows on PTH LED 0 (green < 70%, amber 70-85%, red > 85%). */
 #ifdef PIPES_CPU_METER
@@ -1512,7 +1518,8 @@ void AudioCallback(AudioHandle::InputBuffer in,
     PollControls();
     engine.Prepare(size);
     engine.Process(out, size); /* audio input ignored */
-    sd_recorder_.PushBlock(out[0], out[1], size); /* capture phones L/R */
+    /* capture the pre-gain record tap (fixed -6 dB take level) */
+    sd_recorder_.PushBlock(rec_tap_l, rec_tap_r, size);
 #ifdef PIPES_CPU_METER
     cpu_meter.OnBlockEnd();
 #endif
@@ -2328,8 +2335,10 @@ int main(void)
     preset_storage_.Init();
     preset_storage_.LoadAll(preset_bank_);
 
-    /* record-to-SD: the recorder shares the card mounted above */
+    /* record-to-SD: the recorder shares the card mounted above; the
+     * tap captures the pre-master-gain bus at a fixed -6 dB level */
     sd_recorder_.Init(rec_ring, 262144, hw.seed.AudioSampleRate());
+    engine.SetRecordTap(rec_tap_l, rec_tap_r);
 
     LedSetup();
 
