@@ -1514,6 +1514,12 @@ void AudioCallback(AudioHandle::InputBuffer in,
 #ifdef PIPES_CPU_METER
     cpu_meter.OnBlockStart();
 #endif
+    /* Program Change preset loads: the preset bank lives here, so
+     * ProcessMidiIn only queues the slot. Applied before the MIDI drain
+     * so CCs that arrive after the PC land on top of the loaded preset. */
+    const int pc_slot = midi.TakePendingPresetSlot();
+    if(pc_slot >= 0)
+        PresetLoadSlot(pc_slot);
     midi.ProcessMidiIn();
     hw.ProcessAllControls();
     PollControls();
