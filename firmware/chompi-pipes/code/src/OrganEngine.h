@@ -699,6 +699,19 @@ class OrganEngine
         rec_tap_r_ = r;
     }
 
+    /** SD-playback injection: when set, Process() adds these
+     *  deinterleaved float stereo buffers to the bus AFTER the
+     *  record-tap write and BEFORE the master-gain multiply, so a
+     *  take bypasses every FX stage, is never re-recorded and the
+     *  volume knob still scales it. The buffers must hold at least
+     *  one audio block per channel; a nullptr disables the injection
+     *  (exact zero cost). */
+    void SetPlaybackIn(const float *l, const float *r)
+    {
+        pb_in_l_ = l;
+        pb_in_r_ = r;
+    }
+
     void AddFineTuneCents(int delta)
     {
         int c = fine_cents_ + delta;
@@ -1119,6 +1132,15 @@ class OrganEngine
                 rec_tap_l_[i] = out_l * kRecordTapGain;
                 rec_tap_r_[i] = out_r * kRecordTapGain;
             }
+            /* SD playback: injected after the record-tap write (a
+             * take is never re-recorded, whatever the recorder gate)
+             * and before the master gain (the volume knob scales it);
+             * bypasses every FX stage */
+            if(pb_in_l_ != nullptr)
+            {
+                out_l += pb_in_l_[i];
+                out_r += pb_in_r_[i];
+            }
             out_l *= master_gain_;
             out_r *= master_gain_;
             out[0][i] = out_l; /* headphone L */
@@ -1234,6 +1256,9 @@ class OrganEngine
     float    master_gain_target_;
     float   *rec_tap_l_ = nullptr; /* pre-gain record tap, -6 dB */
     float   *rec_tap_r_ = nullptr;
+    const float *pb_in_l_ = nullptr; /* SD playback: post-tap,
+                                      * pre-master-gain injection */
+    const float *pb_in_r_ = nullptr;
     float    drive_;
     float    drive_target_;
     float    drive_mod_target_; /* drive_target_ swung by the drive

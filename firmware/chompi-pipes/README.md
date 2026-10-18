@@ -474,6 +474,37 @@ blinks the CHOMPI key LED red fast for ~2 s and nothing is recorded.
 Recordings are session-scope: no preset stores them and there is no
 MIDI control.
 
+## Playback mode
+
+Playback mode plays the SD takes (`PIPES/RECORDINGS/Recording NN.wav`)
+straight from the card, one at a time - pure playback: the take
+bypasses every FX stage (it is injected after the record tap, just
+before the master volume knob, so the volume knob still scales it),
+all 25 keys are inert as notes, MIDI In is ignored and recording is
+fully blocked.
+
+- **Enter/exit:** hold SHIFT + PLAY for 2 s (Normal Mode only). A
+  blue bar fills the 15 white keys while you hold; releasing early
+  cancels. Entering silences every note, clears the latch and stops a
+  running take. Exit with the same gesture again, or flip the toggle
+  switch either way. With no SD card (or no takes) the white keys
+  flash red for ~1 s and the mode stays off.
+- **Take selection:** the newest 15 takes sit on the 15 white keys,
+  C3 = newest. SHIFT + a white key selects its take; the selected
+  key's LED is blue (blinking while playing, solid while paused), the
+  other takes glow dim blue, empty slots stay off.
+- **Transport:** PLAY taps pause/resume (the PLAY key LED mirrors the
+  transport in blue), LOOP taps loop the take (the LOOP key LED is
+  solid blue while the loop is on). With loop off a finished take
+  advances to the next-newer one and wraps from the newest back to
+  the oldest of the 15. Take switches and the loop are gapless.
+- **Knobs:** the master volume knob keeps working (on every page);
+  every other knob is inert.
+
+A take that fails to open or is not a PIPES WAV is skipped with a
+brief red flash on its slot; if every take fails, or the card is
+pulled mid-playback, the mode exits with a ~2 s red flash.
+
 ## MIDI (channel 1, DIN and USB)
 
 | CC | Function |
@@ -611,4 +642,8 @@ float-to-16-bit conversion clamping, the record ring's wrap,
 full-refusal and SPSC ordering, the next-free-take-number rule with
 the 99 -> 100 rollover and the take name formatting, the canonical
 WAV header bytes and patched sizes, and the per-take byte-limit
-auto-stop.
+auto-stop. The player tests cover the 16-bit-to-float round-trip
+against the recorder's converter, the stereo deinterleave, the WAV
+header validation accept/reject table (foreign files are refused),
+the newest-first take window with gappy numbering and the slot
+mapping, and the next-slot advance with the wrap at the newest take.

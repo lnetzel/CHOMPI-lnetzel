@@ -15,6 +15,7 @@
 #include "OrganPreset.h"
 #include "PresetStorage.h"
 #include "SdRecorder.h"
+#include "SdPlayer.h"
 #include "ModDest.h"
 #ifdef PIPES_CPU_METER
 #include "util/CpuLoadMeter.h"
@@ -46,11 +47,23 @@ static float DSY_SDRAM_BSS delay_mem_r[StereoBbdDelay::kBufferSize];
  * the delay buffers above. */
 static int16_t DSY_SDRAM_BSS rec_ring[2 * 262144];
 
+/* SD-playback ring: another 2 x 262,144 int16 (1 MiB, ~5.5 s) in
+ * external SDRAM - the player's main-loop Service fills it from the
+ * card and the audio ISR drains it (the gapless take advance rides on
+ * the same slack). */
+static int16_t DSY_SDRAM_BSS play_ring[2 * 262144];
+
 /* Record tap buffers: one audio block of the pre-master-gain stereo
  * bus at the fixed -6 dB recording level, written by the engine and
  * drained by sd_recorder_ (block size 24, hardware.h). */
 static float rec_tap_l[24];
 static float rec_tap_r[24];
+
+/* Playback mix buffers: one audio block of the decoded take,
+ * deinterleaved; written by sd_player_.PopBlock and injected by the
+ * engine after the record tap, before the master gain. */
+static float play_mix_l[24];
+static float play_mix_r[24];
 
 /* B4: debug-build CPU meter (build with PIPES_CPU_METER=1); peak load
  * shows on PTH LED 0 (green < 70%, amber 70-85%, red > 85%). */
@@ -429,6 +442,9 @@ static PresetStorage   preset_storage_;
  * preset_storage_). Shares the card mounted by PresetStorage. */
 static SdRecorder sd_recorder_;
 
+/* SD playback: same global-instance rule as the recorder. */
+static SdPlayer sd_player_;
+
 /** Preset UI modes (Tape's gestures): slot-selection modes plus the
  *  >=1 s SAVING/COPYING/ERASING animations. Volatile: written by
  *  PollControls (audio ISR), read by UpdateLeds (main loop); the main
@@ -496,6 +512,38 @@ static const uint32_t    kRecCountdownMs = 4000;
 static const uint32_t    kRecHoldStopMs  = 1000;
 static const uint32_t    kRecSwallowMs   = 400;
 static const uint32_t    kRecErrorMs     = 2000;
+
+/* ---- SD playback mode (SHIFT + hold PLAY for 2 s) ----
+ * Plays the SD takes straight from the card, one at a time; pure
+ * playback: all 25 keys are inert as notes, MIDI In is ignored, the
+ * take bypasses every FX stage and the jam recorder is fully blocked.
+ * Entry: SHIFT + PLAY held 2 s in Normal Mode (no preset mode active)
+ * - a blue fill bar on the white keys while held; entry silences every
+ * note, clears the latch, stops a running take (kPbStopping), scans
+ * for takes (kPbScan) and enters on the newest take, paused. Exit: the
+ * same hold again, or any flip of the toggle switch. The transport
+ * (paused/playing) and the take-loop flag live in sd_player_.
+ * Volatile: written by PollControls (audio ISR), read by UpdateLeds
+ * (main loop). */
+enum PbState
+{
+    kPbOff = 0,
+    kPbEnterHold, /**< 2 s entry/exit hold (blue fill bar) */
+    kPbStopping,  /**< entry: waiting for the recorder to close */
+    kPbScan,      /**< entry: scanning the takes */
+    kPbOn         /**< the mode is active */
+};
+static volatile int      playback_mode_ = kPbOff;
+static volatile uint32_t pb_state_t_    = 0;     /* state entry (ms) */
+static volatile bool     pb_hold_exit_  = false; /* the hold exits the
+                                                  * mode */
+static volatile uint32_t pb_flash_t_    = 0;     /* red flash (0 = off) */
+static volatile uint32_t pb_flash_ms_   = 1000;  /* flash duration */
+static const uint32_t    kPbHoldMs      = 2000;
+static uint32_t          pb_scan_gen_   = 0;     /* scan epoch at entry */
+static int               pb_skip_slot_  = -1;    /* slot whose take
+                                                  * failed (red flash) */
+static uint32_t          pb_skip_t_     = 0;
 
 /** White-key SwIds, slot 0 (C3, leftmost) .. slot 14 (C5, rightmost). */
 static const int kWhiteKeySw[kNumWhiteKeys] = {
@@ -736,13 +784,23 @@ static void PollControls()
             preset_sel_slot_ = -1;
             preset_copy_src_ = -1;
         }
+        /* flipping the toggle switch either way exits playback mode */
+        if(playback_mode_ != kPbOff)
+        {
+            sd_player_.RequestStop();
+            playback_mode_ = kPbOff;
+            play_pending_  = false; /* held PLAY/LOOP releases are
+                                     * inert */
+            loop_pending_  = false;
+        }
     }
 
     /* a fresh SHIFT press confirms a pending preset selection (preset
      * management is Normal-mode-only: gated while the switch is UP) */
     {
         static bool prev_shift_held_ = false;
-        if(shift_held_ && !prev_shift_held_ && !mod_mode_)
+        if(shift_held_ && !prev_shift_held_ && !mod_mode_
+           && playback_mode_ == kPbOff)
             PresetShiftConfirm();
         prev_shift_held_ = shift_held_;
     }
@@ -759,7 +817,7 @@ static void PollControls()
     for(int i = 0; i < 4; i++)
     {
         const bool down = hw.button_sr.State(i);
-        if(down && !prev_enc_sw_[i])
+        if(down && !prev_enc_sw_[i] && playback_mode_ == kPbOff)
         {
             for(int p = 0; p < OrganEngine::kNumPipes; p++)
             {
@@ -791,7 +849,7 @@ static void PollControls()
     {
         const int  vsw  = static_cast<int>(Hardware::SwId::ENC_6_SW);
         const bool down = hw.button_sr.State(vsw);
-        if(down && !prev_key_[vsw])
+        if(down && !prev_key_[vsw] && playback_mode_ == kPbOff)
         {
             vol_page_  = (vol_page_ + 1) % 4;
             bar_pipe_  = kVolBar;
@@ -825,7 +883,16 @@ static void PollControls()
         else if(!down && prev_key_[play_sw] && play_pending_)
         {
             play_pending_ = false;
-            engine.SetPercussionEnabled(!engine.GetPercussionEnabled());
+            if(playback_mode_ == kPbOn)
+            {
+                /* playback mode: a PLAY tap pauses/resumes the take */
+                if(sd_player_.IsPlaying())
+                    sd_player_.RequestPause();
+                else
+                    sd_player_.RequestResume();
+            }
+            else if(playback_mode_ == kPbOff)
+                engine.SetPercussionEnabled(!engine.GetPercussionEnabled());
         }
         prev_key_[play_sw] = down;
     }
@@ -850,7 +917,13 @@ static void PollControls()
         if(down && !prev_key_[loop_sw])
         {
             loop_edge_ = true; /* for the record chord below */
-            if(shift_held_)
+            if(playback_mode_ != kPbOff)
+            {
+                /* playback mode: the release tap toggles the take
+                 * loop; the latch and the init-patch hold are gated */
+                loop_pending_ = true;
+            }
+            else if(shift_held_)
             {
                 /* SHIFT + OVERDUB: init-patch hold, no latch toggle */
                 if(preset_mode_ == kPresetNone)
@@ -867,19 +940,27 @@ static void PollControls()
         else if(!down && prev_key_[loop_sw] && loop_pending_)
         {
             loop_pending_ = false;
-            latch_on_     = !latch_on_;
-            if(!latch_on_)
+            if(playback_mode_ == kPbOn)
             {
-                for(int swid = 7; swid < 32; swid++)
+                /* playback mode: a LOOP tap toggles the take loop */
+                sd_player_.SetLoop(!sd_player_.GetLoop());
+            }
+            else if(playback_mode_ == kPbOff)
+            {
+                latch_on_ = !latch_on_;
+                if(!latch_on_)
                 {
-                    if(latched_[swid] && active_note_[swid] != 0
-                       && !hw.button_sr.State(swid))
+                    for(int swid = 7; swid < 32; swid++)
                     {
-                        const uint8_t note = active_note_[swid] - 1;
-                        engine.NoteOff(note);
-                        out_q.PushBack({1, note, 0});
+                        if(latched_[swid] && active_note_[swid] != 0
+                           && !hw.button_sr.State(swid))
+                        {
+                            const uint8_t note = active_note_[swid] - 1;
+                            engine.NoteOff(note);
+                            out_q.PushBack({1, note, 0});
+                        }
+                        latched_[swid] = false;
                     }
-                    latched_[swid] = false;
                 }
             }
         }
@@ -900,6 +981,161 @@ static void PollControls()
                 init_done_t_    = now;
                 init_holding_   = false;
             }
+        }
+    }
+
+    /* ---- SD playback mode (SHIFT + hold PLAY for 2 s) ----
+     * Entry: SHIFT + PLAY held 2 s in Normal Mode, no preset mode
+     * active (a blue bar fills the white keys while held; early
+     * release or losing SHIFT cancels; an aborted >400 ms hold
+     * swallows the PLAY toggle, same rule as the record chord). The
+     * completed entry silences every note, clears the latch, stops a
+     * running take (kPbStopping waits for the recorder's clean close),
+     * scans the takes (kPbScan) and enters the mode on the newest
+     * take, paused. Exit: the same hold again (handled here via
+     * pb_hold_exit_), or any flip of the toggle switch (handled at
+     * the mod_mode_ edge above). No card or zero takes: ~1 s red
+     * flash, the mode stays off; a player error inside the mode (card
+     * pulled, every take failed): ~2 s red flash and the mode exits. */
+    {
+        const bool play_down
+            = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_27));
+        const uint32_t now = System::GetNow();
+
+        switch(playback_mode_)
+        {
+            case kPbOff:
+                if(play_down && shift_held_ && play_edge_ && !mod_mode_
+                   && preset_mode_ == kPresetNone)
+                {
+                    pb_hold_exit_  = false;
+                    playback_mode_ = kPbEnterHold;
+                    pb_state_t_    = now;
+                }
+                break;
+
+            case kPbEnterHold:
+                if(!play_down || !shift_held_)
+                {
+                    /* cancelled: early release or SHIFT lost - an exit
+                     * hold falls back to the mode, an entry hold to
+                     * off */
+                    if(now - pb_state_t_ > kRecSwallowMs)
+                        play_pending_ = false;
+                    playback_mode_ = pb_hold_exit_ ? kPbOn : kPbOff;
+                }
+                else if(now - pb_state_t_ >= kPbHoldMs)
+                {
+                    play_pending_ = false; /* the hold consumes PLAY */
+                    loop_pending_ = false;
+                    if(pb_hold_exit_)
+                    {
+                        sd_player_.RequestStop();
+                        playback_mode_ = kPbOff;
+                    }
+                    else if(preset_storage_.NoSdCard())
+                    {
+                        pb_flash_t_    = now; /* ~1 s red, stay off */
+                        pb_flash_ms_   = 1000;
+                        playback_mode_ = kPbOff;
+                    }
+                    else
+                    {
+                        /* all-notes-off: release every sounding note
+                         * (physical or MIDI) and clear the latch, so
+                         * nothing rings on under the take */
+                        for(int n = 0; n < 128; n++)
+                        {
+                            if(engine.IsNoteHeld(static_cast<uint8_t>(n)))
+                            {
+                                const uint8_t note
+                                    = static_cast<uint8_t>(n);
+                                engine.NoteOff(note);
+                                out_q.PushBack({1, note, 0});
+                            }
+                        }
+                        for(int swid = 7; swid < 32; swid++)
+                        {
+                            active_note_[swid] = 0;
+                            latched_[swid]     = false;
+                        }
+                        latch_on_     = false;
+                        loop_pending_ = false;
+                        bar_pipe_     = -1;
+                        bar_until_    = 0;
+                        if(sd_recorder_.GetState() != SdRecorder::kSIdle)
+                        {
+                            /* a take is opening/recording/closing:
+                             * stop it and wait for the clean close */
+                            sd_recorder_.RequestStop();
+                            playback_mode_ = kPbStopping;
+                        }
+                        else
+                        {
+                            pb_scan_gen_ = sd_player_.ScanGen();
+                            sd_player_.RequestRescan();
+                            playback_mode_ = kPbScan;
+                        }
+                        pb_state_t_ = now;
+                    }
+                }
+                break;
+
+            case kPbStopping:
+                if(sd_recorder_.GetState() == SdRecorder::kSIdle)
+                {
+                    pb_scan_gen_ = sd_player_.ScanGen();
+                    sd_player_.RequestRescan();
+                    playback_mode_ = kPbScan;
+                    pb_state_t_    = now;
+                }
+                break;
+
+            case kPbScan:
+                if(sd_player_.GetState() == SdPlayer::kSError)
+                {
+                    pb_flash_t_    = now;
+                    pb_flash_ms_   = 2000;
+                    playback_mode_ = kPbOff;
+                }
+                else if(sd_player_.ScanGen() != pb_scan_gen_
+                        && sd_player_.GetState() == SdPlayer::kSIdle)
+                {
+                    /* the scan completed (the generation moved) */
+                    if(sd_player_.TakeCount() <= 0)
+                    {
+                        pb_flash_t_    = now; /* no takes: ~1 s red */
+                        pb_flash_ms_   = 1000;
+                        playback_mode_ = kPbOff;
+                    }
+                    else
+                    {
+                        sd_player_.RequestPlay(0); /* newest, paused */
+                        playback_mode_ = kPbOn;
+                        pb_state_t_    = now;
+                    }
+                }
+                break;
+
+            case kPbOn:
+            default:
+                if(sd_player_.GetState() == SdPlayer::kSError)
+                {
+                    /* card removed mid-playback, or every take
+                     * failed: ~2 s red flash, the mode exits */
+                    pb_flash_t_    = now;
+                    pb_flash_ms_   = 2000;
+                    playback_mode_ = kPbOff;
+                    play_pending_  = false;
+                    loop_pending_  = false;
+                }
+                else if(play_down && shift_held_ && play_edge_)
+                {
+                    pb_hold_exit_  = true; /* the exit hold */
+                    playback_mode_ = kPbEnterHold;
+                    pb_state_t_    = now;
+                }
+                break;
         }
     }
 
@@ -935,7 +1171,8 @@ static void PollControls()
             case kRecIdle:
                 if(play_down && loop_down && (play_edge_ || loop_edge_)
                    && !mod_mode_ && !shift_held_
-                   && preset_mode_ == kPresetNone)
+                   && preset_mode_ == kPresetNone
+                   && playback_mode_ == kPbOff)
                 {
                     if(preset_storage_.NoSdCard())
                     {
@@ -1051,6 +1288,30 @@ static void PollControls()
         if(down == prev_key_[swid])
             continue;
 
+        /* Playback mode: every key is inert as a note; SHIFT + a white
+         * key selects that take (slot 0 = C3 = newest). Releases of
+         * notes started before the mode fall through, so nothing
+         * hangs. prev_key_ keeps tracking every key, so no phantom
+         * edge fires when the mode exits. */
+        if(playback_mode_ != kPbOff)
+        {
+            if(!down && active_note_[swid] != 0)
+            {
+                /* fall through to the normal note-off below */
+            }
+            else
+            {
+                if(down && playback_mode_ == kPbOn && shift_held_)
+                {
+                    const int slot = WhiteKeySlot(swid);
+                    if(slot >= 0 && slot < sd_player_.TakeCount())
+                        sd_player_.RequestPlay(slot);
+                }
+                prev_key_[swid] = down;
+                continue;
+            }
+        }
+
         /* Presets: while a selection mode (or its animation) is active,
          * key presses select/confirm/cancel and never play notes or
          * touch the latch; in NONE mode SHIFT+white-key loads a slot and
@@ -1153,7 +1414,7 @@ static void PollControls()
      * show the newly selected control's value bar as confirmation.
      * RisingEdge is a const read of the debounced switch state, so this
      * coexists with the tracker reset inside the encoder loop below. */
-    if(hw.enc[kWheelEnc].RisingEdge())
+    if(hw.enc[kWheelEnc].RisingEdge() && playback_mode_ == kPbOff)
     {
         wheel_vibrato_mode_ = !wheel_vibrato_mode_;
         bar_pipe_           = kRotaryBar;
@@ -1183,7 +1444,18 @@ static void PollControls()
 
         if(i == kVolEnc)
         {
-            if(shift_held_)
+            if(playback_mode_ != kPbOff)
+            {
+                /* playback mode: ENC_6 is the master volume on every
+                 * page (no page cycling, no SHIFT secondary, no value
+                 * bar - the take window owns the white keys) */
+                if(!shift_held_)
+                {
+                    float g = engine.GetMasterGain() + delta * .01f;
+                    engine.SetMasterGain(g);
+                }
+            }
+            else if(shift_held_)
             {
                 if(vol_page_ == kVolPageDrive)
                 {
@@ -1275,7 +1547,7 @@ static void PollControls()
                 bar_until_ = System::GetNow() + 500;
             }
         }
-        else if(i == kWheelEnc)
+        else if(i == kWheelEnc && playback_mode_ == kPbOff)
         {
             if(wheel_vibrato_mode_ && shift_held_)
             {
@@ -1307,7 +1579,7 @@ static void PollControls()
                 bar_until_ = System::GetNow() + 500;
             }
         }
-        else
+        else if(playback_mode_ == kPbOff)
         {
             for(int p = 0; p < OrganEngine::kNumPipes; p++)
             {
@@ -1516,14 +1788,22 @@ void AudioCallback(AudioHandle::InputBuffer in,
 #endif
     /* Program Change preset loads: the preset bank lives here, so
      * ProcessMidiIn only queues the slot. Applied before the MIDI drain
-     * so CCs that arrive after the PC land on top of the loaded preset. */
-    const int pc_slot = midi.TakePendingPresetSlot();
-    if(pc_slot >= 0)
-        PresetLoadSlot(pc_slot);
-    midi.ProcessMidiIn();
+     * so CCs that arrive after the PC land on top of the loaded preset.
+     * Playback mode ignores every MIDI In effect: the drain and the PC
+     * slot loads are gated together. */
+    if(playback_mode_ == kPbOff)
+    {
+        const int pc_slot = midi.TakePendingPresetSlot();
+        if(pc_slot >= 0)
+            PresetLoadSlot(pc_slot);
+        midi.ProcessMidiIn();
+    }
     hw.ProcessAllControls();
     PollControls();
     engine.Prepare(size);
+    /* decode one block of the current take (silence while the mode is
+     * off, paused or the ring is empty) */
+    sd_player_.PopBlock(play_mix_l, play_mix_r, size);
     engine.Process(out, size); /* audio input ignored */
     /* capture the pre-gain record tap (fixed -6 dB take level) */
     sd_recorder_.PushBlock(rec_tap_l, rec_tap_r, size);
@@ -1551,7 +1831,82 @@ static void UpdateLeds()
     if(rec_flash_t_ != 0 && now - rec_flash_t_ >= 1000)
         rec_flash_t_ = 0;
 
-    if(preset_mode_ != kPresetNone && !mod_mode_)
+    /* playback-mode flash: no card / no takes (~1 s) or player error
+     * (~2 s) on all 15 white keys */
+    if(pb_flash_t_ != 0 && now - pb_flash_t_ >= pb_flash_ms_)
+        pb_flash_t_ = 0;
+
+    /* a take that failed to open or failed validation flashes red on
+     * its slot for ~0.5 s */
+    {
+        const int skipped = sd_player_.ConsumeSkipSlot();
+        if(skipped >= 0)
+        {
+            pb_skip_slot_ = skipped;
+            pb_skip_t_    = now;
+        }
+    }
+
+    if(playback_mode_ == kPbEnterHold)
+    {
+        /* playback entry/exit hold progress: the same left->right
+         * fill as the record chord's red bar, but blue */
+        bar_pipe_ = -1;
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        int lit = static_cast<int>((now - pb_state_t_) * kNumWhiteKeys
+                                   / kPbHoldMs);
+        if(lit > kNumWhiteKeys)
+            lit = kNumWhiteKeys;
+        for(int w = 0; w < lit; w++)
+            SetSmtLedFloat(white_key_led[w], 0.f, 0.f, 1.f);
+    }
+    else if(playback_mode_ == kPbStopping || playback_mode_ == kPbScan)
+    {
+        /* entry in progress: a dim blue chase across the white keys
+         * while the recorder closes / the take scan runs */
+        bar_pipe_ = -1;
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        const int pos = static_cast<int>((now / 80) % kNumWhiteKeys);
+        SetSmtLedFloat(white_key_led[pos], 0.f, 0.f, .45f);
+    }
+    else if(playback_mode_ == kPbOn)
+    {
+        /* the take window: an existing take's key is dim solid blue;
+         * the selected take's key blinks blue at the 250 ms preset
+         * rate while playing and is solid blue while paused; empty
+         * slots stay off. The keys are inert as notes - SHIFT + a
+         * white key selects its take. */
+        bar_pipe_ = -1;
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        const int count   = sd_player_.TakeCount();
+        const int sel     = sd_player_.CurrentSlot();
+        const bool playing = sd_player_.IsPlaying();
+        for(int w = 0; w < kNumWhiteKeys && w < count; w++)
+        {
+            float r = 0.f, b = .22f; /* existing take: dim blue */
+            if(w == sel)
+                b = playing ? (pre_blink ? 1.f : 0.f) : 1.f;
+            if(w == pb_skip_slot_ && now - pb_skip_t_ < 500)
+            {
+                r = 1.f; /* this take failed to open: brief red */
+                b = 0.f;
+            }
+            SetSmtLedFloat(white_key_led[w], r, 0.f, b);
+        }
+    }
+    else if(pb_flash_t_ != 0)
+    {
+        /* playback refusal (no card / no takes) or player error: all
+         * 15 white keys red for the flash duration */
+        for(int i = 0; i < 25; i++)
+            SetSmtLedFloat(i, 0.f, 0.f, 0.f);
+        for(int w = 0; w < kNumWhiteKeys; w++)
+            SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
+    }
+    else if(preset_mode_ != kPresetNone && !mod_mode_)
     {
         /* A preset selection mode (or animation) takes over the white
          * keys; first match wins: during the SAVING/COPYING/ERASING
@@ -1956,7 +2311,8 @@ static void UpdateLeds()
      * operation's LED is lit; all off with no SD card. Normal Mode
      * only: in Modulation Mode the destination overlay below owns every
      * black key. */
-    if(!mod_mode_ && (shift_held_ || preset_mode_ != kPresetNone))
+    if(!mod_mode_ && playback_mode_ == kPbOff
+       && (shift_held_ || preset_mode_ != kPresetNone))
     {
         float er = 0.f, cp = 0.f, sv = 0.f;
         if(!preset_storage_.NoSdCard())
@@ -2103,7 +2459,20 @@ static void UpdateLeds()
      * page 1 brightness tracks the level and the color follows the same
      * position gradient as the white-key volume bar (green up to 50%,
      * orange 50-75%, red above 75%) */
-    if(vol_page_ == kVolPageReverb)
+    if(playback_mode_ != kPbOff)
+    {
+        /* playback mode: the knob is the master volume on every page
+         * (the take is injected before the master gain) - the same
+         * position gradient as the page-1 display */
+        const float v = engine.GetMasterGain();
+        if(v > .75f)
+            SetPthLedFloat(9, v, 0.f, 0.f); /* red */
+        else if(v > .5f)
+            SetPthLedFloat(9, v, .6f * v, 0.f); /* orange */
+        else
+            SetPthLedFloat(9, 0.f, v, 0.f); /* green */
+    }
+    else if(vol_page_ == kVolPageReverb)
     {
         const float s = .2f
                         + .8f * engine.GetReverbMixStep()
@@ -2203,15 +2572,30 @@ static void UpdateLeds()
         SetPthLedFloat(0, 0.f, 0.f, 0.f);
     }
 
-    /* latch indicator on the LOOP key LED (PTH 8): solid red while latched */
-    SetPthLedFloat(8, latch_on_ ? 1.f : 0.f, 0.f, 0.f);
+    /* latch indicator on the LOOP key LED (PTH 8): solid red while
+     * latched; in playback mode the LED is solid blue while the take
+     * loop is on, off otherwise */
+    if(playback_mode_ != kPbOff)
+        SetPthLedFloat(8, 0.f, 0.f, sd_player_.GetLoop() ? 1.f : 0.f);
+    else
+        SetPthLedFloat(8, latch_on_ ? 1.f : 0.f, 0.f, 0.f);
 
     /* percussion indicator on the Play/Pause key LED (PTH 7): solid
-     * amber while enabled, dark while disabled */
-    SetPthLedFloat(7,
-                   engine.GetPercussionEnabled() ? 1.f : 0.f,
-                   engine.GetPercussionEnabled() ? .6f : 0.f,
-                   0.f);
+     * amber while enabled; in playback mode the LED mirrors the
+     * transport in blue (blinking = playing, solid = paused) */
+    if(playback_mode_ != kPbOff)
+    {
+        const float b = sd_player_.IsPlaying() ? (pre_blink ? 1.f : 0.f)
+                                               : 1.f;
+        SetPthLedFloat(7, 0.f, 0.f, b);
+    }
+    else
+    {
+        SetPthLedFloat(7,
+                       engine.GetPercussionEnabled() ? 1.f : 0.f,
+                       engine.GetPercussionEnabled() ? .6f : 0.f,
+                       0.f);
+    }
 
 #ifdef PIPES_CPU_METER
     /* B4: peak audio CPU load on PTH LED 0 (overrides shift indicator) */
@@ -2249,6 +2633,11 @@ void MainLoop(void *data)
     /* staged WAV recorder drain: open/write/sync/close in small steps,
      * same thread-level-only rule as the preset writer */
     sd_recorder_.Service(System::GetNow());
+
+    /* staged WAV player: scan/open/read in small steps, same
+     * thread-level-only rule; all FatFS users (presets, recorder,
+     * player) stay sequential on this one thread */
+    sd_player_.Service(System::GetNow());
 
     /* drain queued MIDI note on/off messages (B2: notes only; CCs below) */
     while(!out_q.IsEmpty())
@@ -2350,6 +2739,13 @@ int main(void)
      * tap captures the pre-master-gain bus at a fixed -6 dB level */
     sd_recorder_.Init(rec_ring, 262144, hw.seed.AudioSampleRate());
     engine.SetRecordTap(rec_tap_l, rec_tap_r);
+
+    /* SD playback: the player shares the card mounted above; its
+     * output is injected after the record tap, before the master
+     * gain, so the take bypasses every FX stage, is never re-recorded
+     * and the volume knob still scales it */
+    sd_player_.Init(play_ring, 262144, hw.seed.AudioSampleRate());
+    engine.SetPlaybackIn(play_mix_l, play_mix_r);
 
     LedSetup();
 

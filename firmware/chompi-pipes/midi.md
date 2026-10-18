@@ -61,3 +61,4 @@ Notes:
 - Incoming CCs set their values silently: they never trigger the white-key LED value bars (a live CC stream would otherwise own the LEDs). The bars follow local controls only.
 - The new CCs (78–115) are receive-only: CC out is sent when pipe levels / Character amounts / vibrato depth change from local controls (or when any preset load — local gesture or Program Change — resyncs them); notes out are sent for local key presses/releases.
 - Character = tonewheel color; 0 = clean sine, 127 ≈ step 64 = fully aged.
+- Playback mode (SHIFT + hold PLAY for 2 s) ignores all MIDI In while the mode is active — notes, CCs and Program Change preset loads are all dropped; MIDI Out produces nothing (no key or encoder events fire).
