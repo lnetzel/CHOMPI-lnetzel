@@ -72,7 +72,7 @@
  *    echoes never drop. Boots dry at 250 ms; saved in the SD-card
  *    presets; no MIDI CC.
  *  - Vibrato: global pitch modulation from one shared, free-running
- *    6 Hz LFO (Vibrato.h). Depth 0-50 = +/-0-50 cents peak, applied to
+ *    5 Hz LFO (Vibrato.h). Depth 0-50 = +/-0-50 cents peak, applied to
  *    every voice as a per-sample frequency multiplier on the stored
  *    base frequencies (no oscillator phase resets, no drift). Depth 0
  *    is an exact bypass. Separate from the rotary speaker's Doppler.
@@ -547,7 +547,7 @@ class OrganEngine
     int GetRotaryStep() const { return rotary_step_; }
 
     /** Apply one encoder click to the vibrato depth (0..50 cents peak,
- *      one-cent steps, clamped). The shared 6 Hz LFO keeps running
+ *      one-cent steps, clamped). The shared 5 Hz LFO keeps running
  *      regardless; depth 0 is an exact bypass. On reaching 0 the
  *      sounding voices are snapped back to their exact base frequencies
  *      once, so the bypass is bit-exact rather than "1.0 within float
@@ -943,7 +943,7 @@ class OrganEngine
                 mix_scale = 1.f
                             / (24.f + 6.f * Percussion::kPeakGain * perc_ramp);
 
-            /* Vibrato: advance the one shared, free-running 6 Hz LFO and
+            /* Vibrato: advance the one shared, free-running 5 Hz LFO and
              * take this sample's global pitch multiplier (exactly 1.f at
              * depth 0, no transcendental work then). Applied to every
              * sounding voice as a multiplier on the STORED base

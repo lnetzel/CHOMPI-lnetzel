@@ -1,7 +1,9 @@
 /** @file MidiHandler.h
  *  @brief Minimal MIDI in/out for the organ: fixed channel 1, notes both ways,
  *  CC 70-73 for the four pipe levels, CC 74-77 for the four pipe Character
- *  amounts (tonewheel color; 0 = clean sine, 127 ~ step 64 = fully aged).
+ *  amounts (tonewheel color; 0 = clean sine, 127 ~ step 64 = fully aged),
+ *  CC 1 (modulation wheel) for the global vibrato depth (0-127 mapped to
+ *  0-50 cents peak).
  *  UART (5-pin DIN) uses DMA transmit;
  *  adapted from chompi-wave's MidiManager.h (see FR-5b).
  */
@@ -21,6 +23,7 @@ class OrganMidi
 {
   public:
     static constexpr uint8_t kChannel          = 0; /* MIDI channel 1 */
+    static constexpr uint8_t kVibratoCc        = 1; /* modulation wheel */
     static constexpr uint8_t kPipeCcBase       = 70;
     static constexpr uint8_t kCharacterCcBase  = 74;
     static constexpr uint8_t kKeyVelocity      = 100;
@@ -73,9 +76,23 @@ class OrganMidi
                     break;
                 case ControlChange:
                 {
+                    /* Incoming CCs set values silently - no key-LED bar.
+                     * A live CC stream (e.g. a moving mod wheel) re-arms
+                     * the 500 ms bar every message and would permanently
+                     * own the LEDs; the bars belong to local controls. */
                     const uint8_t cc  = event.data[0];
                     const uint8_t val = event.data[1];
-                    if(cc >= kPipeCcBase && cc < kPipeCcBase + chompi::OrganEngine::kNumPipes)
+                    if(cc == kVibratoCc)
+                    {
+                        /* 0-127 -> 0-50 cents peak, rounded (same mapping
+                         * as the pipe CCs) */
+                        const int step = (static_cast<int>(val)
+                                              * chompi::OrganEngine::kMaxVibratoDepthCents
+                                          + 63)
+                                         / 127;
+                        engine_->SetVibratoDepth(step);
+                    }
+                    else if(cc >= kPipeCcBase && cc < kPipeCcBase + chompi::OrganEngine::kNumPipes)
                     {
                         /* 0-127 -> 0-32, rounded */
                         const int step = (static_cast<int>(val)
@@ -83,8 +100,6 @@ class OrganMidi
                                           + 63)
                                          / 127;
                         engine_->SetPipeStep(cc - kPipeCcBase, step);
-                        if(cc_level_callback_)
-                            cc_level_callback_(cc - kPipeCcBase, 0);
                     }
                     else if(cc >= kCharacterCcBase
                             && cc < kCharacterCcBase + chompi::OrganEngine::kNumPipes)
@@ -95,8 +110,6 @@ class OrganMidi
                                           + 63)
                                          / 127;
                         engine_->SetPipeCharacterStep(cc - kCharacterCcBase, step);
-                        if(cc_level_callback_)
-                            cc_level_callback_(cc - kCharacterCcBase, 1);
                     }
                     break;
                 }
@@ -168,11 +181,10 @@ class OrganMidi
                    chompi::OrganEngine::kMaxCharacterSteps);
     }
 
-    /** Optional hook so the UI can show the level bar on CC changes.
- *      page: 0 = volume bar, 1 = Character bar. */
-    void SetCcLevelCallback(void (*cb)(int pipe, int page))
+    void SendVibratoCC(int step)
     {
-        cc_level_callback_ = cb;
+        SendStepCC(kVibratoCc, step,
+                   chompi::OrganEngine::kMaxVibratoDepthCents);
     }
 
   private:
@@ -261,5 +273,4 @@ class OrganMidi
     MidiUartHandler      uart_midi;
     MidiUsbHandler       usb_midi;
     bool                 usb_midi_active_ = true;
-    void (*cc_level_callback_)(int pipe, int page) = nullptr;
 };

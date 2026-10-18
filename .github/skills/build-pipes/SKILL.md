@@ -65,12 +65,14 @@ other .bin files), power on. Never flash the bootloader for app updates.
 | Can't verify `.d` deps with the editor's text search | search skips ignored `build/` dirs | Use bash `grep -r` inside `build/` instead |
 | Memory-usage % looks stale/mangled in terminal output | flaky terminal replay | Trust `arm-none-eabi-size -A` on the ELF, not the replayed log |
 
-## Known-failing tests (do not chase these)
+## Known-failing tests
 
-`tonewheel_character_test` (L273) and `vibrato_test` (L91) fail at HEAD —
-pre-existing, unrelated to new changes. All other host tests pass. If your
-change touches those files, diff against the pre-existing failure before
-assuming you broke something.
+None as of 2026-10-18: the full host suite (12 tests) passes, including the
+formerly failing `tonewheel_character_test` and `vibrato_test`. The vibrato
+argmx failure was fixed by reporting the plateau CENTER of the tied float32
+max samples (the first-index-of-max was meaningless: the sine top ties
+hundreds of samples wide at small depths). If a test fails, treat it as a
+real regression and investigate.
 
 ## Runtime issue worth knowing (looks like a build problem)
 

@@ -415,6 +415,10 @@ static volatile uint8_t cc_pipe_step_[OrganEngine::kNumPipes];
 static volatile uint8_t cc_character_step_[OrganEngine::kNumPipes];
 static volatile bool    cc_pipe_dirty_[OrganEngine::kNumPipes];
 static volatile bool    cc_character_dirty_[OrganEngine::kNumPipes];
+static volatile int     cc_vibrato_step_  = 0;     /* CC 1 out: vibrato
+                                                    * depth, coalesced like
+                                                    * the pipe CCs */
+static volatile bool    cc_vibrato_dirty_ = false;
 
 /* ---- SD-card presets: one bank of 15 slots (PIPES/P01..P15.json) ---- */
 static OrganPresetBank preset_bank_;
@@ -516,13 +520,6 @@ static const int kWhiteKeySw[kNumWhiteKeys] = {
  *  keeps changing (see MainLoop), so any lockup resets the device. */
 volatile uint32_t audio_ticks = 0;
 
-static void CcLevelCallback(int pipe, int page)
-{
-    bar_pipe_  = pipe;
-    bar_page_  = page;
-    bar_until_ = System::GetNow() + 500;
-}
-
 /* ---- preset gesture helpers (audio ISR context) ---- */
 
 static int WhiteKeySlot(int swid)
@@ -549,6 +546,8 @@ static void ApplyPresetLive(const OrganPreset &preset)
         cc_character_step_[p]  = engine.GetPipeCharacterStep(p);
         cc_character_dirty_[p] = true;
     }
+    cc_vibrato_step_  = engine.GetVibratoDepth();
+    cc_vibrato_dirty_ = true;
     bar_pipe_  = -1; /* cancel any active value bar */
     bar_until_ = 0;
 }
@@ -1293,6 +1292,8 @@ static void PollControls()
             {
                 /* wheel in vibrato mode: depth 0..50 cents peak */
                 engine.SetVibratoDepth(engine.GetVibratoDepth() + delta);
+                cc_vibrato_step_  = engine.GetVibratoDepth();
+                cc_vibrato_dirty_ = true; /* coalesced, sent in MainLoop */
                 bar_pipe_  = kRotaryBar;
                 bar_page_  = kWheelBarVibrato;
                 bar_until_ = System::GetNow() + 500;
@@ -2267,6 +2268,11 @@ void MainLoop(void *data)
             midi.SendCharacterCC(p, cc_character_step_[p]);
         }
     }
+    if(cc_vibrato_dirty_)
+    {
+        cc_vibrato_dirty_ = false;
+        midi.SendVibratoCC(cc_vibrato_step_);
+    }
 
     /* A2: kick the DMA queue after draining so a message queued above
      * leaves in this same loop pass */
@@ -2314,7 +2320,6 @@ int main(void)
 {
     hw.Init();
     midi.Init(&engine);
-    midi.SetCcLevelCallback(CcLevelCallback);
 
     hw.MpWrite(0x0c, 0B01010001); /* set BATT_LOW to 3V */
     hw.MpReadAll();

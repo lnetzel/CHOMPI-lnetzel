@@ -5,7 +5,7 @@
  *   - init defaults and depth clamping (0..50 cents, no wrap)
  *   - depth -> cents mapping: peak deviation equals the depth in cents
  *     at 25 and 50 (max multiplier 2^(depth/1200))
- *   - 6 Hz rate: one LFO cycle spans exactly sr/6 samples
+ *   - 5 Hz rate: one LFO cycle spans exactly sr/5 samples
  *   - phase continuity: no per-sample jumps, free-running wrap
  *   - stable base tuning: cycle mean of the multiplier stays ~1
  *   - exact zero-depth behavior: Process() returns exactly 1.f
@@ -56,24 +56,34 @@ static void test_zero_depth_exact()
 }
 
 /** Run one full LFO cycle at depth `cents`, returning the max/min
- *  multiplier and the sample index of the max. */
+ *  multiplier and the sample index of the max. The float32 top of the
+ *  sine is a plateau of tied samples (hundreds wide at small depths),
+ *  so the reported index is the plateau CENTER, which estimates the
+ *  true peak position within a sample. */
 static void CycleStats(Vibrato &v, int sr, float &mx, float &mn, int &argmx)
 {
-    const int cycle = sr / 6; /* 6 Hz */
+    const int cycle = sr / 5; /* 5 Hz */
     mx   = 0.f;
     mn   = 1e30f;
     argmx = -1;
+    int argmx_last = -1;
     for(int i = 0; i < cycle; i++)
     {
         const float m = v.Process();
         if(m > mx)
         {
-            mx    = m;
-            argmx = i;
+            mx         = m;
+            argmx      = i;
+            argmx_last = i;
+        }
+        else if(m == mx)
+        {
+            argmx_last = i; /* tied top: extend the plateau */
         }
         if(m < mn)
             mn = m;
     }
+    argmx = (argmx + argmx_last) / 2;
 }
 
 static void test_depth_mapping()
@@ -90,29 +100,30 @@ static void test_depth_mapping()
         const float expect = exp2f(static_cast<float>(depth) / 1200.f);
         assert(fabsf(mx - expect) < 2e-6f * expect);
         assert(fabsf(mn - 1.f / expect) < 2e-6f);
-        /* sin peak sits 1/4 cycle after the (rising) zero crossing */
-        assert(argmx >= 1999 && argmx <= 2001);
+        /* sin peak sits 1/4 cycle after the (rising) zero crossing:
+         * sample 9600/4 - 1 = 2399 (the plateau center) */
+        assert(argmx >= 2398 && argmx <= 2401);
     }
 }
 
-static void test_rate_6hz()
+static void test_rate_5hz()
 {
-    /* The multiplier pattern repeats every sr/6 samples: the rising
+    /* The multiplier pattern repeats every sr/5 samples: the rising
      * zero-crossings of (mult - 1) are exactly one cycle apart. */
     Vibrato v;
     v.Init(48000.f);
     v.SetDepth(50);
     int   last_cross = -1;
     float prev       = v.Process();
-    for(int i = 1; i < 48000; i++) /* one second = six cycles */
+    for(int i = 1; i < 48000; i++) /* one second = five cycles */
     {
         const float m = v.Process();
         if(prev < 1.f && m >= 1.f)
         {
             /* +-1 sample margin for float phase accumulation */
             if(last_cross >= 0)
-                assert(i - last_cross >= 48000 / 6 - 1
-                       && i - last_cross <= 48000 / 6 + 1);
+                assert(i - last_cross >= 48000 / 5 - 1
+                       && i - last_cross <= 48000 / 5 + 1);
             last_cross = i;
         }
         prev = m;
@@ -131,8 +142,8 @@ static void test_rate_6hz()
         if(prev < 1.f && m >= 1.f)
         {
             if(last_cross >= 0)
-                assert(i - last_cross >= 32000 / 6 - 2
-                       && i - last_cross <= 32000 / 6 + 2);
+                assert(i - last_cross >= 32000 / 5 - 2
+                       && i - last_cross <= 32000 / 5 + 2);
             last_cross = i;
         }
         prev = m;
@@ -142,8 +153,8 @@ static void test_rate_6hz()
 static void test_phase_continuity()
 {
     /* No per-sample jumps: the multiplier is a sampled sinusoid, so its
-     * largest step is bounded by the peak slope a*ln2*2*pi*6/sr. At
-     * depth 50 and 48 kHz that is ~2.4e-5; allow generous margin and
+     * largest step is bounded by the peak slope a*ln2*2*pi*5/sr. At
+     * depth 50 and 48 kHz that is ~2.0e-5; allow generous margin and
      * also check across the phase wrap and across depth changes. */
     Vibrato v;
     v.Init(48000.f);
@@ -182,7 +193,7 @@ static void test_base_tuning_stable()
     v.Init(48000.f);
     v.SetDepth(50);
     double sum = 0.0;
-    const int n = 10 * 8000; /* ten complete cycles */
+    const int n = 10 * 9600; /* ten complete cycles */
     for(int i = 0; i < n; i++)
         sum += v.Process();
     const float mean = static_cast<float>(sum / n);
@@ -328,7 +339,7 @@ int main()
     test_init_and_clamp();
     test_zero_depth_exact();
     test_depth_mapping();
-    test_rate_6hz();
+    test_rate_5hz();
     test_phase_continuity();
     test_base_tuning_stable();
     test_finite_and_bounded();

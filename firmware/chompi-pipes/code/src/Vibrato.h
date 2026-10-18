@@ -1,5 +1,5 @@
 /** @file Vibrato.h
- *  @brief Global pitch vibrato for ORGAN: one shared, free-running 6 Hz LFO
+ *  @brief Global pitch vibrato for ORGAN: one shared, free-running 5 Hz LFO
  *  with an optional note-on delay envelope.
  *
  *  The depth is an integer 0..50 meaning +/-0..50 cents of peak pitch
@@ -45,7 +45,7 @@ class Vibrato
     static constexpr int kMaxDepthCents = 50;
 
     /** Fixed LFO rate. */
-    static constexpr float kRateHz = 6.f;
+    static constexpr float kRateHz = 5.f;
 
     /** Fixed fade-in time once a triggered delay elapses. */
     static constexpr float kRampMs = 250.f;

@@ -5,7 +5,7 @@ registrations (8', 4', 2 2/3', 2') with per-pipe levels, per-pipe
 tonewheel-style Character, Hammond-style percussion on the Play/Pause
 key, fuzz distortion with a tone control, a rotary-speaker stage, a
 warm stereo BBD-inspired delay, a compact vintage-1960s-inspired plate
-reverb, global 6 Hz pitch vibrato, a Modulation Mode that drifts
+reverb, global 5 Hz pitch vibrato, a Modulation Mode that drifts
 each pipe's volume and Character slowly and independently, and 15
 SD-card preset slots.
 
@@ -182,7 +182,7 @@ effect and shows its white-key value bar for 500 ms.
 - Rotary-speaker amount: 32 steps; 0 is an exact bypass and boots at
   0. Purple bar.
 - Vibrato depth: 0-50 cents peak deviation in one-cent steps from one
-  shared, free-running 6 Hz LFO across all voices (depth 50 = one
+  shared, free-running 5 Hz LFO across all voices (depth 50 = one
   semitone peak-to-peak); 0 is an exact bypass and boots at 0. Pink bar.
   The depth is stored in the SD-card presets.
 - Vibrato note-on delay: with vibrato selected on the wheel, SHIFT +
@@ -478,11 +478,13 @@ MIDI control.
 
 | CC | Function |
 | --- | --- |
+| 1 | Vibrato depth, modulation wheel (0-127 -> 0-50 cents, rounded) |
 | 70-73 | Pipe 1-4 levels (0-127 -> 0-32 steps, rounded) |
 | 74-77 | Pipe 1-4 Character amounts (0-127 -> 0-64 steps, rounded) |
 
 Notes are received and sent; CCs are both received and sent (outgoing CCs
-reflect only the adjusted pipe).
+reflect only the adjusted pipe). Incoming CCs set values silently and never
+trigger the white-key value bars - the bars follow local controls only.
 
 **Semantic change:** CC 74-77 previously selected a sine->square waveform
 morph. That morph is removed; old automation that selected "square"
@@ -491,7 +493,7 @@ Character 0 is unchanged.
 
 ## Signal flow
 
-pitch vibrato (shared 6 Hz LFO at the oscillators) -> sine -> Character
+pitch vibrato (shared 5 Hz LFO at the oscillators) -> sine -> Character
 shaping (per pipe) -> pipe gain -> voice envelope/velocity -> voice mix
 (the percussion taps the raw 2 2/3' pipe sine before Character/gain/
 envelope and joins the mix through its own shared decay)
