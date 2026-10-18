@@ -235,11 +235,15 @@ through the fuzz's own wet/bypass fade, so it ramps click-free and is
 exactly unity at settled bypass; it introduces no user control, and the
 main-volume value and display are unaffected.
 
-Page 3 adjusts the stereo delay mix by 1% per click, clamped to
-0-100%: 0% is exact dry and 100% is delayed signal only (a linear
-complementary crossfade with a ~10 ms click-free ramp). The white-key
-bar is uniformly yellow: no keys at 0%, half (8 keys) at 50%, all 15 at
-100%.
+Page 3 adjusts the stereo delay with one combined mix/feedback
+control: 1% per click, clamped to 0-100%. The lower half of the bar
+(0-50%) sweeps the dry/wet mix from 0% to 50%: 0% is exact dry (a
+linear complementary crossfade with a ~10 ms click-free ramp). Above
+50% the mix locks at 50% and the delay feedback rises from 35% to
+100%, so a full bar is a long, slowly-fading "full delay feedback"
+sustain; turning back down dials the feedback back to 35% and below
+the 50% point goes back to controlling the mix. The white-key bar is
+uniformly yellow: no keys at 0%, half (8 keys) at 50%, all 15 at 100%.
 
 SHIFT + turn on page 3 adjusts the delay time: 5 ms per click, clamped
 to 40-500 ms (boot default 250 ms), shown on the same yellow white-key
@@ -247,19 +251,23 @@ bar while turning (40 ms = no keys, 500 ms = all 15). Time changes slew
 the read position smoothly, giving the pitch-gliding transitions of an
 analog BBD clock change; the echo history is never cleared.
 
-The delay is a fixed BBD-inspired voicing (no feedback/tone controls):
+The delay is a fixed BBD-inspired voicing apart from the feedback:
 two independent delay lines with a subtle fixed +/-0.5% left/right
 timing difference plus slow independent clock wobble, so the stereo
 image is preserved and gently widened - stereo, not ping-pong. Repeats
-are a fixed moderate ~35% feedback through a darkening low-pass (each
-repeat darker than the last), with a DC blocker in the loop and a gentle
-bounded saturation. There is no hiss, clock noise or self-oscillation.
+run through a darkening low-pass (each repeat darker than the last),
+with a DC blocker in the loop and a gentle bounded saturation. The
+feedback is 35% by default and rises to 100% in the upper half of the
+page-3 control, where echoes ring for many seconds before slowly
+fading; the bounded saturation keeps even 100% feedback from running
+away. There is no hiss, clock noise or self-oscillation.
 The buffers keep running at 0% mix and across page/preset changes, so
 tails ring out naturally and old echoes survive a mix reopening; loading
 a preset ramps the mix/time without clearing them.
 
-The delay mix and time boot at 0% / 250 ms and are stored in the SD-card
-presets; they have no MIDI CC.
+The delay mix/feedback value and time boot at 0% / 250 ms and are
+stored in the SD-card presets (the combined value in the `delay_mix`
+field); they have no MIDI CC.
 
 Page 4 adjusts the reverb mix in 32 steps (one per click, the same
 granularity as the overdrive amount): step 0 is exact dry and step 32

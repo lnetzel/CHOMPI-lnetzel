@@ -4,7 +4,9 @@
  *  clamping and defaults, bit-exact dry bypass, wet-only behavior,
  *  mix-ramp and time-slew convergence/retargeting, echo arrival,
  *  repeat decay and progressive darkening, stereo (not ping-pong)
- *  paths, boundedness, history preservation and in-place processing.
+ *  paths, feedback defaults/clamping, sustained full feedback,
+ *  feedback-ramp smoothness, boundedness, history preservation and
+ *  in-place processing.
  *
  *  Build & run: make -C firmware/chompi-pipes/code/tests test
  */
@@ -432,6 +434,76 @@ static void test_history_survives_bypass_and_changes()
     assert(peak > .02f); /* tail still ringing at the new spacing */
 }
 
+static void test_feedback_defaults_and_clamps()
+{
+    Rig r;
+    /* boots at the classic 35% voicing: bit-exact the old fixed
+     * constant (all other tests run this default path) */
+    assert(r.d.GetFeedback() == StereoBbdDelay::kDefaultFeedback);
+    assert(r.d.GetFeedback() == .35f);
+    r.d.SetFeedback(-1.f);
+    assert(r.d.GetFeedback() == 0.f);  /* exact low endpoint */
+    r.d.SetFeedback(2.f);
+    assert(r.d.GetFeedback() == 1.f);  /* exact high endpoint */
+    r.d.SetFeedback(.5f);
+    assert(r.d.GetFeedback() == .5f);
+}
+
+static void test_full_feedback_sustains_bounded()
+{
+    /* feedback 1.0 vs the 35% default: the same impulse rings FAR
+     * longer (measured 2026-10-18: ~0.005 at 4-5 s vs exact 0), and
+     * the sustained tail stays bounded by the soft-clipper */
+    auto tail_peak = [](float fb) {
+        Rig r;
+        r.d.SetMix(1.f);
+        r.d.SetFeedback(fb);
+        r.Run(600, 0.f, 0.f); /* settle both ramps */
+        r.d.SetDelayMs(80.f);
+        r.Run(static_cast<int>(1.f * kSr), 0.f, 0.f);
+        float l, rr;
+        r.d.Process(1.f, 1.f, l, rr);
+        r.Run(static_cast<int>(4.f * kSr), 0.f, 0.f);
+        float peak = 0.f;
+        r.Run(static_cast<int>(1.f * kSr), 0.f, 0.f, &peak);
+        return peak;
+    };
+    const float full = tail_peak(1.f);
+    const float def  = tail_peak(.35f);
+    assert(std::isfinite(full) && std::isfinite(def));
+    assert(full < 1.f);        /* bounded by the soft-clipper */
+    assert(full > .002f);      /* still ringing seconds later */
+    assert(def < 1e-3f);       /* the 35% default has decayed away */
+    assert(full > 20.f * def); /* dramatically longer tail */
+}
+
+static void test_feedback_ramp_click_free()
+{
+    /* with a steady DC tail ringing, retarget the feedback 0.35 -> 1.0:
+     * the loop gain moves on the ~10 ms ramp, so the output grows
+     * smoothly with no per-sample clicks */
+    Rig r;
+    r.d.SetMix(1.f);
+    r.Run(600, 0.f, 0.f); /* settle the mix ramp */
+    r.d.SetDelayMs(60.f);
+    r.Run(static_cast<int>(1.f * kSr), 0.f, 0.f); /* settle the slew */
+    float l, rr;
+    for(int i = 0; i < static_cast<int>(.5f * kSr); i++)
+        r.d.Process(.5f, .5f, l, rr); /* build the steady DC tail */
+    r.d.SetFeedback(1.f); /* mid-tail retarget */
+    float prev = l, max_step = 0.f;
+    for(int i = 0; i < 2 * static_cast<int>(.010f * kSr); i++)
+    {
+        r.d.Process(.5f, .5f, l, rr);
+        const float step = fabsf(l - prev);
+        if(step > max_step)
+            max_step = step;
+        prev = l;
+    }
+    assert(max_step < .005f); /* smooth sweep, no zipper clicks */
+    assert(r.d.GetFeedback() == 1.f);
+}
+
 static void test_in_place_and_bounded()
 {
     /* in-place processing (outputs aliasing inputs) matches the
@@ -512,6 +584,9 @@ int main()
     test_mix_ramp_and_retarget();
     test_time_slew_continuity_and_retarget();
     test_history_survives_bypass_and_changes();
+    test_feedback_defaults_and_clamps();
+    test_full_feedback_sustains_bounded();
+    test_feedback_ramp_click_free();
     test_in_place_and_bounded();
     printf("stereo_bbd_delay_test: all tests passed\n");
     return 0;

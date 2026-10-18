@@ -181,6 +181,13 @@ class OrganEngine
     static constexpr int   kDefaultDelayTimeMs     = 250;
     static constexpr int   kMinDelayTimeMs         = 40;
     static constexpr int   kMaxDelayTimeMs         = 500;
+    /** Delay page-3 combined control: 0..50 sweeps the dry/wet mix
+     *  0..50%, above 50 the mix locks at 50% and the feedback rises
+     *  from the 35% floor to 100% ("full delay feedback"). */
+    static constexpr int   kDelayMixPivotPercent   = 50;
+    static constexpr float kDelayMixAtPivot        = .5f;
+    static constexpr float kDelayFeedbackFloor     = .35f;
+    static constexpr float kDelayFeedbackMax       = 1.f;
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
      *  PlateReverb::T elements in writable memory (ORGAN uses SDRAM);
@@ -606,15 +613,34 @@ class OrganEngine
 
     int GetReverbDecayStep() const { return reverb_decay_step_; }
 
-    /** Apply one encoder click to the stereo delay mix (0..100 percent,
-     *  clamped). 0% is bit-exact dry, 100% is wet only; the ~10 ms
+    /** Apply one encoder click to the stereo delay's combined
+     *  mix/feedback control (0..100 percent, clamped). 0..50 sweeps
+     *  the dry/wet mix 0..50%: 0% is bit-exact dry; the ~10 ms
      *  crossfade ramp retargets from the current mix, click-free, and
-     *  the delay lines keep running at dry mix (live tails). */
+     *  the delay lines keep running at dry mix (live tails). Above 50
+     *  the mix locks at 50% and the feedback rises from the 35% floor
+     *  to 100%, so a full bar is sustained "full delay feedback".
+     *  Stored in the SD-card presets as `delay_mix`. */
     void SetDelayMixPercent(int percent)
     {
         percent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
         delay_mix_percent_ = static_cast<uint8_t>(percent);
-        delay_.SetMix(static_cast<float>(percent) * .01f);
+        if(percent <= kDelayMixPivotPercent)
+        {
+            delay_.SetMix(static_cast<float>(percent)
+                          * (kDelayMixAtPivot / kDelayMixPivotPercent));
+            delay_.SetFeedback(kDelayFeedbackFloor);
+        }
+        else
+        {
+            delay_.SetMix(kDelayMixAtPivot);
+            delay_.SetFeedback(kDelayFeedbackFloor
+                               + static_cast<float>(percent
+                                                    - kDelayMixPivotPercent)
+                                     * .02f
+                                     * (kDelayFeedbackMax
+                                        - kDelayFeedbackFloor));
+        }
     }
 
     int GetDelayMixPercent() const { return delay_mix_percent_; }

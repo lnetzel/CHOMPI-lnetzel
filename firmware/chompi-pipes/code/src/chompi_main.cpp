@@ -1240,8 +1240,11 @@ static void PollControls()
             }
             else if(vol_page_ == kVolPageDelay)
             {
-                /* volume-encoder page 3: stereo delay mix, 1% per click,
-                 * clamped 0..100; 0% is exact dry, 100% wet only */
+                /* volume-encoder page 3: combined stereo-delay control,
+                 * 1% per click, clamped 0..100. 0..50 sweeps the mix
+                 * 0..50% (0% is exact dry); above 50 the mix locks at
+                 * 50% and the feedback rises 35%..100%, so a full bar
+                 * is sustained "full delay feedback" */
                 engine.SetDelayMixPercent(engine.GetDelayMixPercent()
                                           + delta);
                 bar_pipe_  = kVolBar;
@@ -1726,7 +1729,8 @@ static void UpdateLeds()
             }
             else if(bar_page_ == kVolPageDelay)
             {
-                /* volume-knob page 3: stereo delay mix percent */
+                /* volume-knob page 3: combined delay mix/feedback
+                 * (0..50 = mix 0..50%, 50..100 = feedback 35%..100%) */
                 lit  = (engine.GetDelayMixPercent() * kNumWhiteKeys + 50)
                        / 100;
                 kind = kBarDelay;

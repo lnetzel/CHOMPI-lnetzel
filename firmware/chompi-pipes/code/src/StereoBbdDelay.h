@@ -9,8 +9,9 @@
  *     spread plus slow independent sine modulation of each side), so
  *     the stereo image is preserved and gently widened - stereo, NOT
  *     ping-pong (no cross-channel feedback, no mono summing)
- *   - a fixed moderate feedback (~35%) through a darkening one-pole
- *     low-pass, so repeats get progressively darker
+ *   - a variable feedback (boot 35%, up to 100%) through a darkening
+ *     one-pole low-pass, so repeats get progressively darker; 100%
+ *     feedback rings for many seconds before slowly fading
  *   - a one-pole low-cut/DC blocker inside the loop, so no DC or rumble
  *     accumulates across repeats
  *   - a bounded gentle soft-clip saturation on the written signal
@@ -20,7 +21,9 @@
  *
  *  Controls: mix (0..1, linear complementary crossfade with a ~10 ms
  *  click-free ramp and exact endpoints - settled 0 is bit-exact dry,
- *  settled 1 is wet only) and delay time (40..500 ms). Time changes
+ *  settled 1 is wet only), feedback (0..1 with the same ~10 ms ramp;
+ *  boot 35% is the classic voicing, 100% rings for many seconds,
+ *  bounded by the soft-clipper) and delay time (40..500 ms). Time changes
  *  slew the read position through a ~80 ms one-pole, giving the smooth
  *  BBD-like pitch glide of an analog clock change.
  *
@@ -61,8 +64,14 @@ class StereoBbdDelay
     /** Mix ramp length, sample-rate derived (~10 ms). */
     static constexpr float kMixRampSeconds = .010f;
 
+    /** Feedback range: boots settled at 35% (the classic moderate-
+     *  repeats voicing, bit-exact the old fixed constant) and goes up
+     *  to 100% - "full delay feedback": echoes ring for many seconds,
+     *  slowly fading, bounded by the soft-clipper. Set via
+     *  SetFeedback(). */
+    static constexpr float kDefaultFeedback = .35f;
+    static constexpr float kMaxFeedback     = 1.f;
     /** Fixed voicing (implementation constants, not user controls). */
-    static constexpr float kFeedback    = .35f;  /* moderate repeats */
     static constexpr float kDarkenLpHz  = 2800.f; /* loop low-pass */
     static constexpr float kLowCutHz    = 40.f;   /* loop DC blocker */
     static constexpr float kStereoSpread = .01f;  /* +/-0.5% L/R timing */
@@ -92,6 +101,11 @@ class StereoBbdDelay
 
         mix_ = mix_target_ = 0.f;
         mix_inc_ = 1.f / (kMixRampSeconds * sample_rate);
+
+        /* feedback boots settled at the 35% default: the same sound as
+         * the old fixed constant */
+        feedback_     = feedback_target_ = kDefaultFeedback;
+        feedback_inc_ = mix_inc_;
 
         /* loop filters: darkening low-pass + DC-blocker high-pass */
         lp_coeff_ = 1.f - expf(-6.283185307179586f * kDarkenLpHz
@@ -137,6 +151,20 @@ class StereoBbdDelay
 
     float GetMix() const { return mix_target_; }
 
+    /** Set the loop feedback (clamped 0..1). Retargets the same ~10 ms
+     *  click-free ramp as the mix, so feedback sweeps do not zipper.
+     *  The boot default is 35%; 1.0 gives a very long, slowly-fading
+     *  sustain, bounded by the soft-clipper and darkened by the loop
+     *  filters. */
+    void SetFeedback(float feedback)
+    {
+        feedback_target_ = feedback < 0.f
+                               ? 0.f
+                               : (feedback > 1.f ? 1.f : feedback);
+    }
+
+    float GetFeedback() const { return feedback_target_; }
+
     /** Set the delay time in milliseconds (clamped 40..500). The read
      *  position slews to the new time with the ~80 ms pitch-glide
      *  one-pole; nothing is cleared and echoes keep ringing. */
@@ -166,6 +194,16 @@ class StereoBbdDelay
             mix_ -= mix_inc_;
         else
             mix_ = mix_target_;
+
+        /* advance the feedback ramp the same way (click-free moves,
+         * exact endpoint snap) */
+        const float dfb = feedback_target_ - feedback_;
+        if(dfb > feedback_inc_)
+            feedback_ += feedback_inc_;
+        else if(dfb < -feedback_inc_)
+            feedback_ -= feedback_inc_;
+        else
+            feedback_ = feedback_target_;
 
         /* slew the base delay time toward its target (pitch glide);
          * snap the last fraction of a sample so the settled base is
@@ -210,8 +248,8 @@ class StereoBbdDelay
 
         /* write input + feedback through the bounded gentle saturation
          * (the loop can never exceed |2/3| at the clipper) */
-        buf_l_[write_] = SoftClip(in_l + kFeedback * hp_l);
-        buf_r_[write_] = SoftClip(in_r + kFeedback * hp_r);
+        buf_l_[write_] = SoftClip(in_l + feedback_ * hp_l);
+        buf_r_[write_] = SoftClip(in_r + feedback_ * hp_r);
         write_         = (write_ + 1) & (kBufferSize - 1);
 
         /* linear complementary crossfade with exact endpoints */
@@ -283,6 +321,9 @@ class StereoBbdDelay
     float mix_;
     float mix_target_;
     float mix_inc_;
+    float feedback_;
+    float feedback_target_;
+    float feedback_inc_;
 
     float lp_coeff_; /* darkening low-pass coefficient */
     float hp_coeff_; /* DC-blocker feedback coefficient */
