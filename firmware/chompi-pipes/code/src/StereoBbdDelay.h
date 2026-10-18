@@ -9,21 +9,25 @@
  *     spread plus slow independent sine modulation of each side), so
  *     the stereo image is preserved and gently widened - stereo, NOT
  *     ping-pong (no cross-channel feedback, no mono summing)
- *   - a variable feedback (boot 35%, up to 100%) through a darkening
- *     one-pole low-pass, so repeats get progressively darker; 100%
- *     feedback rings for many seconds before slowly fading
+ *   - a variable feedback (boot 35%, up to 120%) through a darkening
+ *     one-pole low-pass, so repeats get progressively darker; at 100%
+ *     echoes ring for many seconds, and past ~100% the loop
+ *     self-oscillates into a bounded drone whose pitch follows the
+ *     delay time
  *   - a one-pole low-cut/DC blocker inside the loop, so no DC or rumble
  *     accumulates across repeats
  *   - a bounded gentle soft-clip saturation on the written signal
  *     (cubic soft knee, |y| <= 2/3), so loud repeats compress warmly
- *     and the loop can never run away
- *   - no hiss, no clock noise, no self-oscillation.
+ *     and even a self-oscillating loop can never run away
+ *   - no hiss, no clock noise; self-oscillation happens only as a
+ *     deliberate control above 100% feedback.
  *
  *  Controls: mix (0..1, linear complementary crossfade with a ~10 ms
  *  click-free ramp and exact endpoints - settled 0 is bit-exact dry,
- *  settled 1 is wet only), feedback (0..1 with the same ~10 ms ramp;
- *  boot 35% is the classic voicing, 100% rings for many seconds,
- *  bounded by the soft-clipper) and delay time (40..500 ms). Time changes
+ *  settled 1 is wet only), feedback (0..1.2 with the same ~10 ms ramp;
+ *  boot 35% is the classic voicing, 1.0 rings for many seconds, past
+ *  ~1.0 the delay self-oscillates - always bounded by the
+ *  soft-clipper) and delay time (40..500 ms). Time changes
  *  slew the read position through a ~80 ms one-pole, giving the smooth
  *  BBD-like pitch glide of an analog clock change.
  *
@@ -65,12 +69,14 @@ class StereoBbdDelay
     static constexpr float kMixRampSeconds = .010f;
 
     /** Feedback range: boots settled at 35% (the classic moderate-
-     *  repeats voicing, bit-exact the old fixed constant) and goes up
-     *  to 100% - "full delay feedback": echoes ring for many seconds,
-     *  slowly fading, bounded by the soft-clipper. Set via
+     *  repeats voicing, bit-exact the old fixed constant). 1.0 rings
+     *  for many seconds; past ~1.0 the midrange loop gain crosses 1
+     *  and the delay SELF-OSCILLATES - a dark drone, bounded by the
+     *  soft-clipper, whose pitch follows the delay time. The 1.2 max
+     *  keeps a playable sweet-spot zone just past the onset. Set via
      *  SetFeedback(). */
     static constexpr float kDefaultFeedback = .35f;
-    static constexpr float kMaxFeedback     = 1.f;
+    static constexpr float kMaxFeedback     = 1.2f;
     /** Fixed voicing (implementation constants, not user controls). */
     static constexpr float kDarkenLpHz  = 2800.f; /* loop low-pass */
     static constexpr float kLowCutHz    = 40.f;   /* loop DC blocker */
@@ -151,16 +157,16 @@ class StereoBbdDelay
 
     float GetMix() const { return mix_target_; }
 
-    /** Set the loop feedback (clamped 0..1). Retargets the same ~10 ms
-     *  click-free ramp as the mix, so feedback sweeps do not zipper.
-     *  The boot default is 35%; 1.0 gives a very long, slowly-fading
-     *  sustain, bounded by the soft-clipper and darkened by the loop
-     *  filters. */
+    /** Set the loop feedback (clamped 0..kMaxFeedback). Retargets the
+     *  same ~10 ms click-free ramp as the mix, so feedback sweeps do
+     *  not zipper. The boot default is 35%; past ~1.0 the loop
+     *  self-oscillates into a bounded, slowly-growing drone, darkened
+     *  by the loop filters. */
     void SetFeedback(float feedback)
     {
-        feedback_target_ = feedback < 0.f
-                               ? 0.f
-                               : (feedback > 1.f ? 1.f : feedback);
+        feedback_target_ = feedback < 0.f ? 0.f
+                           : (feedback > kMaxFeedback ? kMaxFeedback
+                                                      : feedback);
     }
 
     float GetFeedback() const { return feedback_target_; }

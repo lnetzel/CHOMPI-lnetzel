@@ -183,11 +183,13 @@ class OrganEngine
     static constexpr int   kMaxDelayTimeMs         = 500;
     /** Delay page-3 combined control: 0..50 sweeps the dry/wet mix
      *  0..50%, above 50 the mix locks at 50% and the feedback rises
-     *  from the 35% floor to 100% ("full delay feedback"). */
+     *  from the 35% floor to 120%; past ~100% (the top ~12% of the
+     *  bar) the delay self-oscillates into a bounded drone. */
     static constexpr int   kDelayMixPivotPercent   = 50;
     static constexpr float kDelayMixAtPivot        = .5f;
     static constexpr float kDelayFeedbackFloor     = .35f;
-    static constexpr float kDelayFeedbackMax       = 1.f;
+    static constexpr float kDelayFeedbackMax
+        = StereoBbdDelay::kMaxFeedback;
 
     /** `reverb_delay` must point to PlateReverb::kDelayBufferSize
      *  PlateReverb::T elements in writable memory (ORGAN uses SDRAM);
@@ -619,7 +621,8 @@ class OrganEngine
      *  crossfade ramp retargets from the current mix, click-free, and
      *  the delay lines keep running at dry mix (live tails). Above 50
      *  the mix locks at 50% and the feedback rises from the 35% floor
-     *  to 100%, so a full bar is sustained "full delay feedback".
+     *  to 120%; past ~100% the delay self-oscillates into a bounded
+     *  feedback drone whose pitch follows the delay time.
      *  Stored in the SD-card presets as `delay_mix`. */
     void SetDelayMixPercent(int percent)
     {

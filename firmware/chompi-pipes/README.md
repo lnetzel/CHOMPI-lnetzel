@@ -240,9 +240,12 @@ control: 1% per click, clamped to 0-100%. The lower half of the bar
 (0-50%) sweeps the dry/wet mix from 0% to 50%: 0% is exact dry (a
 linear complementary crossfade with a ~10 ms click-free ramp). Above
 50% the mix locks at 50% and the delay feedback rises from 35% to
-100%, so a full bar is a long, slowly-fading "full delay feedback"
-sustain; turning back down dials the feedback back to 35% and below
-the 50% point goes back to controlling the mix. The white-key bar is
+120%: around 100% the echoes ring for many seconds, and past that
+(the top ~12% of the bar) the delay self-oscillates - a bounded, dark
+feedback drone whose pitch follows the delay time, with plenty of
+sweet spots to play. Turning back down dials the feedback back to 35%
+and below the 50% point goes back to controlling the mix. The
+white-key bar is
 uniformly yellow: no keys at 0%, half (8 keys) at 50%, all 15 at 100%.
 
 SHIFT + turn on page 3 adjusts the delay time: 5 ms per click, clamped
@@ -257,10 +260,11 @@ timing difference plus slow independent clock wobble, so the stereo
 image is preserved and gently widened - stereo, not ping-pong. Repeats
 run through a darkening low-pass (each repeat darker than the last),
 with a DC blocker in the loop and a gentle bounded saturation. The
-feedback is 35% by default and rises to 100% in the upper half of the
-page-3 control, where echoes ring for many seconds before slowly
-fading; the bounded saturation keeps even 100% feedback from running
-away. There is no hiss, clock noise or self-oscillation.
+feedback is 35% by default and rises to 120% in the upper half of the
+page-3 control: past ~100% the delay self-oscillates into a drone
+that never decays until the feedback is turned down; the bounded
+saturation keeps even that from running away. There is no hiss or
+clock noise.
 The buffers keep running at 0% mix and across page/preset changes, so
 tails ring out naturally and old echoes survive a mix reopening; loading
 a preset ramps the mix/time without clearing them.

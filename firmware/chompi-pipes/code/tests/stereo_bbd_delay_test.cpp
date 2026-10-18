@@ -444,7 +444,8 @@ static void test_feedback_defaults_and_clamps()
     r.d.SetFeedback(-1.f);
     assert(r.d.GetFeedback() == 0.f);  /* exact low endpoint */
     r.d.SetFeedback(2.f);
-    assert(r.d.GetFeedback() == 1.f);  /* exact high endpoint */
+    assert(r.d.GetFeedback() == StereoBbdDelay::kMaxFeedback);
+    assert(r.d.GetFeedback() == 1.2f); /* exact high endpoint */
     r.d.SetFeedback(.5f);
     assert(r.d.GetFeedback() == .5f);
 }
@@ -475,6 +476,40 @@ static void test_full_feedback_sustains_bounded()
     assert(full > .002f);      /* still ringing seconds later */
     assert(def < 1e-3f);       /* the 35% default has decayed away */
     assert(full > 20.f * def); /* dramatically longer tail */
+}
+
+static void test_self_oscillation()
+{
+    /* feedback 1.2: a seeded impulse does not decay - the tail grows
+     * into a steady limit cycle bounded by the soft-clipper (measured
+     * 2026-10-18: ~0.62 at 4-5 s, settling at ~0.66 = the |2/3|
+     * clipper bound) */
+    Rig r;
+    r.d.SetMix(1.f);
+    r.d.SetFeedback(StereoBbdDelay::kMaxFeedback);
+    r.Run(600, 0.f, 0.f); /* settle both ramps */
+    r.d.SetDelayMs(80.f);
+    r.Run(static_cast<int>(1.f * kSr), 0.f, 0.f); /* settle the slew */
+    float l, rr;
+    r.d.Process(1.f, 1.f, l, rr); /* seed impulse */
+    r.Run(static_cast<int>(4.f * kSr), 0.f, 0.f);
+    float peak = 0.f;
+    r.Run(static_cast<int>(1.f * kSr), 0.f, 0.f, &peak);
+    assert(peak > .5f);  /* the drone is fully established */
+    assert(peak < .7f);  /* bounded by the soft-clipper */
+
+    /* loud playing on top of the drone stays finite and bounded */
+    peak = 0.f;
+    int phase = 0;
+    for(int i = 0; i < static_cast<int>(2.f * kSr); i++)
+    {
+        const float in = phase++ % 240 < 120 ? .9f : -.9f;
+        r.d.Process(in, -in, l, rr);
+        assert(std::isfinite(l) && std::isfinite(rr));
+        if(fabsf(l) > peak)
+            peak = fabsf(l);
+    }
+    assert(peak < .7f);
 }
 
 static void test_feedback_ramp_click_free()
@@ -586,6 +621,7 @@ int main()
     test_history_survives_bypass_and_changes();
     test_feedback_defaults_and_clamps();
     test_full_feedback_sustains_bounded();
+    test_self_oscillation();
     test_feedback_ramp_click_free();
     test_in_place_and_bounded();
     printf("stereo_bbd_delay_test: all tests passed\n");
