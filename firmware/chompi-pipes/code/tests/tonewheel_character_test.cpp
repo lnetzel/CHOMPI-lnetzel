@@ -266,13 +266,15 @@ static void test_harmonic_content()
     static float buf[4096];
     const int n = render_cycles(buf, 4096, 480.f, 48000.f, 10, c, 1.f);
 
-    /* Coherent DFT: bin 1 = fundamental, bins 2/3 = added harmonics.
-     * Ratios cancel the normalization, so they must equal the cached
-     * gains almost exactly (algebraic identities, float error only). */
-    const float b1 = BinMag(buf, n, 1);
-    const float b2 = BinMag(buf, n, 2);
-    const float b3 = BinMag(buf, n, 3);
-    const float b4 = BinMag(buf, n, 4);
+    /* Coherent DFT: the buffer holds 10 complete cycles, so the
+     * fundamental is bin 10 and the 2nd/3rd/4th harmonics are bins
+     * 20/30/40. Ratios cancel the normalization, so they must equal
+     * the cached gains almost exactly (algebraic identities, float
+     * error only). */
+    const float b1 = BinMag(buf, n, 10);
+    const float b2 = BinMag(buf, n, 20);
+    const float b3 = BinMag(buf, n, 30);
+    const float b4 = BinMag(buf, n, 40);
     assert(fabsf(b1 - c.norm) < 1e-3f);
     assert(fabsf(b2 / b1 - fabsf(c.second_gain)) < 1e-3f);
     assert(fabsf(b3 / b1 - fabsf(c.third_gain)) < 1e-3f);
@@ -280,8 +282,8 @@ static void test_harmonic_content()
 
     /* half amount: harmonic-to-fundamental ratio shrinks accordingly */
     render_cycles(buf, 4096, 480.f, 48000.f, 10, c, 0.5f);
-    const float h1 = BinMag(buf, n, 1);
-    const float h3 = BinMag(buf, n, 3);
+    const float h1 = BinMag(buf, n, 10);
+    const float h3 = BinMag(buf, n, 30);
     assert(h3 / h1 < b3 / b1);
     printf("ok: harmonic content (g2=%g g3=%g)\n",
            static_cast<double>(c.second_gain),
@@ -291,11 +293,12 @@ static void test_harmonic_content()
 static void test_amplitude_bounds()
 {
     /* worst case: maximum variation gains on the 8' pipe with full bass
-     * grit, mask fully open */
+     * grit, mask fully open (pipe-0 grit caps, hotter than the shared
+     * kMax ones) */
     TonewheelCharacter::PipeCoeffs c;
-    c.second_gain = TonewheelCharacter::kMaxSecond * 1.15f
+    c.second_gain = TonewheelCharacter::kGritMaxSecond * 1.15f
                     * (1.f + TonewheelCharacter::kGritBoost);
-    c.third_gain  = TonewheelCharacter::kMaxThird * 1.15f
+    c.third_gain  = TonewheelCharacter::kGritMaxThird * 1.15f
                     * (1.f + TonewheelCharacter::kGritBoost);
     c.norm = 1.f / (1.f + fabsf(c.second_gain) + fabsf(c.third_gain));
 
@@ -318,25 +321,29 @@ static void test_antialias_masks()
     tc.Init(48000.f);
     const float sr = 48000.f;
 
+    /* probe pipe 1: no grit caps/boost, so the plain kMax bounds apply
+     * exactly and the mask is tested in isolation (the mask itself is
+     * pipe-independent) */
+
     /* low fundamental: both harmonics below 0.35*sr -> full strength */
-    tc.UpdateVoiceCoeffs(0, 60, 0, 1000.f);
-    assert(tc.Coeffs(0, 0).third_gain >= TonewheelCharacter::kMaxThird * 0.85f);
+    tc.UpdateVoiceCoeffs(0, 60, 1, 1000.f);
+    assert(tc.Coeffs(0, 1).third_gain >= TonewheelCharacter::kMaxThird * 0.85f);
 
     /* 2nd harmonic above 0.45*sr -> exactly zero; 3rd likewise */
-    tc.UpdateVoiceCoeffs(0, 60, 0, 12000.f); /* 2f=24k > .45*48k=21.6k */
-    assert(tc.Coeffs(0, 0).second_gain == 0.f);
-    assert(tc.Coeffs(0, 0).third_gain == 0.f);
+    tc.UpdateVoiceCoeffs(0, 60, 1, 12000.f); /* 2f=24k > .45*48k=21.6k */
+    assert(tc.Coeffs(0, 1).second_gain == 0.f);
+    assert(tc.Coeffs(0, 1).third_gain == 0.f);
 
     /* fade band: 3f between .35 and .45 * sr -> partially attenuated,
      * strictly between the variation extremes */
-    tc.UpdateVoiceCoeffs(0, 60, 0, 6400.f); /* 3f=19.2k: t=0.5 in band */
-    const float g3 = tc.Coeffs(0, 0).third_gain;
+    tc.UpdateVoiceCoeffs(0, 60, 1, 6400.f); /* 3f=19.2k: t=0.5 in band */
+    const float g3 = tc.Coeffs(0, 1).third_gain;
     assert(g3 > 0.f);
     assert(g3 < TonewheelCharacter::kMaxThird * 1.15f * 0.6f);
 
     /* just below the full band edge: mask exactly 1 */
-    tc.UpdateVoiceCoeffs(0, 60, 0, 5500.f); /* 2f=11k, 3f=16.5k <= 16.8k */
-    assert(fabsf(tc.Coeffs(0, 0).third_gain)
+    tc.UpdateVoiceCoeffs(0, 60, 1, 5500.f); /* 2f=11k, 3f=16.5k <= 16.8k */
+    assert(fabsf(tc.Coeffs(0, 1).third_gain)
            >= TonewheelCharacter::kMaxThird * 0.85f);
     printf("ok: anti-alias masks (sr=%g)\n", static_cast<double>(sr));
 }
