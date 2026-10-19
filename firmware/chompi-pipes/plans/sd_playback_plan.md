@@ -2,20 +2,25 @@
 
 A **Playback Mode** that plays the 48 kHz / 16-bit / stereo WAV takes in
 `PIPES/RECORDINGS/` (`Recording NN.wav`) straight from the SD card, one at a
-time. Entry is **SHIFT + hold PLAY for 2 s** with a blue fill bar across the
+time. Entry is **hold PLAY for 2 s** (PLAY alone; PLAY + LOOP stays the
+record chord) with a blue fill bar across the
 white keys; exit is the same gesture again **or** flipping the toggle switch
 either way. The mode is pure playback: all 25 keys are inert as notes, MIDI In
 is ignored, the take bypasses every FX stage, and the jam recorder is fully
-blocked. The latest 15 takes are selected with SHIFT + a white key (C3 =
+blocked. The latest 15 takes are selected with a white key press (C3 =
 newest). PLAY taps play/pause, LOOP taps loop the take; with loop off a
 finished take advances to the next-newer one and wraps from the newest back to
-the oldest of the 15. The selected take's white-key LED is blue: blinking
-while playing, solid while paused. The master volume knob keeps working
+the oldest of the 15. The selected take's white-key LED is blue: solid while paused,
+blinking while playing (the unselected take keys are white). The master volume knob keeps working
 (playback is injected after the FX chain, before the master gain).
 
 Locked-in UX decisions (user, 2026-10-18): exit = both gestures; recorder
 fully blocked (entering stops a running take); volume knob active; C3 =
 newest; end-of-list wraps; entering loads the newest take paused.
+Revised 2026-10-19: entry/exit = hold PLAY 2 s (no SHIFT; LOOP joining
+the hold cancels, so the record chord keeps priority); a white-key
+press selects its take directly (no SHIFT); the selected key is blue
+(solid paused / blinking playing), unselected takes are white.
 
 ## What the firmware actually supports (checked in the code)
 
@@ -149,10 +154,11 @@ newest; end-of-list wraps; entering loads the newest take paused.
 6. New state: `static volatile int playback_mode_` (kPbOff, kPbEnterHold,
    kPbStopping (recorder closing), kPbScan, kPbOn) and transport
    `kTrPaused` / `kTrPlaying`.
-   - **Entry:** SHIFT + PLAY held 2 s, Normal Mode only (switch DOWN), no
+   - **Entry:** PLAY held 2 s, Normal Mode only (switch DOWN), no
      preset mode active. Blue fill bar across the 15 white keys while held
-     (same rendering as the record chord's red fill); early release or losing
-     SHIFT cancels; a completed entry swallows the PLAY percussion toggle via
+     (same rendering as the record chord's red fill); early release or
+     LOOP joining cancels (the record chord keeps priority); a completed
+     entry swallows the PLAY percussion toggle via
      the existing `play_pending_` consume. No card -> ~1 s red flash, stay
      off (same refusal pattern as the record chord).
    - **Entry sequence:** release every sounding/latched note and clear the
@@ -161,13 +167,13 @@ newest; end-of-list wraps; entering loads the newest take paused.
      then scan (kPbScan, white keys pulse dim blue as progress); zero takes
      found -> red flash, back to kPbOff; otherwise select slot 0 (newest),
      transport = paused.
-   - **Exit:** SHIFT + hold PLAY 2 s again (same blue bar), or any flip of
+   - **Exit:** hold PLAY 2 s again (same blue bar), or any flip of
      the toggle switch (lands in whatever mode the switch position says;
      sampled next to the existing `mod_mode_` edge check). On exit:
      `sd_player_.RequestStop()`, mode off, normal key handling resumes.
    - **In the mode (PollControls key loop):** keys 7..31 never reach note /
      latch / octave / preset handling (gate `PresetKeyEvent` and the note
-     branch on `!playback_mode_`); SHIFT + white key 0..14 ->
+     branch on `!playback_mode_`); a white key 0..14 press ->
      `RequestPlay(slot)` (transport state is preserved across a take switch);
      PLAY release-edge tap toggles pause/resume; LOOP release-edge tap
      toggles take-loop (its latch toggle and the SHIFT+LOOP init hold are
@@ -183,10 +189,11 @@ newest; end-of-list wraps; entering loads the newest take paused.
 7. New top branch in `UpdateLeds` for playback mode (first match wins, like
    the preset branch):
    - White keys always show the take window while the mode is on: existing
-     take = dim solid blue; selected take = blue, blinking at the existing
-     250 ms `pre_blink` rate while playing, solid while paused; empty slots
-     off. (Keys are inert, so no SHIFT-overlay is needed for display; SHIFT
-     is only the selection modifier.)
+     take = dim solid white; selected take = blue, solid while paused and
+     blinking at the existing 250 ms `pre_blink` rate while playing;
+     empty slots
+     off. (Keys are inert, so no SHIFT-overlay is needed for display or
+     selection.)
    - PLAY key LED (PTH 7) mirrors the transport in blue (blink = playing,
      solid = paused) instead of the amber percussion indicator; LOOP key LED
      (PTH 8) is solid blue while take-loop is on, off otherwise (replaces

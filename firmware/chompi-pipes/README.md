@@ -387,7 +387,7 @@ in the background without taking over the Modulation-mode LEDs.
   cancels). Press a filled slot, then release and press SHIFT to
   confirm. Deleting the current slot clears "current".
 - **Init:** hold SHIFT, then press LOOP and keep both held for 2.5 s.
-  A red bar fills the 15 white keys while you hold; releasing either
+  A yellow bar fills the 15 white keys while you hold; releasing either
   key early cancels. At 2.5 s the init sound is applied live (held and
   latched notes keep sounding) and the CHOMPI key LED blinks white for
   ~1 s. Init needs no SD card. Init values: pipe levels 16 (50%),
@@ -483,16 +483,18 @@ before the master volume knob, so the volume knob still scales it),
 all 25 keys are inert as notes, MIDI In is ignored and recording is
 fully blocked.
 
-- **Enter/exit:** hold SHIFT + PLAY for 2 s (Normal Mode only). A
-  blue bar fills the 15 white keys while you hold; releasing early
-  cancels. Entering silences every note, clears the latch and stops a
-  running take. Exit with the same gesture again, or flip the toggle
-  switch either way. With no SD card (or no takes) the white keys
-  flash red for ~1 s and the mode stays off.
+- **Enter/exit:** hold PLAY for 2 s (PLAY alone, Normal Mode only -
+  PLAY + LOOP stays the record chord). A blue bar fills the 15 white
+  keys while you hold; releasing early cancels. Entering silences
+  every note, clears the latch and stops a running take. Exit with
+  the same gesture again, or flip the toggle switch either way. With
+  no SD card (or no takes) the white keys flash red for ~1 s and the
+  mode stays off.
 - **Take selection:** the newest 15 takes sit on the 15 white keys,
-  C3 = newest. SHIFT + a white key selects its take; the selected
-  key's LED is blue (blinking while playing, solid while paused), the
-  other takes glow dim blue, empty slots stay off.
+  C3 = newest. A white-key press directly selects its take; the
+  selected key's LED is blue (solid while paused, blinking while
+  playing), the unselected takes glow dim white, empty slots stay
+  off.
 - **Transport:** PLAY taps pause/resume (the PLAY key LED mirrors the
   transport in blue), LOOP taps loop the take (the LOOP key LED is
   solid blue while the loop is on). With loop off a finished take

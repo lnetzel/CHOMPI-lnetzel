@@ -513,11 +513,11 @@ static const uint32_t    kRecHoldStopMs  = 1000;
 static const uint32_t    kRecSwallowMs   = 400;
 static const uint32_t    kRecErrorMs     = 2000;
 
-/* ---- SD playback mode (SHIFT + hold PLAY for 2 s) ----
+/* ---- SD playback mode (hold PLAY for 2 s) ----
  * Plays the SD takes straight from the card, one at a time; pure
  * playback: all 25 keys are inert as notes, MIDI In is ignored, the
  * take bypasses every FX stage and the jam recorder is fully blocked.
- * Entry: SHIFT + PLAY held 2 s in Normal Mode (no preset mode active)
+ * Entry: PLAY held 2 s in Normal Mode (no preset mode active)
  * - a blue fill bar on the white keys while held; entry silences every
  * note, clears the latch, stops a running take (kPbStopping), scans
  * for takes (kPbScan) and enters on the newest take, paused. Exit: the
@@ -860,8 +860,10 @@ static void PollControls()
     }
 
     /* KEY_27 (Play/Pause): toggle the Hammond-style percussion on each
-     * RELEASE edge, in Normal and Modulation modes alike; holding the
-     * key does nothing on its own. The toggle moved from the down-edge
+     * RELEASE edge, in Normal and Modulation modes alike; a 2 s hold
+     * enters/exits playback mode instead (see below), and in playback
+     * mode the release tap pauses/resumes the take. The toggle moved
+     * from the down-edge
      * to the release so the PLAY+LOOP record chord is deterministic:
      * the press only arms the toggle (play_pending_), the release fires
      * it, and a completed (or >400 ms aborted) record hold consumes the
@@ -882,17 +884,31 @@ static void PollControls()
         }
         else if(!down && prev_key_[play_sw] && play_pending_)
         {
-            play_pending_ = false;
-            if(playback_mode_ == kPbOn)
+            if(playback_mode_ == kPbEnterHold)
             {
-                /* playback mode: a PLAY tap pauses/resumes the take */
-                if(sd_player_.IsPlaying())
-                    sd_player_.RequestPause();
-                else
-                    sd_player_.RequestResume();
+                /* a playback entry/exit hold is in progress: leave
+                 * play_pending_ armed - the hold-cancel path below
+                 * decides whether this release is a tap (its toggle
+                 * fires there) or a cancelled hold (>400 ms: swallow) */
             }
-            else if(playback_mode_ == kPbOff)
-                engine.SetPercussionEnabled(!engine.GetPercussionEnabled());
+            else
+            {
+                play_pending_ = false;
+                if(playback_mode_ == kPbOn)
+                {
+                    /* playback mode: a PLAY tap pauses/resumes the
+                     * take (reached when the exit hold never armed,
+                     * e.g. with LOOP held) */
+                    if(sd_player_.IsPlaying())
+                        sd_player_.RequestPause();
+                    else
+                        sd_player_.RequestResume();
+                }
+                else if(playback_mode_ == kPbOff)
+                    engine.SetPercussionEnabled(
+                        !engine.GetPercussionEnabled());
+                /* kPbStopping/kPbScan: the tap is inert */
+            }
         }
         prev_key_[play_sw] = down;
     }
@@ -984,28 +1000,32 @@ static void PollControls()
         }
     }
 
-    /* ---- SD playback mode (SHIFT + hold PLAY for 2 s) ----
-     * Entry: SHIFT + PLAY held 2 s in Normal Mode, no preset mode
-     * active (a blue bar fills the white keys while held; early
-     * release or losing SHIFT cancels; an aborted >400 ms hold
-     * swallows the PLAY toggle, same rule as the record chord). The
-     * completed entry silences every note, clears the latch, stops a
-     * running take (kPbStopping waits for the recorder's clean close),
-     * scans the takes (kPbScan) and enters the mode on the newest
-     * take, paused. Exit: the same hold again (handled here via
-     * pb_hold_exit_), or any flip of the toggle switch (handled at
-     * the mod_mode_ edge above). No card or zero takes: ~1 s red
-     * flash, the mode stays off; a player error inside the mode (card
-     * pulled, every take failed): ~2 s red flash and the mode exits. */
+    /* ---- SD playback mode (hold PLAY for 2 s) ----
+     * Entry: PLAY held 2 s in Normal Mode, no preset mode active (a
+     * blue bar fills the white keys while held; early release cancels;
+     * an aborted >400 ms hold swallows the PLAY toggle, same rule as
+     * the record chord). LOOP joining the hold cancels it, so the
+     * PLAY+LOOP record chord keeps working even when PLAY comes down
+     * first. The completed entry silences every note, clears the
+     * latch, stops a running take (kPbStopping waits for the
+     * recorder's clean close), scans the takes (kPbScan) and enters
+     * the mode on the newest take, paused. Exit: the same hold again
+     * (handled here via pb_hold_exit_), or any flip of the toggle
+     * switch (handled at the mod_mode_ edge above). No card or zero
+     * takes: ~1 s red flash, the mode stays off; a player error
+     * inside the mode (card pulled, every take failed): ~2 s red
+     * flash and the mode exits. */
     {
         const bool play_down
             = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_27));
+        const bool loop_down
+            = hw.button_sr.State(static_cast<int>(Hardware::SwId::KEY_28));
         const uint32_t now = System::GetNow();
 
         switch(playback_mode_)
         {
             case kPbOff:
-                if(play_down && shift_held_ && play_edge_ && !mod_mode_
+                if(play_down && !loop_down && play_edge_ && !mod_mode_
                    && preset_mode_ == kPresetNone)
                 {
                     pb_hold_exit_  = false;
@@ -1015,13 +1035,34 @@ static void PollControls()
                 break;
 
             case kPbEnterHold:
-                if(!play_down || !shift_held_)
+                if(!play_down || loop_down)
                 {
-                    /* cancelled: early release or SHIFT lost - an exit
-                     * hold falls back to the mode, an entry hold to
-                     * off */
-                    if(now - pb_state_t_ > kRecSwallowMs)
+                    /* cancelled: early release, or LOOP joined (the
+                     * PLAY+LOOP record chord takes over and owns the
+                     * pending toggles from then on). A release within
+                     * 400 ms is a tap, not a hold: its normal action
+                     * fires (an entry hold taps percussion, an exit
+                     * hold taps pause/resume); a longer cancelled
+                     * hold swallows the press. */
+                    if(!play_down)
+                    {
+                        if(now - pb_state_t_ <= kRecSwallowMs)
+                        {
+                            if(pb_hold_exit_)
+                            {
+                                if(sd_player_.IsPlaying())
+                                    sd_player_.RequestPause();
+                                else
+                                    sd_player_.RequestResume();
+                            }
+                            else
+                                engine.SetPercussionEnabled(
+                                    !engine.GetPercussionEnabled());
+                        }
                         play_pending_ = false;
+                    }
+                    /* an exit hold falls back to the mode, an entry
+                     * hold to off */
                     playback_mode_ = pb_hold_exit_ ? kPbOn : kPbOff;
                 }
                 else if(now - pb_state_t_ >= kPbHoldMs)
@@ -1129,7 +1170,7 @@ static void PollControls()
                     play_pending_  = false;
                     loop_pending_  = false;
                 }
-                else if(play_down && shift_held_ && play_edge_)
+                else if(play_down && !loop_down && play_edge_)
                 {
                     pb_hold_exit_  = true; /* the exit hold */
                     playback_mode_ = kPbEnterHold;
@@ -1288,11 +1329,11 @@ static void PollControls()
         if(down == prev_key_[swid])
             continue;
 
-        /* Playback mode: every key is inert as a note; SHIFT + a white
-         * key selects that take (slot 0 = C3 = newest). Releases of
-         * notes started before the mode fall through, so nothing
-         * hangs. prev_key_ keeps tracking every key, so no phantom
-         * edge fires when the mode exits. */
+        /* Playback mode: every key is inert as a note; a white-key
+         * press directly selects that take (slot 0 = C3 = newest).
+         * Releases of notes started before the mode fall through, so
+         * nothing hangs. prev_key_ keeps tracking every key, so no
+         * phantom edge fires when the mode exits. */
         if(playback_mode_ != kPbOff)
         {
             if(!down && active_note_[swid] != 0)
@@ -1301,7 +1342,7 @@ static void PollControls()
             }
             else
             {
-                if(down && playback_mode_ == kPbOn && shift_held_)
+                if(down && playback_mode_ == kPbOn)
                 {
                     const int slot = WhiteKeySlot(swid);
                     if(slot >= 0 && slot < sd_player_.TakeCount())
@@ -1873,11 +1914,11 @@ static void UpdateLeds()
     }
     else if(playback_mode_ == kPbOn)
     {
-        /* the take window: an existing take's key is dim solid blue;
-         * the selected take's key blinks blue at the 250 ms preset
-         * rate while playing and is solid blue while paused; empty
-         * slots stay off. The keys are inert as notes - SHIFT + a
-         * white key selects its take. */
+        /* the take window: an unselected take's key is dim solid
+         * white; the selected take's key is blue - solid while
+         * paused, blinking at the 250 ms preset rate while playing;
+         * empty slots stay off. The keys are inert as notes - a
+         * white-key press directly selects its take. */
         bar_pipe_ = -1;
         for(int i = 0; i < 25; i++)
             SetSmtLedFloat(i, 0.f, 0.f, 0.f);
@@ -1886,15 +1927,18 @@ static void UpdateLeds()
         const bool playing = sd_player_.IsPlaying();
         for(int w = 0; w < kNumWhiteKeys && w < count; w++)
         {
-            float r = 0.f, b = .22f; /* existing take: dim blue */
+            float r = .35f, g = .35f, b = .35f; /* unselected take */
             if(w == sel)
-                b = playing ? (pre_blink ? 1.f : 0.f) : 1.f;
+            {
+                r = g = 0.f;
+                b = playing ? (pre_blink ? 1.f : 0.f) : 1.f; /* blue */
+            }
             if(w == pb_skip_slot_ && now - pb_skip_t_ < 500)
             {
                 r = 1.f; /* this take failed to open: brief red */
-                b = 0.f;
+                g = b = 0.f;
             }
-            SetSmtLedFloat(white_key_led[w], r, 0.f, b);
+            SetSmtLedFloat(white_key_led[w], r, g, b);
         }
     }
     else if(pb_flash_t_ != 0)
@@ -2022,9 +2066,9 @@ static void UpdateLeds()
     }
     else if(init_holding_)
     {
-        /* init-patch hold progress: a red bar fills the 15 white keys
-         * left to right over the 2.5 s hold (in Modulation Mode the
-         * destination overlay below redraws the black keys) */
+        /* init-patch hold progress: a yellow bar fills the 15 white
+         * keys left to right over the 2.5 s hold (in Modulation Mode
+         * the destination overlay below redraws the black keys) */
         for(int i = 0; i < 25; i++)
             SetSmtLedFloat(i, 0.f, 0.f, 0.f);
         int lit = static_cast<int>((now - init_hold_t_) * kNumWhiteKeys
@@ -2032,7 +2076,7 @@ static void UpdateLeds()
         if(lit > kNumWhiteKeys)
             lit = kNumWhiteKeys;
         for(int w = 0; w < lit; w++)
-            SetSmtLedFloat(white_key_led[w], 1.f, 0.f, 0.f);
+            SetSmtLedFloat(white_key_led[w], 1.f, 1.f, 0.f);
     }
     else if(bar_pipe_ >= 0 && now < bar_until_)
     {
