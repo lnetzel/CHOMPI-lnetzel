@@ -170,9 +170,9 @@ static const int pipe_encoder[OrganEngine::kNumPipes] = {3, 0, 1, 2};
 static const int kVolEnc = 5; /* ENC_6 */
 
 /* the Modulation-mode destination keys are the first five physical
- * black keys from the left plus the eighth (ModDest.h keeps the values
- * so the native tests can exercise the mapping; break the build, not
- * the mapping, if the shift-register order ever changes) */
+ * black keys from the left plus the eighth and ninth (ModDest.h keeps
+ * the values so the native tests can exercise the mapping; break the
+ * build, not the mapping, if the shift-register order ever changes) */
 static_assert(kModDestKeySw[0] == static_cast<int>(Hardware::SwId::KEY_16),
               "mod destination key 1 is KEY_16 (C#3)");
 static_assert(kModDestKeySw[1] == static_cast<int>(Hardware::SwId::KEY_17),
@@ -185,6 +185,8 @@ static_assert(kModDestKeySw[4] == static_cast<int>(Hardware::SwId::KEY_20),
               "mod destination key 5 is KEY_20 (A#3)");
 static_assert(kModDestKeySw[5] == static_cast<int>(Hardware::SwId::KEY_23),
               "mod destination key 8 is KEY_23 (F#4)");
+static_assert(kModDestKeySw[6] == static_cast<int>(Hardware::SwId::KEY_24),
+              "mod destination key 9 is KEY_24 (G#4)");
 
 /** SMT LED indices of the 15 white keys, left (C3) to right (C5). */
 static constexpr int     kNumWhiteKeys = 15;
@@ -377,12 +379,14 @@ static const int kModBarAttack    = 6;
 static const int kModBarRelease   = 7;
 static const int kModBarLengthMod = 8;
 static const int kModBarDriveMod  = 9;
+static const int kModBarDelayMod  = 10;
 /** bar_page_ for a pipe-encoder turn, indexed by ModDest: attack and
  *  release reuse the purple/yellow envelope bars; the global drive
- *  modulation gets a red bar (the overdrive color). */
+ *  modulation gets a red bar (the overdrive color), the global delay
+ *  modulation a yellow bar (the stereo-delay color). */
 static const int kModDestBarPage[kNumModDests]
     = {kModBarAttack, kModBarRelease, kModBarVolume, kModBarCharacter,
-       kModBarLengthMod, kModBarDriveMod};
+       kModBarLengthMod, kModBarDriveMod, kModBarDelayMod};
 
 /** ENC_6 (volume encoder) pages: master volume -> overdrive -> stereo
  *  delay mix -> plate reverb mix, cycled by the encoder push-switch. */
@@ -1628,18 +1632,24 @@ static void PollControls()
                     continue;
                 if(mod_mode_)
                 {
-                    /* Distortion modulation is GLOBAL (the drive is
-                     * shared by all four pipes): only the leftmost
-                     * pipe encoder (pipe 1) adjusts the one amount;
-                     * the other three knobs are inert. SHIFT+turn
-                     * behaves the same as an unshifted turn - there is
-                     * nothing to broadcast. No MIDI CC. */
-                    if(mod_dest_ == kModDestDriveMod)
+                    /* Distortion and delay modulation are GLOBAL (the
+                     * drive and the stereo delay are shared by all
+                     * four pipes): only the leftmost pipe encoder
+                     * (pipe 1) adjusts the one amount; the other three
+                     * knobs are inert. SHIFT+turn behaves the same as
+                     * an unshifted turn - there is nothing to
+                     * broadcast. No MIDI CC. */
+                    if(mod_dest_ == kModDestDriveMod
+                       || mod_dest_ == kModDestDelayMod)
                     {
                         if(p == 0)
                         {
-                            engine.SetDriveModStep(
-                                engine.GetDriveModStep() + delta);
+                            if(mod_dest_ == kModDestDriveMod)
+                                engine.SetDriveModStep(
+                                    engine.GetDriveModStep() + delta);
+                            else
+                                engine.SetDelayModStep(
+                                    engine.GetDelayModStep() + delta);
                             bar_pipe_  = p;
                             bar_page_  = kModDestBarPage[mod_dest_];
                             bar_until_ = System::GetNow() + 500;
@@ -2221,6 +2231,15 @@ static void UpdateLeds()
                    / OrganEngine::kMaxModSteps;
             kind = kBarDrive;
         }
+        else if(bar_page_ == kModBarDelayMod)
+        {
+            /* Modulation Mode, delay-modulation destination: the
+             * GLOBAL delay-modulation amount (yellow, the stereo-delay
+             * color) */
+            lit  = (engine.GetDelayModStep() * kNumWhiteKeys + 16)
+                   / OrganEngine::kMaxModSteps;
+            kind = kBarDelay;
+        }
         else if(bar_page_ == 1)
         {
             lit  = (engine.GetPipeCharacterStep(p) * kNumWhiteKeys + 32)
@@ -2381,9 +2400,9 @@ static void UpdateLeds()
      * applied AFTER every keyboard overlay above so the value bars, the
      * distortion-tone bar, held notes, the octave hints and any preset
      * indicator can never overwrite it (the white keys are left to
-     * those overlays): the five destination keys glow in their
+     * those overlays): the seven destination keys glow in their
      * destination color - the selected key at exactly 100%, the other
-     * four at exactly 75%; every other black key stays off, even while
+     * six at exactly 75%; every other black key stays off, even while
      * its key plays a note. */
     if(mod_mode_)
     {
@@ -2395,9 +2414,9 @@ static void UpdateLeds()
                                            : kModDestUnselected;
             SetSmtLedFloat(led_map[kModDestKeySw[d]], r * s, g * s, b * s);
         }
-        /* the six destination keys occupy SMT LEDs 0-4 and 7 (led_map);
-         * force off the other black-key LEDs (5, 6, 8, 9), even while
-         * those keys play notes */
+        /* the seven destination keys occupy SMT LEDs 0-4, 7 and 8
+         * (led_map); force off the other black-key LEDs (5, 6, 9),
+         * even while those keys play notes */
         bool dest_led[10] = {false};
         for(int d = 0; d < kNumModDests; d++)
         {
@@ -2430,9 +2449,12 @@ static void UpdateLeds()
         {
             float r, g, b;
             ModDestColor(mod_dest_, r, g, b);
-            /* global distortion modulation: only the leftmost knob
-             * (pipe 1) shows the shared amount; knobs 2-4 stay off */
-            if(mod_dest_ == kModDestDriveMod && p != 0)
+            /* global distortion and delay modulation: only the
+             * leftmost knob (pipe 1) shows the shared amount; knobs
+             * 2-4 stay off */
+            if((mod_dest_ == kModDestDriveMod
+                || mod_dest_ == kModDestDelayMod)
+               && p != 0)
             {
                 SetPthLedFloat(p + 1, 0.f, 0.f, 0.f);
                 continue;
@@ -2458,6 +2480,10 @@ static void UpdateLeds()
                     break;
                 case kModDestDriveMod:
                     step = engine.GetDriveModStep();
+                    max  = OrganEngine::kMaxModSteps;
+                    break;
+                case kModDestDelayMod:
+                    step = engine.GetDelayModStep();
                     max  = OrganEngine::kMaxModSteps;
                     break;
                 default: /* kModDestLengthMod */

@@ -309,6 +309,11 @@ class OrganEngine
         delay_mix_percent_ = kDefaultDelayMixPercent; /* boots exact dry */
         delay_time_ms_     = kDefaultDelayTimeMs;     /* delay_.Init()
                                                        * already set 250 ms */
+        /* the single global delay drift runs at the base rate with its
+         * own seed; amount boots 0 = exact unmodulated delay */
+        delay_mod_step_   = 0;
+        delay_mod_active_ = false;
+        delay_mod_.Init(sample_rate, 0xD4A137B2u);
 
         vibrato_.Init(sample_rate);
         vibrato_.SetDepth(kDefaultVibratoDepth); /* boots exactly dry */
@@ -512,7 +517,7 @@ class OrganEngine
  *      drifts in and out of audibility); 0 is the exact unmodulated
  *      center. The modulator keeps free-running; changing the amount
  *      never restarts it. Boots 0; saved in the SD-card presets as
- *      "drive_mod"; no MIDI CC. */
+ *      "drive_mod"; MIDI CC 115 (receive-only). */
     void SetDriveModStep(int step)
     {
         step = step < 0 ? 0 : (step > kMaxModSteps ? kMaxModSteps : step);
@@ -635,25 +640,29 @@ class OrganEngine
     {
         percent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
         delay_mix_percent_ = static_cast<uint8_t>(percent);
-        if(percent <= kDelayMixPivotPercent)
-        {
-            delay_.SetMix(static_cast<float>(percent)
-                          * (kDelayMixAtPivot / kDelayMixPivotPercent));
-            delay_.SetFeedback(kDelayFeedbackFloor);
-        }
-        else
-        {
-            delay_.SetMix(kDelayMixAtPivot);
-            delay_.SetFeedback(kDelayFeedbackFloor
-                               + static_cast<float>(percent
-                                                    - kDelayMixPivotPercent)
-                                     * .02f
-                                     * (kDelayFeedbackMax
-                                        - kDelayFeedbackFloor));
-        }
+        ApplyDelayCombined(static_cast<float>(percent));
     }
 
     int GetDelayMixPercent() const { return delay_mix_percent_; }
+
+    /** Modulation Mode: set the GLOBAL delay modulation amount
+ *      (0..kMaxModSteps, clamped). The stereo delay's combined
+ *      mix/feedback control is shared by the whole instrument, so
+ *      there is one amount, not one per pipe. 100% swings the combined
+ *      0..100 control inside a +/-20% full-scale window around its set
+ *      value (the window slides to stay inside [0,100], so a dry
+ *      setting drifts in and out of audibility and a high-feedback
+ *      setting drifts in and out of self-oscillation); 0 is the exact
+ *      unmodulated center. The modulator keeps free-running; changing
+ *      the amount never restarts it. Boots 0; saved in the SD-card
+ *      presets as "delay_mod"; MIDI CC 116 (receive-only). */
+    void SetDelayModStep(int step)
+    {
+        step = step < 0 ? 0 : (step > kMaxModSteps ? kMaxModSteps : step);
+        delay_mod_step_ = static_cast<uint8_t>(step);
+    }
+
+    int GetDelayModStep() const { return delay_mod_step_; }
 
     /** Set the stereo delay time in milliseconds (clamped 40..500; the
      *  encoder edits in 5 ms clicks, preset files may carry any
@@ -866,6 +875,32 @@ class OrganEngine
                                               * (1.f / kMaxModSteps),
                                           drive_mod_.Value());
         distortion_.PrepareBlock(drive_mod_target_);
+
+        /* the global delay modulation advances its free-running drift
+         * once per block and swings the combined 0..100 mix/feedback
+         * control inside its window (the same +/-20% full-scale window
+         * as the drive, so a feedback setting can drift into bounded
+         * self-oscillation); StereoBbdDelay's per-sample mix/feedback
+         * ramps smooth the block-rate steps. Amount 0 restores the
+         * exact user setting once and then leaves the delay untouched,
+         * so the unmodulated path stays bit-exact. */
+        delay_mod_.Advance(static_cast<int>(num_samples));
+        if(delay_mod_step_ > 0)
+        {
+            delay_mod_active_ = true;
+            ApplyDelayCombined(
+                DriftModulator::ApplyWindow(
+                    static_cast<float>(delay_mix_percent_) * .01f,
+                    static_cast<float>(delay_mod_step_)
+                        * (1.f / kMaxModSteps),
+                    delay_mod_.Value())
+                * 100.f);
+        }
+        else if(delay_mod_active_)
+        {
+            delay_mod_active_ = false;
+            ApplyDelayCombined(static_cast<float>(delay_mix_percent_));
+        }
 
         /* Modulation Mode drift: advance the twelve free-running
          * per-pipe
@@ -1230,6 +1265,30 @@ class OrganEngine
 
     static constexpr float kDefaultMasterGain = .25f; /* 25% at boot */
 
+    /** Push the combined 0..100 delay mix/feedback control into the
+     *  delay: 0..50 sweeps the dry/wet mix 0..50% at the feedback
+     *  floor; above 50 the mix locks at 50% and the feedback rises
+     *  from the floor to kDelayFeedbackMax. Shared by the user setter
+     *  (integer percent) and the global delay modulation (block-rate
+     *  float percent); StereoBbdDelay ramps every retarget click-free. */
+    void ApplyDelayCombined(float percent)
+    {
+        percent = percent < 0.f ? 0.f : (percent > 100.f ? 100.f : percent);
+        if(percent <= static_cast<float>(kDelayMixPivotPercent))
+        {
+            delay_.SetMix(percent * (kDelayMixAtPivot / kDelayMixPivotPercent));
+            delay_.SetFeedback(kDelayFeedbackFloor);
+        }
+        else
+        {
+            delay_.SetMix(kDelayMixAtPivot);
+            delay_.SetFeedback(kDelayFeedbackFloor
+                               + (percent - kDelayMixPivotPercent) * .02f
+                                     * (kDelayFeedbackMax
+                                        - kDelayFeedbackFloor));
+        }
+    }
+
     float    sample_rate_;
     float    steal_inc_;
     Voice    voices_[kNumVoices];
@@ -1282,6 +1341,11 @@ class OrganEngine
     StereoBbdDelay delay_;
     uint8_t  delay_mix_percent_;
     uint16_t delay_time_ms_;
+    uint8_t  delay_mod_step_;     /* boot 0; saved in presets as the
+                                   * global "delay_mod" field */
+    DriftModulator delay_mod_;    /* free-running global delay drift */
+    bool     delay_mod_active_;   /* the block-rate modulation is
+                                   * applying (restore-on-zero gate) */
     Vibrato  vibrato_;
     uint8_t  vibrato_delay_step_; /* 0..50 x 100 ms; saved in presets */
     float    base_freq_[kNumVoices][kNumPipes]; /* pre-vibrato freqs */

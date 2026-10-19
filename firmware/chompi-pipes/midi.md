@@ -36,6 +36,7 @@ No other message types (pitch bend, aftertouch, SysEx, clock) and no other CC nu
 | Delay mix | CC 113 | 0–127 (mapped to 0–100 %, rounded) |
 | Delay time | CC 114 | 0–127 (mapped to 40–500 ms, rounded) |
 | Drive modulation (global) | CC 115 | 0–127 (mapped to 0–32 steps, rounded) |
+| Delay modulation (global) | CC 116 | 0–127 (mapped to 0–32 steps, rounded) |
 | Preset slot load | Program Change 1–15 | Loads SD preset slot 1–15 from the RAM cache (click-free, like the local gesture). Empty slots do nothing; other program numbers are ignored |
 
 ## MIDI Out
@@ -57,8 +58,8 @@ No other message types (pitch bend, aftertouch, SysEx, clock) and no other CC nu
 Notes:
 
 - Incoming messages on channels other than 1 are discarded.
-- Every parameter an SD preset can save has an incoming CC (CC 1 and 70–115). Not preset-saved and therefore not CC-controllable: master volume, fine tune, octave shift, latch state, page selections and wheel mode.
+- Every parameter an SD preset can save has an incoming CC (CC 1 and 70–116). Not preset-saved and therefore not CC-controllable: master volume, fine tune, octave shift, latch state, page selections and wheel mode.
 - Incoming CCs set their values silently: they never trigger the white-key LED value bars (a live CC stream would otherwise own the LEDs). The bars follow local controls only.
-- The new CCs (78–115) are receive-only: CC out is sent when pipe levels / Character amounts / vibrato depth change from local controls (or when any preset load — local gesture or Program Change — resyncs them); notes out are sent for local key presses/releases.
+- The new CCs (78–116) are receive-only: CC out is sent when pipe levels / Character amounts / vibrato depth change from local controls (or when any preset load — local gesture or Program Change — resyncs them); notes out are sent for local key presses/releases.
 - Character = tonewheel color; 0 = clean sine, 127 ≈ step 64 = fully aged.
 - Playback mode (hold PLAY for 2 s) ignores all MIDI In while the mode is active — notes, CCs and Program Change preset loads are all dropped; MIDI Out produces nothing (no key or encoder events fire).

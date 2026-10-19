@@ -40,6 +40,7 @@ struct FakeEngine
     int  delay_mix;
     int  delay_time_ms;
     int  drive_mod;
+    int  delay_mod;
 
     static int Clamp(int v, int lo, int hi)
     {
@@ -71,6 +72,7 @@ struct FakeEngine
         delay_mix    = 0;
         delay_time_ms = 250;
         drive_mod    = 0;
+        delay_mod    = 0;
     }
 
     void SetPipeStep(int p, int s) { level[p] = Clamp(s, 0, 32); }
@@ -113,6 +115,8 @@ struct FakeEngine
     int  GetDelayTimeMs() const { return delay_time_ms; }
     void SetDriveModStep(int s) { drive_mod = Clamp(s, 0, 32); }
     int  GetDriveModStep() const { return drive_mod; }
+    void SetDelayModStep(int s) { delay_mod = Clamp(s, 0, 32); }
+    int  GetDelayModStep() const { return delay_mod; }
 };
 
 static bool SamePreset(const OrganPreset &a, const OrganPreset &b)
@@ -134,7 +138,7 @@ static bool SamePreset(const OrganPreset &a, const OrganPreset &b)
            && a.reverb_decay == b.reverb_decay
            && a.percussion == b.percussion && a.delay_mix == b.delay_mix
            && a.delay_time_ms == b.delay_time_ms
-           && a.drive_mod == b.drive_mod;
+           && a.drive_mod == b.drive_mod && a.delay_mod == b.delay_mod;
 }
 
 static OrganPreset MakeAssortedPreset()
@@ -170,6 +174,7 @@ static OrganPreset MakeAssortedPreset()
     p.delay_mix    = 87;
     p.delay_time_ms = 500;
     p.drive_mod    = 23;
+    p.delay_mod    = 27;
     return p;
 }
 
@@ -229,6 +234,8 @@ static void test_defaults_for_missing_keys()
     assert(p.delay_time_ms == OrganPreset::kDefaultDelayTimeMs);
     /* drive_mod defaults to off for older presets that predate it */
     assert(p.drive_mod == 0);
+    /* delay_mod defaults to off for older presets that predate it */
+    assert(p.delay_mod == 0);
     /* vibrato_delay defaults to off for older presets that predate it */
     assert(p.vibrato_delay == 0);
 }
@@ -248,7 +255,7 @@ static void test_clamping()
           "\"vol_mod\":[40,0,0,0],\"char_mod\":[0,0,0,-9],"
           "\"length_mod\":[0,33,-1,7],"
           "\"percussion\":2,\"delay_mix\":111,\"delay_time_ms\":4,"
-          "\"drive_mod\":99}";
+          "\"drive_mod\":99,\"delay_mod\":-7}";
     assert(chompi::Parse(doc, strlen(doc), p));
     assert(p.level[0] == 32 && p.level[1] == 0 && p.level[2] == 32
            && p.level[3] == 0);
@@ -274,6 +281,8 @@ static void test_clamping()
     assert(p.delay_time_ms == OrganPreset::kMinDelayTimeMs);
     /* drive mod clamps to 0..32 */
     assert(p.drive_mod == 32);
+    /* delay mod clamps to 0..32 */
+    assert(p.delay_mod == 0);
 }
 
 static void test_garbage_values()
@@ -412,6 +421,7 @@ static void test_capture_apply()
     e.SetDelayMixPercent(65);
     e.SetDelayTimeMs(345);
     e.SetDriveModStep(18);
+    e.SetDelayModStep(21);
 
     OrganPreset p;
     chompi::CaptureFromEngine(p, e);
@@ -427,6 +437,7 @@ static void test_capture_apply()
     assert(p.percussion == 1 && p.delay_mix == 65
            && p.delay_time_ms == 345);
     assert(p.drive_mod == 18);
+    assert(p.delay_mod == 21);
 
     /* scramble the engine, then apply the preset back */
     e.SetDefaults();
@@ -434,6 +445,7 @@ static void test_capture_apply()
     e.SetPipeMuted(1, false);
     e.SetPercussionEnabled(true); /* init/off default must clear it */
     e.SetDriveModStep(31);        /* must be overwritten by the apply */
+    e.SetDelayModStep(7);         /* must be overwritten by the apply */
     chompi::ApplyToEngine(p, e);
     assert(e.GetPipeStep(0) == 3 && e.GetPipeCharacterStep(1) == 60);
     assert(e.GetPipeAttackStep(2) == 20 && e.GetPipeReleaseStep(3) == 11);
@@ -449,6 +461,7 @@ static void test_capture_apply()
     assert(e.GetPercussionEnabled() && e.GetDelayMixPercent() == 65
            && e.GetDelayTimeMs() == 345);
     assert(e.GetDriveModStep() == 18);
+    assert(e.GetDelayModStep() == 21);
 
     /* capture -> serialize -> parse -> apply is lossless */
     char buf[768];
@@ -491,6 +504,7 @@ static void test_set_init()
     assert(p.delay_mix == 0);    /* delay dry */
     assert(p.delay_time_ms == 250);
     assert(p.drive_mod == 0);    /* distortion modulation off */
+    assert(p.delay_mod == 0);    /* delay modulation off */
 
     /* the init sound IS the boot sound: Character and rotary boot at 0 */
     assert(OrganPreset::kDefaultCharacter == 0);
@@ -529,6 +543,7 @@ static void test_serialized_size_bound()
     p.delay_mix = 100;
     p.delay_time_ms = 500; /* widest: 3 digits */
     p.drive_mod = 32;
+    p.delay_mod = 32;
     char buf[768];
     const size_t n = chompi::Serialize(p, buf, sizeof(buf));
     assert(n > 0 && n < sizeof(buf));

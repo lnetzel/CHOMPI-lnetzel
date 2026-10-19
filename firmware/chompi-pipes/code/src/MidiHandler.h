@@ -202,6 +202,11 @@ class OrganMidi
                         engine_->SetDriveModStep(ccmap::CcToSteps(
                             val, chompi::OrganEngine::kMaxModSteps));
                     }
+                    else if(cc == ccmap::kDelayModCc)
+                    {
+                        engine_->SetDelayModStep(ccmap::CcToSteps(
+                            val, chompi::OrganEngine::kMaxModSteps));
+                    }
                     break;
                 }
                 case ProgramChange:

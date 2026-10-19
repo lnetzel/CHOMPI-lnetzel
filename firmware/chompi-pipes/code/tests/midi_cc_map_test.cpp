@@ -27,16 +27,17 @@ static void test_cc_map_layout()
     for(size_t i = 1; i < sizeof(bases); i++)
         assert(bases[i] == bases[i - 1] + 4);
 
-    /* the globals are contiguous 106..115 and stay clear of the
+    /* the globals are contiguous 106..116 and stay clear of the
      * reserved channel-mode CCs 120-127 */
     const uint8_t globals[] = {kVibratoDelayCc, kRotaryCc,     kDriveCc,
                                kDriveToneCc,    kReverbMixCc,  kReverbDecayCc,
                                kPercussionCc,   kDelayMixCc,   kDelayTimeCc,
-                               kDriveModCc};
+                               kDriveModCc,     kDelayModCc};
     assert(kVibratoDelayCc == 106);
     for(size_t i = 1; i < sizeof(globals); i++)
         assert(globals[i] == globals[i - 1] + 1);
     assert(kDriveModCc == 115);
+    assert(kDelayModCc == 116);
 }
 
 static void test_steps_endpoints()

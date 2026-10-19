@@ -85,6 +85,8 @@ struct OrganPreset
     uint16_t delay_time_ms;       /**< 40..500 delay time in ms */
     uint8_t drive_mod;            /**< 0..32 GLOBAL distortion modulation
                                    *   amount (one value, not per pipe) */
+    uint8_t delay_mod;            /**< 0..32 GLOBAL delay modulation
+                                   *   amount (one value, not per pipe) */
 
     void SetDefaults()
     {
@@ -111,6 +113,7 @@ struct OrganPreset
         delay_mix    = kDefaultDelayMix;
         delay_time_ms = kDefaultDelayTimeMs;
         drive_mod    = kDefaultMod; /* distortion modulation off */
+        delay_mod    = kDefaultMod; /* delay modulation off */
     }
 
     /** Init patch (SHIFT + OVERDUB held for 4 s): the same sound values
@@ -143,7 +146,7 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         "\"char_mod\":[%u,%u,%u,%u],"
         "\"length_mod\":[%u,%u,%u,%u],"
         "\"percussion\":%u,\"delay_mix\":%u,\"delay_time_ms\":%u,"
-        "\"drive_mod\":%u}",
+        "\"drive_mod\":%u,\"delay_mod\":%u}",
         OrganPreset::kVersion,
         (unsigned)p.level[0], (unsigned)p.level[1], (unsigned)p.level[2],
         (unsigned)p.level[3],
@@ -173,7 +176,8 @@ inline size_t Serialize(const OrganPreset &p, char *buf, size_t size)
         (unsigned)p.percussion,
         (unsigned)p.delay_mix,
         (unsigned)p.delay_time_ms,
-        (unsigned)p.drive_mod);
+        (unsigned)p.drive_mod,
+        (unsigned)p.delay_mod);
     if(n < 0 || static_cast<size_t>(n) >= size)
         return 0;
     return static_cast<size_t>(n);
@@ -300,6 +304,9 @@ inline bool Parse(char *buf, size_t len, OrganPreset &p)
     out.drive_mod = (uint8_t)QueryInt(buf, len, "drive_mod",
                                       OrganPreset::kDefaultMod, 0,
                                       OrganPreset::kMaxMod);
+    out.delay_mod = (uint8_t)QueryInt(buf, len, "delay_mod",
+                                      OrganPreset::kDefaultMod, 0,
+                                      OrganPreset::kMaxMod);
     p = out;
     return true;
 }
@@ -332,6 +339,7 @@ void CaptureFromEngine(OrganPreset &p, const Engine &e)
     p.delay_mix    = (uint8_t)e.GetDelayMixPercent();
     p.delay_time_ms = (uint16_t)e.GetDelayTimeMs();
     p.drive_mod    = (uint8_t)e.GetDriveModStep();
+    p.delay_mod    = (uint8_t)e.GetDelayModStep();
 }
 
 /** Push a preset into the engine through the regular setters (all ramped
@@ -364,6 +372,7 @@ void ApplyToEngine(const OrganPreset &p, Engine &e)
     e.SetDelayMixPercent(p.delay_mix);
     e.SetDelayTimeMs(p.delay_time_ms);
     e.SetDriveModStep(p.drive_mod);
+    e.SetDelayModStep(p.delay_mod);
 }
 
 /** The RAM cache of all 15 slots. The audio ISR mutates it (user

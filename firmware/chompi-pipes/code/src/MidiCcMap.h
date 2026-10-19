@@ -6,7 +6,7 @@
  *
  *  Every parameter that can be saved in an SD preset has a CC. The map
  *  continues the original blocks (CC 1 vibrato depth, CC 70-73 pipe
- *  levels, CC 74-77 Character) upward and ends at CC 115, staying clear
+ *  levels, CC 74-77 Character) upward and ends at CC 116, staying clear
  *  of the reserved channel-mode CCs 120-127. All incoming CCs set their
  *  values silently (no white-key LED value bars) and nothing is sent
  *  back out for the new CCs (receive-only).
@@ -43,6 +43,7 @@ namespace MidiCcMap
     constexpr uint8_t kDelayMixCc     = 113; /* 0..100 % */
     constexpr uint8_t kDelayTimeCc    = 114; /* 40..500 ms */
     constexpr uint8_t kDriveModCc     = 115; /* 0..32 steps (global) */
+    constexpr uint8_t kDelayModCc     = 116; /* 0..32 steps (global) */
 
     /** 0-127 -> 0..max, rounded (the formula the original pipe CCs
      *  used: CC 64 lands on the half step for the even ranges). */
