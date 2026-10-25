@@ -1,6 +1,6 @@
 # Flash the CHOMPI v6.4 Beta Bootloader on Windows
 
-This is the STM32CubeProgrammer procedure used successfully on both CHOMPIs
+This is the STM32CubeProgrammer procedure used successfully on both CHOMPIs (Kickstarted Pink version and Chase Bliss Storytime White version)
 on 2026-10-25. It installs the official CHOMPI v6.4 beta bootloader, not an
 application such as TAPE or PIPES. No source build is required.
 
